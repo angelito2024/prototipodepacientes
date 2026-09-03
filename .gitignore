@@ -1,2 +1,11 @@
 # Copia local previa al rediseño (el historial de git ya cumple esa función)
 centro-psicologico.backup.html
+
+# Credenciales locales: no se versionan (usar config/config.ejemplo.php)
+/config/config.php
+
+# Adjuntos clínicos: datos de pacientes, jamás en el repositorio
+/storage/
+
+# Respaldos exportados desde el panel
+backup-centro-psicologico-*.json

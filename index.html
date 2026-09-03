@@ -777,21 +777,74 @@
 // Detecta si el panel está corriendo dentro de Claude (con guardado permanente y compartido)
 // o si se abrió como archivo suelto (doble clic), en cuyo caso NO existe window.storage
 // y usamos localStorage del navegador como respaldo para no perder todo.
-const STORAGE_MODE = (typeof window!=='undefined' && window.storage && typeof window.storage.get==='function' && typeof window.storage.set==='function') ? 'claude' : 'local';
+// Tres modos de almacenamiento:
+//   'api'    servido por Laragon (http://): los datos van a MySQL/MariaDB a
+//            través de api/index.php. Es el modo real, compartido por todo
+//            el equipo, con historia clínica y contabilidad en base de datos.
+//   'claude' dentro de Claude, usando window.storage.
+//   'local'  archivo abierto con doble clic: localStorage, solo este equipo.
+const STORAGE_MODE =
+  (typeof location!=='undefined' && /^https?:$/.test(location.protocol)) ? 'api'
+  : ((typeof window!=='undefined' && window.storage && typeof window.storage.get==='function' && typeof window.storage.set==='function') ? 'claude' : 'local');
 const LOCAL_PREFIX = 'centroPsicologico_';
+const API_URL = 'api/index.php';
+
+// Versión que devolvió el servidor para cada colección. Se reenvía al
+// guardar: si otra persona guardó mientras tanto, el servidor responde 409
+// y recargamos en vez de pisar su trabajo.
+const collVersions = {};
+
+async function apiGet(key){
+  const r = await fetch(`${API_URL}?accion=coleccion&key=${encodeURIComponent(key)}`, {
+    credentials: 'same-origin', headers: {'Accept':'application/json'}
+  });
+  const d = await r.json();
+  if(!r.ok || !d.ok) throw new Error(d.error || `HTTP ${r.status}`);
+  collVersions[key] = d.version;
+  return d.value;
+}
+
+async function apiPut(key, value){
+  const r = await fetch(`${API_URL}?accion=coleccion&key=${encodeURIComponent(key)}`, {
+    method: 'PUT',
+    credentials: 'same-origin',
+    headers: {'Content-Type':'application/json','Accept':'application/json'},
+    body: JSON.stringify({version: collVersions[key] ?? null, value}),
+  });
+  const d = await r.json().catch(()=>({}));
+  if(r.status === 409){
+    // Conflicto: otra persona guardó primero. Nos quedamos con lo suyo y
+    // avisamos, en vez de sobrescribirlo en silencio.
+    collVersions[key] = d.version;
+    const err = new Error(d.error || 'Conflicto de versión.');
+    err.conflicto = true; err.valor = d.value;
+    throw err;
+  }
+  if(!r.ok || !d.ok) throw new Error(d.error || `HTTP ${r.status}`);
+  collVersions[key] = d.version;
+  return true;
+}
 
 async function getColl(key, fallback){
+  if(STORAGE_MODE==='api'){
+    try{
+      const v = await apiGet(key);
+      return (v===null || v===undefined) ? fallback : v;
+    }catch(e){
+      console.error('No se pudo leer', key, e);
+      return fallback;
+    }
+  }
   if(STORAGE_MODE==='claude'){
     try{
       const r = await window.storage.get(key, true);
       return r ? JSON.parse(r.value) : fallback;
     }catch(e){ return fallback; }
-  } else {
-    try{
-      const raw = localStorage.getItem(LOCAL_PREFIX+key);
-      return raw!==null ? JSON.parse(raw) : fallback;
-    }catch(e){ return fallback; }
   }
+  try{
+    const raw = localStorage.getItem(LOCAL_PREFIX+key);
+    return raw!==null ? JSON.parse(raw) : fallback;
+  }catch(e){ return fallback; }
 }
 // Cola de guardados pendientes (solo aplica en modo Claude): si falla, se reintenta en segundo plano sin interrumpir al usuario.
 let pendingSaves = {};
@@ -799,6 +852,7 @@ let retryTimers = {};
 function updateSaveStatusUI(){
   const el = document.getElementById('saveStatus');
   if(!el) return;
+  if(STORAGE_MODE==='api'){ el.textContent = ''; return; }
   if(STORAGE_MODE==='local'){
     el.textContent = '💾 Modo local: los datos se guardan solo en este navegador y computadora.';
     el.style.color = 'var(--accent)';
@@ -838,6 +892,29 @@ function scheduleRetry(key, attempt){
   }, delay);
 }
 async function setColl(key, value){
+  if(STORAGE_MODE==='api'){
+    const el = document.getElementById('saveStatus');
+    try{
+      if(el){ el.textContent = '⏳ Guardando…'; el.style.color = 'var(--accent)'; }
+      await apiPut(key, value);
+      if(el){ el.textContent = ''; }
+      return true;
+    }catch(e){
+      if(e.conflicto){
+        alert(e.message);
+        await loadAll();
+        renderPanel();
+        if(el){ el.textContent = ''; }
+        return false;
+      }
+      console.error('No se pudo guardar', key, e);
+      if(el){
+        el.textContent = '⚠ No se pudo guardar en la base de datos: ' + e.message;
+        el.style.color = 'var(--alert)';
+      }
+      return false;
+    }
+  }
   if(STORAGE_MODE==='local'){
     try{
       localStorage.setItem(LOCAL_PREFIX+key, JSON.stringify(value));
@@ -1421,9 +1498,36 @@ function professionalTitleLine(pr){
 async function buscarPorDNI(dniFieldId, nameFieldId, btn){
   const dni = document.getElementById(dniFieldId).value.trim();
   if(!/^\d{8}$/.test(dni)){ alert('Ingresa un DNI válido de 8 dígitos primero.'); return; }
+  const original = btn? btn.textContent : null;
+
+  // Con base de datos la consulta la hace el servidor: el token de
+  // apiperu.dev se guarda cifrable en la tabla `integraciones` y nunca
+  // llega al navegador.
+  if(STORAGE_MODE==='api'){
+    if(btn){ btn.disabled = true; btn.textContent = 'Buscando…'; }
+    try{
+      const res = await fetch('api/dni.php', {
+        method:'POST', credentials:'same-origin',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({dni}),
+      });
+      const data = await res.json();
+      if(res.ok && data.ok && data.nombre){
+        document.getElementById(nameFieldId).value = data.nombre;
+        showToast('Nombre encontrado y llenado.', true);
+      } else {
+        alert(data.error || 'No se encontró información para ese DNI.');
+      }
+    }catch(e){
+      alert('No se pudo consultar el DNI. Revisa la conexión.');
+    } finally {
+      if(btn){ btn.disabled = false; btn.textContent = original; }
+    }
+    return;
+  }
+
   const token = (DB.centerInfo && DB.centerInfo.apiPeruToken) || '';
   if(!token){ alert('Falta configurar el token de apiperu.dev en "Datos del centro" (al pie del panel). Es gratis — regístrate en apiperu.dev para conseguirlo.'); return; }
-  const original = btn? btn.textContent : null;
   if(btn){ btn.disabled = true; btn.textContent = 'Buscando…'; }
   try{
     const res = await fetch('https://apiperu.dev/api/dni', {
@@ -3385,6 +3489,7 @@ function removeActivityFile(id){
 function downloadActivityFile(id){
   const a = currentPractActivities.find(x=>x.id===id);
   if(!a || !a.file || a.file.isLink) return;
+  if(a.file.url){ window.open(a.file.url, '_blank'); return; }
   const link = document.createElement('a');
   link.href = a.file.dataUrl; link.download = a.file.name;
   document.body.appendChild(link); link.click(); document.body.removeChild(link);
@@ -5200,6 +5305,9 @@ async function removeAttachment(id){
 function downloadAttachment(id){
   const a = (currentHistoriaData.attachments||[]).find(x=>x.id===id);
   if(!a || a.isLink) return;
+  // Con base de datos el binario ya no viaja dentro del JSON: se pide al
+  // endpoint api/archivo.php, que exige sesión antes de entregarlo.
+  if(a.url){ window.open(a.url, '_blank'); return; }
   const link = document.createElement('a');
   link.href = a.dataUrl; link.download = a.name;
   document.body.appendChild(link); link.click(); document.body.removeChild(link);
@@ -5504,11 +5612,17 @@ async function deleteProduct(id){
 /* ===================== RESET ===================== */
 async function confirmWipe(){
   if(!confirm('Esto borrará TODOS los datos guardados (pacientes, citas, pagos, etc.) para todos los que usan este panel. ¿Continuar?')) return;
-  for(const k of ['patients','appointments','professionals','practicantes','services','payments','expenses','calendarEvents','products','roomUsage','attendanceLog']){
+  // En modo base de datos se vacía cada colección enviando una lista vacía.
+  // El borrado sigue siendo lógico: pacientes, citas y pagos quedan marcados
+  // como eliminados/anulados, no se destruyen (requisito de historia clínica).
+  const claves = ['appointments','payments','roomUsage','patients','practicantes',
+                  'professionals','services','expenses','calendarEvents','products','attendanceLog'];
+  for(const k of claves){
     try{
-      if(STORAGE_MODE==='claude'){ await window.storage.delete(k, true); }
+      if(STORAGE_MODE==='api'){ await apiPut(k, []); }
+      else if(STORAGE_MODE==='claude'){ await window.storage.delete(k, true); }
       else { localStorage.removeItem(LOCAL_PREFIX+k); }
-    }catch(e){}
+    }catch(e){ console.error('No se pudo vaciar', k, e); }
   }
   await loadAll();
   renderPanel();
@@ -5516,9 +5630,12 @@ async function confirmWipe(){
 
 /* ===================== INIT ===================== */
 document.getElementById('todayLabel').textContent = new Date().toLocaleDateString('es-PE',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
-document.getElementById('storageModeNote').innerHTML = STORAGE_MODE==='claude'
-  ? 'Los datos se guardan de forma permanente y son <b>compartidos</b> entre todas las personas que usen este panel <b>dentro de Claude</b>.'
-  : '⚠ Este archivo se abrió fuera de Claude (como archivo local), así que los datos se guardarán <b>solo en este navegador y computadora</b>, no compartidos. Para guardado permanente y compartido con tu equipo, usa este panel directamente en la conversación de Claude. Mientras tanto, usa "Descargar copia de seguridad" seguido para no perder información.';
+document.getElementById('storageModeNote').innerHTML =
+  STORAGE_MODE==='api'
+    ? 'Conectado a la base de datos del centro (MySQL/MariaDB). Los datos son <b>permanentes y compartidos</b> por todo el equipo. <a href="api/index.php?accion=salud" target="_blank">Probar la conexión</a>.'
+  : STORAGE_MODE==='claude'
+    ? 'Los datos se guardan de forma permanente y son <b>compartidos</b> entre todas las personas que usen este panel <b>dentro de Claude</b>.'
+    : '⚠ Este archivo se abrió como archivo local, así que los datos se guardarán <b>solo en este navegador y computadora</b>. Para el guardado compartido, abre el panel desde Laragon (http://localhost/prototipodepacientes/). Mientras tanto, usa "Descargar copia de seguridad" seguido para no perder información.';
 async function bootApp(){
   await loadAll();
   renderTabs();
@@ -5530,26 +5647,81 @@ async function bootApp(){
   document.getElementById('loginScreen').style.display = 'none';
   document.getElementById('app').style.display = 'block';
 }
-function attemptLogin(){
+async function attemptLogin(){
   const u = document.getElementById('login_user').value.trim();
   const p = document.getElementById('login_pass').value;
+  const errEl = document.getElementById('loginError');
+
+  // Con base de datos, la verificación ocurre en el servidor contra un hash.
+  // Antes se comparaba en JavaScript contra la clave en texto plano, que
+  // viajaba al navegador y se podía leer desde la consola.
+  if(STORAGE_MODE==='api'){
+    try{
+      const r = await fetch(`${API_URL}?accion=login`, {
+        method:'POST', credentials:'same-origin',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({usuario:u, clave:p}),
+      });
+      const d = await r.json();
+      if(!r.ok || !d.ok){
+        errEl.textContent = d.error || 'Usuario o contraseña incorrectos.';
+        errEl.style.display = 'block';
+        return;
+      }
+      errEl.style.display = 'none';
+      bootApp();
+    }catch(e){
+      errEl.textContent = 'No se pudo contactar con el servidor.';
+      errEl.style.display = 'block';
+    }
+    return;
+  }
+
   const cfg = DB.authConfig || DEFAULT_AUTH_CONFIG;
   if(u===cfg.username && p===cfg.password){
-    document.getElementById('loginError').style.display = 'none';
+    errEl.style.display = 'none';
     bootApp();
   } else {
-    document.getElementById('loginError').style.display = 'block';
+    errEl.style.display = 'block';
   }
 }
-function logout(){
+async function logout(){
+  if(STORAGE_MODE==='api'){
+    try{ await fetch(`${API_URL}?accion=logout`, {method:'POST', credentials:'same-origin'}); }catch(e){}
+  }
   document.getElementById('app').style.display = 'none';
   document.getElementById('login_user').value = '';
   document.getElementById('login_pass').value = '';
   document.getElementById('loginScreen').style.display = 'flex';
 }
 (async ()=>{
-  DB.authConfig = await getColl('authConfig', DEFAULT_AUTH_CONFIG);
   DB.centerInfo = await getColl('centerInfo', DEFAULT_CENTER_INFO);
+
+  if(STORAGE_MODE==='api'){
+    // El servidor decide si hace falta iniciar sesión y si ya hay una activa.
+    let sesion = {loginRequerido:false, autenticado:true};
+    try{
+      const r = await fetch(`${API_URL}?accion=sesion`, {credentials:'same-origin'});
+      sesion = await r.json();
+    }catch(e){
+      document.body.innerHTML = '<div style="padding:40px;font:16px system-ui">'
+        + '<h2>No se pudo conectar con el servidor</h2>'
+        + '<p>Revisa que Laragon esté iniciado y que exista <code>config/config.php</code>.</p>'
+        + '<p><a href="api/index.php?accion=salud">Ver diagnóstico de la conexión</a></p></div>';
+      return;
+    }
+    DB.authConfig = {enabled: !!sesion.loginRequerido, username:'', password:''};
+    if(sesion.loginRequerido && !sesion.autenticado){
+      document.getElementById('loginLogo').src = CENTER_LOGO_DATA_URL;
+      document.getElementById('loginTitle').textContent = DB.centerInfo.name || 'Centro Psicológico';
+      document.getElementById('loginScreen').style.display = 'flex';
+    } else {
+      bootApp();
+    }
+    return;
+  }
+
+  DB.authConfig = await getColl('authConfig', DEFAULT_AUTH_CONFIG);
   if(DB.authConfig && DB.authConfig.enabled){
     document.getElementById('loginLogo').src = CENTER_LOGO_DATA_URL;
     document.getElementById('loginTitle').textContent = DB.centerInfo.name || 'Centro Psicológico';

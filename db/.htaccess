@@ -1,0 +1,3 @@
+# Los .sql no se sirven por HTTP: revelan el esquema completo y
+# 03_datos_base.sql contiene el hash del usuario administrador.
+Require all denied

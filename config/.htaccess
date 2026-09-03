@@ -1,0 +1,2 @@
+# Nada de esta carpeta se sirve por HTTP: contiene credenciales.
+Require all denied
