@@ -871,13 +871,26 @@
       <h2 style="margin-top:0" id="tallerPartTitle">Participantes</h2>
       <div id="tallerPartMeta" class="hint" style="margin-bottom:12px"></div>
       <div class="formgrid">
-        <div class="field"><label>Nombre</label><input id="tp_name" placeholder="Nombre del participante" onkeydown="if(event.key==='Enter') addTallerParticipant()"></div>
-        <div class="field"><label>DNI</label><input id="tp_dni" placeholder="Opcional"></div>
+        <div class="field"><label>DNI</label>
+          <div style="display:flex;gap:6px">
+            <input id="tp_dni" placeholder="Opcional" style="flex:1">
+            <button type="button" class="btn small secondary" onclick="buscarPorDNI('tp_dni','tp_name',this,{phone:'tp_phone',email:'tp_email',sex:'tp_sex'})">🔍 Buscar</button>
+          </div>
+          <p class="hint" style="margin-top:3px">Busca primero en tus propios registros; solo consulta afuera si no lo tienes.</p>
+        </div>
+        <div class="field"><label>Nombre</label><input id="tp_name" placeholder="Nombre completo" onkeydown="if(event.key==='Enter') addTallerParticipant()"></div>
+        <div class="field"><label>Sexo</label>
+          <select id="tp_sex"><option value="">— sin especificar —</option><option>Femenino</option><option>Masculino</option><option>Otro</option></select>
+        </div>
         <div class="field"><label>Teléfono</label><input id="tp_phone" placeholder="Opcional"></div>
         <div class="field"><label>Correo</label><input type="email" id="tp_email" placeholder="Para enviarle el enlace y los materiales"></div>
+        <div class="field"><label>Procedencia</label><input id="tp_origin" placeholder="Colegio, aula, área o empresa"></div>
         <div class="field" id="tp_amountWrap"><label>Monto que paga (S/)</label><input type="number" id="tp_amount" placeholder="Deja vacío para usar el precio del taller"></div>
       </div>
-      <button class="btn" style="margin-top:10px" onclick="addTallerParticipant()">+ Inscribir participante</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+        <button class="btn" id="tp_submit" onclick="addTallerParticipant()">+ Inscribir participante</button>
+        <button class="btn secondary" id="tp_cancel" onclick="cancelTallerParticipantEdit()" style="display:none">Cancelar edición</button>
+      </div>
       <div id="tallerPartList" style="margin-top:14px"></div>
     </div>
     <div class="receiptActions" style="flex-wrap:wrap">
@@ -1365,6 +1378,8 @@ async function loadAll(){
     };
   });
   DB.services = await getColl('services', DEFAULT_SERVICES);
+  // Migración: las tarifas creadas antes del ámbito se clasifican solas por su nombre.
+  DB.services = DB.services.map(s=>({...s, ambito: ambitoDeTarifa(s)}));
   DB.payments = await getColl('payments', []);
   // Migración: pacientes "Individual" que ya tenían pagos registrados antes de este ajuste
   // (cuando el total todavía no se vinculaba a los pagos) arrancan con esa cantidad de sesiones
@@ -1652,7 +1667,14 @@ function toggleForm(id){
 
 /* ===================== UTIL ===================== */
 function fmtMoney(n){ return 'S/ ' + (Math.round((n||0)*100)/100).toFixed(2); }
-function todayISO(){ return new Date().toISOString().slice(0,10); }
+/* La fecha del DÍA LOCAL, no la de UTC. En Perú (UTC-5), toISOString() devuelve el día
+   siguiente a partir de las 7 de la noche: un pago registrado a las 10 p. m. quedaba
+   fechado mañana y dejaba de contarse. Todas las fechas del panel salen de aquí. */
+function fechaLocalISO(d){
+  const f = d || new Date();
+  return new Date(f.getTime() - f.getTimezoneOffset()*60000).toISOString().slice(0,10);
+}
+function todayISO(){ return fechaLocalISO(); }
 function daysUntil(dateStr){
   const d = new Date(dateStr+'T00:00:00');
   const t = new Date(); t.setHours(0,0,0,0);
@@ -1698,6 +1720,7 @@ function buscarDniEnBaseLocal(dni){
     name: persona.name.trim(),
     phone: (persona.phone||'').trim(),
     email: (persona.email||'').trim(),
+    sex: (persona.sex||'').trim(),
     origen,
   });
   for(const p of DB.patients){
@@ -1723,7 +1746,7 @@ async function buscarPorDNI(dniFieldId, nameFieldId, btn, extraFields){
   if(local){
     document.getElementById(nameFieldId).value = local.name;
     if(extraFields){
-      ['phone','email'].forEach(k=>{
+      ['phone','email','sex'].forEach(k=>{
         const campo = extraFields[k] && document.getElementById(extraFields[k]);
         if(campo && !campo.value.trim() && local[k]) campo.value = local[k];
       });
@@ -1810,7 +1833,14 @@ function patientBalance(patient){
     : Number(patient.packageTotal||0) * Number(patient.pricePerSession||0);
   // Si el paciente ya inició un paquete nuevo (después de terminar uno anterior), solo se cuentan
   // los pagos hechos DESDE esa fecha, para no arrastrar pagos del paquete anterior ya cerrado.
-  const paid = DB.payments.filter(p=>p.patientId===patient.id && (!patient.packageStartDate || p.date>=patient.packageStartDate)).reduce((s,p)=>s+Number(p.amount||0),0);
+  // El corte por fecha existe solo para no arrastrar los pagos de un paquete ya cerrado.
+  // Si el paciente nunca cerró un paquete anterior, no hay nada que excluir: se cuentan
+  // TODOS sus pagos. Antes, un adelanto fechado un día antes de registrarlo se perdía.
+  const tuvoPaqueteAnterior = Array.isArray(patient.paquetesHistorial) && patient.paquetesHistorial.length>0;
+  const paid = DB.payments
+    .filter(p=>p.patientId===patient.id)
+    .filter(p=>!tuvoPaqueteAnterior || !patient.packageStartDate || p.date>=patient.packageStartDate)
+    .reduce((s,p)=>s+Number(p.amount||0),0);
   const saldo = Math.max(0, Math.round((totalPrice-paid)*100)/100);
   return {totalPrice, paid, saldo};
 }
@@ -1875,6 +1905,33 @@ function buildPolicyText(){
    colegios o empresas son servicios grupales y viven en la pestaña "Talleres y charlas":
    tienen cupo, participantes y, muchas veces, una entidad que contrata y paga. */
 const TIPOS_SERVICIO_PACIENTE = ['Individual','Pareja','Familia','Evaluación'];
+
+/* El catálogo de Tarifas mezcla cosas muy distintas: lo que paga un paciente, lo que se
+   cobra por una charla o un taller, y lo interno (comisión al profesional, alquiler del
+   consultorio). Cada tarifa lleva su ámbito para que en la ficha del paciente solo
+   aparezcan las suyas. */
+const AMBITOS_TARIFA = [
+  {v:'paciente', label:'Paciente (sesiones y paquetes)'},
+  {v:'grupal',   label:'Taller, charla o programa institucional'},
+  {v:'interno',  label:'Interno (comisión al profesional, alquiler del consultorio)'},
+];
+function ambitoDeTarifa(s){
+  if(!s) return 'paciente';
+  if(s.ambito) return s.ambito;
+  // Tarifas creadas antes de que existiera el ámbito: se deduce del nombre.
+  if(s.isPackage) return 'paciente';
+  const n = String(s.name||'');
+  if(/alquiler|comisi[oó]n/i.test(n)) return 'interno';
+  if(/charla|capacitaci|organizacional|empresa|colegio|taller/i.test(n)) return 'grupal';
+  return 'paciente';
+}
+function etiquetaAmbito(v){
+  const a = AMBITOS_TARIFA.find(x=>x.v===v);
+  return a? a.label.split(' (')[0] : v;
+}
+function tarifasDeAmbito(ambito){
+  return DB.services.filter(s=>ambitoDeTarifa(s)===ambito);
+}
 
 /* ===== Paciente nuevo o continuador =====
    Se deduce de las atenciones, no de un campo que haya que recordar actualizar:
@@ -2272,9 +2329,9 @@ function viewPacientes(){
         <div class="field"><label>Tarifa</label>
           <select id="pf_service" onchange="applyTarifaAlPaciente()">
             <option value="">— elegir del catálogo de Tarifas —</option>
-            ${DB.services.map(s=>`<option value="${s.id}">${s.name} · ${s.price}</option>`).join('')}
+            ${tarifasDeAmbito('paciente').map(s=>`<option value="${s.id}">${s.name} · ${s.price}</option>`).join('')}
           </select>
-          <p class="hint" style="margin-top:3px" id="pf_serviceHint">Se toma del catálogo de la pestaña <b>Tarifas</b>.</p>
+          <p class="hint" style="margin-top:3px" id="pf_serviceHint">Solo tarifas de paciente. Las de talleres y las internas están en <b>Tarifas</b>.</p>
         </div>
         <div class="field"><label>Precio por sesión (S/)</label><input type="number" id="pf_price" placeholder="Ej: 40" oninput="updateResumenCobro()">
           <p class="hint" style="margin-top:3px" id="pf_cobroHint"></p>
@@ -2569,7 +2626,18 @@ function editPatient(id){
   document.getElementById('pf_prof').value = p.professionalId||'';
   document.getElementById('pf_billingType').value = p.billingType||'Paquete';
   document.getElementById('pf_total').value = p.packageTotal||0;
-  document.getElementById('pf_service').value = p.serviceId||'';
+  // Si su tarifa era de otro ámbito (fichas anteriores), se añade al desplegable en vez
+  // de perderla en silencio al guardar.
+  const selTarifa = document.getElementById('pf_service');
+  if(p.serviceId && !selTarifa.querySelector(`option[value="${p.serviceId}"]`)){
+    const s = DB.services.find(x=>x.id===p.serviceId);
+    if(s){
+      const opt = document.createElement('option');
+      opt.value = s.id; opt.textContent = `${s.name} · ${s.price} (${etiquetaAmbito(ambitoDeTarifa(s))})`;
+      selTarifa.appendChild(opt);
+    }
+  }
+  selTarifa.value = p.serviceId||'';
   document.getElementById('pf_price').value = p.pricePerSession||'';
   updateResumenCobro();
   document.getElementById('pf_used').value = p.sessionsUsed||0;
@@ -3100,7 +3168,7 @@ async function changeStatus(id,status){
       if(wantsReport){
         const due = new Date(); due.setDate(due.getDate()+7);
         patient.reportStatus = 'Pendiente';
-        patient.reportDueDate = due.toISOString().slice(0,10);
+        patient.reportDueDate = fechaLocalISO(due);
       }
     } else if(patient.packageTotal>0){
       alert(`Sesión ${patient.sessionsUsed} de ${patient.packageTotal} para ${patient.name}.`);
@@ -3209,7 +3277,7 @@ function viewProfesionales(){
   const mesActual = todayISO().slice(0,7);
   const filteredProfs = filterByActive(DB.professionals, 'profesionales');
   const rows = filteredProfs.map(pr=>{
-    const proxCitas = DB.appointments.filter(a=>a.professionalId===pr.id && a.date>=todayISO() && a.date<=in7.toISOString().slice(0,10) && a.status!=='Cancelada');
+    const proxCitas = DB.appointments.filter(a=>a.professionalId===pr.id && a.date>=todayISO() && a.date<=fechaLocalISO(in7) && a.status!=='Cancelada');
     const carga = proxCitas.length>=15? '<span class="chip alert">Sobrecargada</span>' : (proxCitas.length>=8? '<span class="chip warn">Ocupada</span>' : '<span class="chip ok">Disponible</span>');
     const rentalModeLabel = {'Por paciente':'por paciente', 'Por dia':'por día', 'Mensual':'mensual'}[pr.roomRentalMode||'Por paciente'];
     const rentalRate = Number(pr.roomRentalRate ?? 10);
@@ -3395,7 +3463,7 @@ function showGroupAvailabilityWeek(){
   const monday = new Date(today); monday.setDate(today.getDate()+diffToMonday);
   const days = [];
   for(let i=0;i<7;i++){ const d=new Date(monday); d.setDate(monday.getDate()+i); days.push(d); }
-  const dayInfo = days.map(d=>({dateStr:d.toISOString().slice(0,10), label:d.toLocaleDateString('es-PE',{weekday:'short'}), num:d.getDate()}));
+  const dayInfo = days.map(d=>({dateStr:fechaLocalISO(d), label:d.toLocaleDateString('es-PE',{weekday:'short'}), num:d.getDate()}));
   const hourBlocks = [['08:00','10:00'],['10:00','12:00'],['12:00','14:00'],['14:00','16:00'],['16:00','18:00'],['18:00','20:00']];
 
   const header = '<tr><th>Horario</th>'+dayInfo.map(d=>`<th style="text-transform:capitalize">${d.label} ${d.num}</th>`).join('')+'</tr>';
@@ -3427,7 +3495,7 @@ function showGroupAvailability(){
   const days = [];
   for(let i=0;i<14;i++){
     const d = new Date(); d.setDate(d.getDate()+i);
-    days.push(d.toISOString().slice(0,10));
+    days.push(fechaLocalISO(d));
   }
   const header = '<tr><th>Fecha</th>'+activeProfs.map(p=>`<th>${p.name}</th>`).join('')+'</tr>';
   const rows = days.map(dateStr=>{
@@ -3456,7 +3524,7 @@ function exportGroupAvailabilityCSV(){
   const rows = [];
   for(let i=0;i<14;i++){
     const d = new Date(); d.setDate(d.getDate()+i);
-    const dateStr = d.toISOString().slice(0,10);
+    const dateStr = fechaLocalISO(d);
     const row = [dateStr];
     activeProfs.forEach(p=>{
       const sched = getDayScheduleFor(p, dateStr);
@@ -3573,7 +3641,7 @@ function showAvailability(profId){
   const days = [];
   for(let i=0;i<14;i++){
     const d = new Date(); d.setDate(d.getDate()+i);
-    const dateStr = d.toISOString().slice(0,10);
+    const dateStr = fechaLocalISO(d);
     const sched = getDayScheduleFor(pr, dateStr);
     const citasDia = DB.appointments.filter(a=>a.professionalId===profId && a.date===dateStr && a.status!=='Cancelada').sort((a,b)=>a.time.localeCompare(b.time));
     days.push({dateStr, dayName: d.toLocaleDateString('es-PE',{weekday:'long'}), sched, citasDia});
@@ -4301,7 +4369,9 @@ function exportPracticantesCSV(){
 /* ===================== TARIFAS ===================== */
 function viewTarifas(){
   const rows = DB.services.map(s=>`<tr>
-    <td><b>${s.name}</b>${s.isPackage?' <span class="chip warn">Paquete</span>':''}</td><td>${s.price}</td><td>${s.unit}</td><td>${s.notes||''}</td>
+    <td><b>${s.name}</b>${s.isPackage?' <span class="chip warn">Paquete</span>':''}</td>
+    <td><span class="chip neutral">${etiquetaAmbito(ambitoDeTarifa(s))}</span></td>
+    <td>${s.price}</td><td>${s.unit}</td><td>${s.notes||''}</td>
     <td><button class="btn small secondary" onclick="editService('${s.id}')">Editar</button>
     <button class="btn small danger" onclick="deleteService('${s.id}')">Eliminar</button></td>
   </tr>`).join('');
@@ -4315,6 +4385,10 @@ function viewTarifas(){
     <div class="formpanel" id="svcForm">
       <div class="formgrid">
         <div class="field"><label>Nombre del servicio</label><input id="sf_name" placeholder="Ej: Paquete Ansiedad, Sesión individual, etc."></div>
+        <div class="field"><label>¿Para qué es esta tarifa?</label>
+          <select id="sf_ambito">${AMBITOS_TARIFA.map(a=>`<option value="${a.v}">${a.label}</option>`).join('')}</select>
+          <p class="hint" style="margin-top:3px">Define dónde aparece: en la ficha del paciente solo salen las de <b>Paciente</b>.</p>
+        </div>
         <div class="field"><label>Tipo de tarifa</label>
           <select id="sf_type" onchange="toggleServiceType()">
             <option value="sesion">Por sesión / evento (precio libre)</option>
@@ -4335,7 +4409,7 @@ function viewTarifas(){
       <button class="btn" onclick="saveService()">Guardar</button>
       <button class="btn secondary" onclick="toggleForm('svcForm')">Cancelar</button>
     </div>
-    <div class="tablewrap"><table><tr><th>Servicio</th><th>Precio</th><th>Unidad</th><th>Notas</th><th></th></tr>${rows}</table></div>
+    <div class="tablewrap"><table><tr><th>Servicio</th><th>Ámbito</th><th>Precio</th><th>Unidad</th><th>Notas</th><th></th></tr>${rows}</table></div>
   `;
 }
 function toggleServiceType(){
@@ -4355,6 +4429,7 @@ function editService(id){
   const s=DB.services.find(x=>x.id===id); if(!s) return;
   editingServiceId=id; toggleForm('svcForm');
   document.getElementById('sf_name').value=s.name;
+  document.getElementById('sf_ambito').value=ambitoDeTarifa(s);
   document.getElementById('sf_type').value=s.isPackage? 'paquete':'sesion';
   document.getElementById('sf_price').value=s.price;
   document.getElementById('sf_unit').value=s.unit;
@@ -4372,13 +4447,13 @@ async function saveService(){
     const sessions = Number(document.getElementById('sf_pkgSessions').value)||0;
     const total = Number(document.getElementById('sf_pkgTotal').value)||0;
     const perSession = sessions>0? Math.round((total/sessions)*100)/100 : 0;
-    data = {id:editingServiceId||uid(), name,
+    data = {id:editingServiceId||uid(), name, ambito: document.getElementById('sf_ambito').value,
       isPackage:true, packageSessions:sessions, packageTotal:total,
       price: `${fmtMoney(total)} total (${fmtMoney(perSession)}/sesión)`,
       unit: `paquete de ${sessions} sesiones`,
       notes: document.getElementById('sf_notes').value.trim()};
   } else {
-    data = {id:editingServiceId||uid(), name, isPackage:false,
+    data = {id:editingServiceId||uid(), name, ambito: document.getElementById('sf_ambito').value, isPackage:false,
       price: document.getElementById('sf_price').value.trim(),
       unit: document.getElementById('sf_unit').value.trim(),
       notes: document.getElementById('sf_notes').value.trim()};
@@ -4413,25 +4488,48 @@ function viewPagos(){
 
   // Saldos por paciente, separados por tipo de contratación (individual vs. paquete),
   // con los deudores primero y los que ya pagaron al final, en cada tabla.
+  /* Aquí aparecen TODOS los pacientes activos, no solo los que ya tienen pagos: si acabas
+     de registrar a alguien, tiene que poder cobrársele desde este cuadro sin buscarlo.
+     El orden pone arriba lo que necesita acción: primero quien debe, después a quien le
+     falta tarifa (sin ella no se puede cobrar), luego los que aún no tienen cobros. */
+  const estadoDeCobro = ({p,bal})=>{
+    if(bal.saldo>0) return 'debe';
+    if(!Number(p.pricePerSession)) return 'sin_tarifa';
+    if(bal.totalPrice===0) return 'sin_cobros';
+    return 'al_dia';
+  };
+  const ORDEN_COBRO = {debe:0, sin_tarifa:1, sin_cobros:2, al_dia:3};
   const pendientesTodos = DB.patients
-    .map(p=>({p, bal:patientBalance(p)}))
-    .filter(x=>x.bal.totalPrice>0)
+    .filter(p=>p.active!==false)
+    .map(p=>{ const bal = patientBalance(p); return {p, bal, estado: estadoDeCobro({p,bal})}; })
     .sort((a,b)=>{
-      if(a.bal.saldo>0 && b.bal.saldo===0) return -1;
-      if(a.bal.saldo===0 && b.bal.saldo>0) return 1;
-      if(a.bal.saldo>0 && b.bal.saldo>0) return b.bal.saldo-a.bal.saldo;
+      const d = ORDEN_COBRO[a.estado]-ORDEN_COBRO[b.estado];
+      if(d!==0) return d;
+      if(a.estado==='debe') return b.bal.saldo-a.bal.saldo;
       return a.p.name.localeCompare(b.p.name);
     });
   const pendientesIndividual = pendientesTodos.filter(x=>x.p.billingType==='Individual');
   const pendientesPaquete = pendientesTodos.filter(x=>x.p.billingType!=='Individual');
-  function filaSaldo({p,bal}){
-    return `<tr style="${bal.saldo===0?'opacity:0.7':''}">
-    <td>${p.name}</td>
-    <td>${fmtMoney(bal.totalPrice)}</td>
+  function filaSaldo({p,bal,estado}){
+    const tipoPago = p.billingType==='Individual'
+      ? 'sesion_completa'
+      : (bal.paid>0? 'saldo_paquete' : 'paquete_completo');
+    const celdaSaldo = {
+      debe: `<b style="color:var(--alert)">${fmtMoney(bal.saldo)}</b>`,
+      al_dia: '<span class="chip ok">Al día ✓</span>',
+      sin_cobros: '<span class="chip warn">Sin cobros aún</span>',
+      sin_tarifa: '<span class="chip alert">Falta asignar tarifa</span>',
+    }[estado];
+    const accion = estado==='sin_tarifa'
+      ? `<button class="btn small secondary" onclick="irAAsignarTarifa('${p.id}')">Asignar tarifa</button>`
+      : `<button class="btn small secondary" onclick="openPaymentFormFor('${p.id}','${tipoPago}')">💰 Registrar pago</button>`;
+    return `<tr style="${estado==='al_dia'?'opacity:0.7':''}">
+    <td>${p.name}${Number(p.pricePerSession)? `<br><span class="hint">${fmtMoney(p.pricePerSession)} por sesión${p.billingType!=='Individual' && p.packageTotal? ` · paquete de ${p.packageTotal}`:''}</span>`:''}</td>
+    <td>${bal.totalPrice>0? fmtMoney(bal.totalPrice) : '<span class="hint">—</span>'}</td>
     <td>${fmtMoney(bal.paid)}</td>
-    <td>${bal.saldo>0? `<b style="color:var(--alert)">${fmtMoney(bal.saldo)}</b>` : `<span class="chip ok">Al día ✓</span>`}</td>
+    <td>${celdaSaldo}</td>
     <td>
-      ${bal.saldo>0? `<button class="btn small secondary" onclick="openPaymentFormFor('${p.id}','saldo_paquete')">💰 Registrar pago</button>` : ''}
+      ${accion}
       <button class="btn small secondary" onclick="showConsolidatedReceipt('${p.id}')">Recibo consolidado</button>
     </td>
   </tr>`;
@@ -4475,17 +4573,17 @@ function viewPagos(){
      primero que se necesita es registrar el pago, no leer reportes. */
   const bloqueSaldosYControl = `
     <h3 style="margin-top:30px">Saldos — Sesión individual</h3>
-    <p class="hint">Pacientes que se atienden sesión por sesión. Los que deben aparecen primero; los que ya están al día quedan al final.</p>
+    <p class="hint">Todos los pacientes que se atienden sesión por sesión. Arriba los que deben, luego los que aún no tienen tarifa asignada, y al final los que están al día.</p>
     <div class="tablewrap" style="margin-bottom:20px">
       ${pendientesRowsIndividual? `<table><tr><th>Paciente</th><th>Total a la fecha</th><th>Pagado</th><th>Saldo</th><th></th></tr>${pendientesRowsIndividual}</table>`
-      : `<div class="empty">Aún no hay pacientes de sesión individual con pagos registrados.</div>`}
+      : `<div class="empty">Aún no hay pacientes que se atiendan sesión por sesión.</div>`}
     </div>
 
     <h3 style="margin-top:22px">Saldos — Paquetes</h3>
-    <p class="hint">Pacientes con paquete de varias sesiones. Los que deben aparecen primero; los que ya están al día quedan al final.</p>
+    <p class="hint">Todos los pacientes con paquete de varias sesiones, en el mismo orden: primero lo que necesita cobrarse.</p>
     <div class="tablewrap" style="margin-bottom:20px">
       ${pendientesRowsPaquete? `<table><tr><th>Paciente</th><th>Total del paquete</th><th>Pagado</th><th>Saldo</th><th></th></tr>${pendientesRowsPaquete}</table>`
-      : `<div class="empty">Aún no hay pacientes con paquete registrado.</div>`}
+      : `<div class="empty">Aún no hay pacientes con paquete.</div>`}
     </div>
 
     ${(()=>{
@@ -4559,7 +4657,9 @@ function viewPagos(){
           <p class="hint" id="pyf_typeHint" style="margin-top:3px"></p>
         </div>
         <div class="field"><label>Fecha</label><input type="date" id="pyf_date" value="${todayISO()}"></div>
-        <div class="field"><label>Monto (S/)</label><input type="number" id="pyf_amount" value="40"></div>
+        <div class="field"><label>Monto (S/)</label><input type="number" id="pyf_amount" value="40" oninput="renderSaldoDelPago()">
+          <p class="hint" style="margin-top:3px" id="pyf_amountHint"></p>
+        </div>
         <div class="field" style="grid-column:1/-1"><label>Concepto</label><input id="pyf_concept" placeholder="Sesión 3 de paquete, etc."></div>
         <div class="field"><label>Método</label>
           <select id="pyf_method"><option>Efectivo</option><option>Yape/Plin</option><option>Transferencia</option><option>Tarjeta</option></select>
@@ -4612,6 +4712,26 @@ function fillPaymentFromPatient(){
   document.getElementById('pyf_tarifa').value = '';
   refreshPaymentTypeOptions(); // las opciones dependen de cómo contrató este paciente
 }
+/* Muestra, mientras se escribe el monto, cuánto debía y con cuánto queda: así un adelanto
+   se ve como adelanto y no hay que sacar la cuenta a mano. */
+function renderSaldoDelPago(){
+  const hint = document.getElementById('pyf_amountHint');
+  if(!hint) return;
+  const p = DB.patients.find(x=>x.id===document.getElementById('pyf_patient').value);
+  if(!p){ hint.textContent = ''; return; }
+  const bal = patientBalance(p);
+  const monto = Number(document.getElementById('pyf_amount').value)||0;
+  if(bal.totalPrice<=0){
+    hint.textContent = Number(p.pricePerSession)
+      ? `Tarifa: ${fmtMoney(p.pricePerSession)} por sesión.`
+      : 'Este paciente todavía no tiene tarifa asignada.';
+    return;
+  }
+  const quedara = Math.max(0, Math.round((bal.saldo - monto)*100)/100);
+  hint.innerHTML = `Total ${fmtMoney(bal.totalPrice)} · ya pagó ${fmtMoney(bal.paid)} · debe ${fmtMoney(bal.saldo)}`
+    + (monto>0? ` → con este pago le quedaría <b>${fmtMoney(quedara)}</b>` : '')
+    + (monto>bal.saldo? ` <span style="color:var(--alert)">(está pagando más de lo que debe)</span>` : '');
+}
 function applyPaymentType(){
   const pid = document.getElementById('pyf_patient').value;
   const p = DB.patients.find(x=>x.id===pid);
@@ -4627,6 +4747,9 @@ function applyPaymentType(){
       conceptEl.value = `Sesión ${nextSession} de paquete (pago completo)`;
       break;
     case 'adelanto_sesion':
+      // Un adelanto es un monto libre: se vacía la casilla para que escriba lo que
+      // realmente recibió, en vez de dejar puesto el precio completo de la sesión.
+      amountEl.value = '';
       conceptEl.value = `Adelanto de sesión ${nextSession}`;
       break;
     case 'paquete_completo':
@@ -4634,6 +4757,7 @@ function applyPaymentType(){
       conceptEl.value = `Pago completo del paquete`;
       break;
     case 'adelanto_paquete':
+      amountEl.value = '';
       conceptEl.value = `Adelanto del paquete`;
       break;
     case 'saldo_paquete':
@@ -4646,6 +4770,7 @@ function applyPaymentType(){
     default:
       break;
   }
+  renderSaldoDelPago();
   const info = document.getElementById('pyf_balanceInfo');
   if(info){
     info.textContent = bal.totalPrice>0
@@ -4655,10 +4780,27 @@ function applyPaymentType(){
 }
 function openPaymentFormFor(patientId, type){
   document.getElementById('payForm').classList.add('open');
+  document.getElementById('pyf_category').value = 'paciente';
+  togglePaymentCategory();
   document.getElementById('pyf_patient').value = patientId;
-  if(type) document.getElementById('pyf_type').value = type;
+  // Primero se cargan los datos (que recalculan qué tipos de pago corresponden a este
+  // paciente) y recién después se elige el tipo, para no pedir uno que ya no está.
   fillPaymentFromPatient();
+  const sel = document.getElementById('pyf_type');
+  if(type && sel.querySelector(`option[value="${type}"]`)){
+    sel.value = type;
+    applyPaymentType();
+  }
   document.getElementById('payForm').scrollIntoView({behavior:'smooth', block:'start'});
+}
+/* Sin tarifa no hay nada que cobrar: se lleva a la ficha del paciente para ponérsela. */
+function irAAsignarTarifa(patientId){
+  goTab('pacientes');
+  setTimeout(()=>{
+    editPatient(patientId);
+    const el = document.getElementById('pf_service');
+    if(el){ el.focus(); el.scrollIntoView({block:'center', behavior:'smooth'}); }
+  }, 140);
 }
 function goToRegisterPayment(patientId){
   currentTab = 'pagos';
@@ -5328,15 +5470,27 @@ function viewAlertas(){
   const pagosRows = pagosPendientes.map(p=>{
     const phone = p.isMinor? p.guardianPhone : p.phone;
     const email = p.isMinor? p.guardianEmail : p.email;
-    const {greetName, mentionName} = greetingFor(p);
     const status = computedPaymentStatus(p);
+    const bal = patientBalance(p);
     const saldo = patientOwedAmount(p);
-    const methodsLine = (DB.centerInfo && DB.centerInfo.paymentMethods)? ` Estos son nuestros medios de pago:\n${DB.centerInfo.paymentMethods}` : '';
-    const msg = `Hola ${greetName}, le escribimos del Centro Psicológico para recordarle${mentionName?` que ${mentionName} tiene`:' que tiene'} un pago ${status.toLowerCase()} (aprox. S/${saldo}). Cualquier consulta, con gusto le ayudamos.${methodsLine}`;
+    const methodsLine = (DB.centerInfo && DB.centerInfo.paymentMethods)? `\n\nEstos son nuestros medios de pago:\n${DB.centerInfo.paymentMethods}` : '';
+    // Si ya adelantó algo, el mensaje pide SOLO el saldo y reconoce lo que pagó; si no ha
+    // pagado nada, pide el total. Cobrar de más el importe completo a quien ya adelantó
+    // es el tipo de error que hace perder la confianza del paciente.
+    const gs = p.isMinor? guardiansFromPatient(p) : [];
+    const destinatario = p.isMinor && gs[0]? gs[0] : {name:p.name, role:'Paciente', key:'patient'};
+    const saludo = nombreDePila(destinatario.name) || destinatario.name;
+    const deQuien = p.isMinor && gs[0]
+      ? `de ${comoNombrarAlPaciente(p, {role:gs[0].relationship||'Otro familiar', key:'g'})}`
+      : 'suyo';
+    const detalle = bal.paid>0
+      ? `Del total de ${fmtMoney(bal.totalPrice)} ya tenemos registrado su adelanto de ${fmtMoney(bal.paid)}, así que queda un saldo de ${fmtMoney(bal.saldo)}.`
+      : `Queda pendiente el pago ${deQuien} de ${fmtMoney(saldo)}.`;
+    const msg = `Hola ${saludo}, le saludamos del ${nombreDelCentro()}. ${detalle} Cualquier consulta, con gusto le ayudamos.${methodsLine}`;
     return `<tr>
       <td>${p.name}</td>
       <td><span class="chip alert">${status}</span></td>
-      <td>${fmtMoney(saldo)}</td>
+      <td><b>${fmtMoney(saldo)}</b>${bal.paid>0? `<br><span class="hint">de ${fmtMoney(bal.totalPrice)} · pagó ${fmtMoney(bal.paid)}</span>`:''}</td>
       <td>
         <div class="hint" style="margin-bottom:4px">Paso 1: manda el texto → Paso 2: adjunta el QR aparte</div>
         ${contactButtons(phone, email, msg, 'Recordatorio de pago pendiente')}
@@ -5690,7 +5844,7 @@ function viewTalleres(){
     <td><b>${fmtMoney(tallerCobrado(t))}</b>${tallerPorCobrar(t)>0? `<br><span class="hint" style="color:var(--alert)">Falta ${fmtMoney(tallerPorCobrar(t))}</span>`:''}</td>
     <td>${tallerEstadoChip(t.status)}</td>
     <td>
-      <button class="btn small" onclick="openTallerParticipants('${t.id}')">Participantes</button>
+      <button class="btn small" onclick="openTallerParticipants('${t.id}')">👥 ${tallerEsGrupal(t)?'Asistentes':'Participantes'} (${tallerParticipantes(t).length}${Number(t.capacity)? '/'+t.capacity : ''})</button>
       <button class="btn small secondary" onclick="editTaller('${t.id}')">Editar</button>
       <button class="btn small danger" onclick="deleteTaller('${t.id}')">Eliminar</button>
     </td>
@@ -5764,7 +5918,7 @@ function viewTalleres(){
         <div class="field" style="grid-column:1/-1"><p class="hint">Los asistentes no pagan nada: su lista sirve como <b>control de asistencia</b>, que es lo que suele pedir quien contrata. Si te dieron un adelanto, ponlo en "Ya cobrado" y el panel te muestra cuánto falta.</p></div>
       </div>
       <div class="field" style="grid-column:1/-1;margin-top:8px"><label>Notas</label><textarea id="tf_notes" rows="2" placeholder="Materiales, público objetivo, acuerdos…"></textarea></div>
-      <p class="hint" style="margin-top:6px">Después de guardarlo, usa el botón <b>Participantes</b> de la tabla para armar la lista de asistentes.</p>
+      <p class="hint" style="margin-top:6px"><b>La lista de inscritos se arma después de guardar</b>, porque necesita existir el taller. Al pulsar "Guardar taller" te preguntamos si quieres abrirla en ese momento; también está siempre en el botón <b>👥 Participantes</b> de la tabla.</p>
       <button class="btn" onclick="saveTaller()">Guardar taller</button>
       <button class="btn secondary" onclick="cancelTallerEdit()">Cancelar</button>
     </div>
@@ -5924,12 +6078,23 @@ async function saveTaller(){
     participantes: prev? tallerParticipantes(prev) : [],
     createdAt: prev? (prev.createdAt||todayISO()) : todayISO(),
   };
+  const esNuevo = !editingTallerId;
   if(editingTallerId) DB.talleres = DB.talleres.map(t=>t.id===editingTallerId? data : t);
   else DB.talleres.push(data);
   editingTallerId = null;
+  currentTallerSessions = [];
   const ok = await setColl('talleres', DB.talleres);
   showToast(ok? 'Taller guardado.' : 'No se pudo guardar, reintentando…', ok);
   renderPanel();
+  // La lista de inscritos solo puede existir una vez guardado el taller. En vez de dejar
+  // que la busque, se le ofrece abrirla en el momento: es lo siguiente que va a hacer.
+  if(esNuevo && ok){
+    const grupal = data.billingMode==='grupal';
+    const pregunta = grupal
+      ? `"${data.name}" quedó registrado.\n\n¿Armar ahora la lista de asistentes?`
+      : `"${data.name}" quedó registrado.\n\n¿Inscribir ahora a los participantes?`;
+    if(confirm(pregunta)) openTallerParticipants(data.id);
+  }
 }
 async function deleteTaller(id){
   const t = DB.talleres.find(x=>x.id===id); if(!t) return;
@@ -5948,7 +6113,7 @@ function openTallerParticipants(id){
   tallerPartCurrentId = id;
   document.getElementById('tallerPartTitle').textContent = (tallerEsGrupal(t)? 'Asistentes — ' : 'Participantes — ') + t.name;
   document.getElementById('tp_amountWrap').style.display = tallerEsGrupal(t)? 'none':'';
-  ['tp_name','tp_dni','tp_phone','tp_email','tp_amount'].forEach(k=>{ document.getElementById(k).value=''; });
+  limpiarFormParticipante();
   renderTallerParticipants();
   document.getElementById('tallerPartModal').classList.add('open');
   setTimeout(()=>{ const el = document.getElementById('tp_name'); if(el) el.focus(); }, 80);
@@ -5982,13 +6147,15 @@ function renderTallerParticipants(){
   }
   const columnaEstado = grupal? '<th>Asistencia</th>' : '<th>Monto</th><th>Pago</th>';
   el.innerHTML = `<div class="tablewrap"><table>
-    <tr><th>#</th><th>${grupal?'Asistente':'Participante'}</th><th>DNI</th><th>Teléfono</th><th>Correo</th>${columnaEstado}<th></th></tr>
-    ${lista.map((p,i)=>`<tr>
+    <tr><th>#</th><th>${grupal?'Asistente':'Participante'}</th><th>DNI</th><th>Sexo</th><th>Teléfono</th><th>Correo</th><th>Procedencia</th>${columnaEstado}<th></th></tr>
+    ${lista.map((p,i)=>`<tr${p.id===editingParticipantId? ' style="background:var(--accent-soft)"':''}>
       <td>${i+1}</td>
       <td><b>${p.name}</b></td>
       <td>${p.dni||'—'}</td>
+      <td>${p.sex||'—'}</td>
       <td>${p.phone||'—'}</td>
       <td>${p.email||'—'}</td>
+      <td>${p.origin||'—'}</td>
       ${grupal
         ? `<td>${p.attended? '<span class="chip ok">Asistió</span>' : '<span class="chip neutral">Sin registrar</span>'}</td>`
         : `<td>${fmtMoney(Number(p.amount)||0)}</td>
@@ -5997,6 +6164,7 @@ function renderTallerParticipants(){
         ${grupal
           ? `<button class="btn small secondary" onclick="toggleTallerParticipantAttended('${p.id}')">${p.attended? 'Quitar asistencia':'Marcar asistencia'}</button>`
           : `<button class="btn small secondary" onclick="toggleTallerParticipantPaid('${p.id}')">${p.paid? 'Marcar pendiente':'Marcar pagado'}</button>`}
+        <button class="btn small secondary" onclick="editTallerParticipant('${p.id}')">Editar</button>
         <button class="btn small danger" onclick="removeTallerParticipant('${p.id}')">Quitar</button>
       </td>
     </tr>`).join('')}
@@ -6007,28 +6175,77 @@ async function persistTalleres(msgOk){
   showToast(ok? msgOk : 'No se pudo guardar, reintentando…', ok);
   renderTallerParticipants();
 }
-async function addTallerParticipant(){
-  const t = DB.talleres.find(x=>x.id===tallerPartCurrentId); if(!t) return;
-  const name = document.getElementById('tp_name').value.trim();
-  if(!name){ alert('Ingresa el nombre del participante.'); return; }
-  const lista = tallerParticipantes(t);
-  const cupo = Number(t.capacity)||0;
-  if(cupo && lista.length>=cupo && !confirm(`El taller ya llegó a su cupo de ${cupo} personas. ¿Inscribir de todas formas?`)) return;
-  const amountRaw = document.getElementById('tp_amount').value;
-  const grupal = tallerEsGrupal(t);
-  t.participantes = [...lista, {
-    id: uid(), name,
+const CAMPOS_PARTICIPANTE = ['tp_name','tp_dni','tp_phone','tp_email','tp_amount','tp_origin'];
+let editingParticipantId = null;
+function leerFormParticipante(){
+  return {
+    name: document.getElementById('tp_name').value.trim(),
     dni: document.getElementById('tp_dni').value.trim(),
+    sex: document.getElementById('tp_sex').value,
     phone: document.getElementById('tp_phone').value.trim(),
     email: document.getElementById('tp_email').value.trim(),
-    amount: grupal? 0 : (amountRaw===''? (Number(t.pricePerPerson)||0) : (Number(amountRaw)||0)),
+    origin: document.getElementById('tp_origin').value.trim(),
+  };
+}
+function limpiarFormParticipante(){
+  CAMPOS_PARTICIPANTE.forEach(k=>{ const el=document.getElementById(k); if(el) el.value=''; });
+  const sx = document.getElementById('tp_sex'); if(sx) sx.value='';
+  editingParticipantId = null;
+  const sub = document.getElementById('tp_submit');
+  const can = document.getElementById('tp_cancel');
+  if(sub) sub.textContent = '+ Inscribir participante';
+  if(can) can.style.display = 'none';
+}
+function editTallerParticipant(pid){
+  const t = DB.talleres.find(x=>x.id===tallerPartCurrentId); if(!t) return;
+  const p = tallerParticipantes(t).find(x=>x.id===pid); if(!p) return;
+  editingParticipantId = pid;
+  document.getElementById('tp_name').value = p.name||'';
+  document.getElementById('tp_dni').value = p.dni||'';
+  document.getElementById('tp_sex').value = p.sex||'';
+  document.getElementById('tp_phone').value = p.phone||'';
+  document.getElementById('tp_email').value = p.email||'';
+  document.getElementById('tp_origin').value = p.origin||'';
+  document.getElementById('tp_amount').value = p.amount||'';
+  document.getElementById('tp_submit').textContent = 'Guardar cambios';
+  document.getElementById('tp_cancel').style.display = '';
+  document.getElementById('tp_name').focus();
+  renderTallerParticipants();
+}
+function cancelTallerParticipantEdit(){
+  limpiarFormParticipante();
+  renderTallerParticipants();
+}
+async function addTallerParticipant(){
+  const t = DB.talleres.find(x=>x.id===tallerPartCurrentId); if(!t) return;
+  const datos = leerFormParticipante();
+  if(!datos.name){ alert('Ingresa el nombre del participante.'); return; }
+  const lista = tallerParticipantes(t);
+  const grupal = tallerEsGrupal(t);
+  const amountRaw = document.getElementById('tp_amount').value;
+  const monto = grupal? 0 : (amountRaw===''? (Number(t.pricePerPerson)||0) : (Number(amountRaw)||0));
+
+  if(editingParticipantId){
+    t.participantes = lista.map(p=>p.id===editingParticipantId? {...p, ...datos, amount:monto} : p);
+    limpiarFormParticipante();
+    await persistTalleres(`${datos.name} actualizado.`);
+    return;
+  }
+  const cupo = Number(t.capacity)||0;
+  if(cupo && lista.length>=cupo && !confirm(`El taller ya llegó a su cupo de ${cupo} personas. ¿Inscribir de todas formas?`)) return;
+  // Un DNI repetido casi siempre es la misma persona inscrita dos veces.
+  if(datos.dni && lista.some(p=>p.dni===datos.dni)
+     && !confirm(`Ya hay alguien con el DNI ${datos.dni} en esta lista. ¿Inscribirlo igual?`)) return;
+  t.participantes = [...lista, {
+    id: uid(), ...datos,
+    amount: monto,
     paid: false,
     attended: false,
     inscritoEl: todayISO(),
   }];
-  ['tp_name','tp_dni','tp_phone','tp_email','tp_amount'].forEach(k=>{ document.getElementById(k).value=''; });
+  limpiarFormParticipante();
   document.getElementById('tp_name').focus();
-  await persistTalleres(grupal? `${name} agregado a la lista.` : `${name} quedó inscrito.`);
+  await persistTalleres(grupal? `${datos.name} agregado a la lista.` : `${datos.name} quedó inscrito.`);
 }
 async function toggleTallerParticipantPaid(pid){
   const t = DB.talleres.find(x=>x.id===tallerPartCurrentId); if(!t) return;
@@ -6069,11 +6286,11 @@ function exportTallerParticipantsCSV(){
   const t = DB.talleres.find(x=>x.id===tallerPartCurrentId); if(!t) return;
   const grupal = tallerEsGrupal(t);
   const headers = grupal
-    ? ['Asistente','DNI','Teléfono','Correo','Asistencia','Registrado el']
-    : ['Participante','DNI','Teléfono','Correo','Monto','Pago','Inscrito el'];
+    ? ['Asistente','DNI','Sexo','Teléfono','Correo','Procedencia','Asistencia','Registrado el']
+    : ['Participante','DNI','Sexo','Teléfono','Correo','Procedencia','Monto','Pago','Inscrito el'];
   const rows = tallerParticipantes(t).map(p=>grupal
-    ? [p.name, p.dni||'', p.phone||'', p.email||'', p.attended?'Asistió':'Sin registrar', p.inscritoEl||'']
-    : [p.name, p.dni||'', p.phone||'', p.email||'', (Number(p.amount)||0).toFixed(2), p.paid?'Pagado':'Pendiente', p.inscritoEl||'']);
+    ? [p.name, p.dni||'', p.sex||'', p.phone||'', p.email||'', p.origin||'', p.attended?'Asistió':'Sin registrar', p.inscritoEl||'']
+    : [p.name, p.dni||'', p.sex||'', p.phone||'', p.email||'', p.origin||'', (Number(p.amount)||0).toFixed(2), p.paid?'Pagado':'Pendiente', p.inscritoEl||'']);
   const prefijo = grupal? 'asistencia' : 'participantes';
   downloadCSV(`${prefijo}-${(t.name||'taller').replace(/\s+/g,'_')}.csv`, toCSV(headers, rows));
 }
@@ -6245,7 +6462,7 @@ function updateGrafRange(){
 }
 function viewGraficos(){
   const today = new Date();
-  const defaultFrom = new Date(today.getTime()-29*86400000).toISOString().slice(0,10);
+  const defaultFrom = fechaLocalISO(new Date(today.getTime()-29*86400000));
   const defaultTo = todayISO();
   const range = window._grafRange || {from:defaultFrom, to:defaultTo};
   const from30 = range.from, to = range.to;
