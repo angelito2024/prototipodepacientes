@@ -148,6 +148,37 @@ final class Auth
         return (int) Database::valor('SELECT COUNT(*) FROM usuarios WHERE activo = 1') > 0;
     }
 
+    /**
+     * A nombre de quién se guarda lo que es privado de una persona (hoy,
+     * las cuentas personales).
+     *
+     * Con el acceso con clave activado es el usuario de la sesión. Sin él,
+     * el panel no pregunta quién eres pero las cuentas personales igual
+     * necesitan un dueño: se usa la cuenta de administrador. Sin esto, la
+     * pestaña aceptaría los datos y no los guardaría en ningún sitio.
+     */
+    public static function duenioDeLoPersonal(): ?int
+    {
+        $id = self::usuarioId();
+        if ($id !== null) {
+            return $id;
+        }
+        $loginRequerido = (int) (Database::valor(
+            'SELECT login_requerido FROM centro_config WHERE id = 1'
+        ) ?? 0) === 1;
+        if ($loginRequerido) {
+            return null;      // hay pantalla de acceso: sin sesión, nadie
+        }
+        $admin = Database::valor(
+            "SELECT u.id FROM usuarios u
+               JOIN usuario_roles ur ON ur.usuario_id = u.id
+               JOIN roles r          ON r.id = ur.rol_id
+              WHERE u.activo = 1 AND r.clave = 'admin'
+              ORDER BY u.id LIMIT 1"
+        );
+        return $admin === null ? null : (int) $admin;
+    }
+
     /** Corta la ejecución con 401 si no hay sesión válida. */
     public static function exigir(): int
     {

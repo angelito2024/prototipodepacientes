@@ -9,6 +9,10 @@ PHP. Sustituye el almacenamiento en `localStorage` del prototipo.
    `db/01_schema.sql` → `db/02_vistas_triggers.sql` → `db/03_datos_base.sql` → `db/04_api.sql`
    (o por consola, ver [db/README.md](db/README.md)).
 
+   Si la base **ya estaba instalada** antes de que el panel tuviera talleres
+   y cuentas personales, importar además `db/05_actualizacion_talleres.sql`.
+   Es reejecutable y no toca los datos existentes.
+
 2. **Configurar el acceso.**
    ```
    copy config\config.ejemplo.php config\config.php
@@ -67,7 +71,8 @@ Los cambios en `index.html` se limitan a la capa de almacenamiento:
 | `STORAGE_MODE` | tercer modo `'api'`, activo cuando la página se sirve por HTTP |
 | `getColl` / `setColl` | hablan con `api/index.php` y llevan la versión de la colección |
 | `attemptLogin` / `logout` | verifican contra el servidor, no contra un texto en el JSON |
-| `buscarPorDNI` | llama a `api/dni.php`; el token ya no viaja al navegador |
+| `buscarPorDNI` | busca primero en la base propia; si no está, `api/dni.php` con el token en el servidor |
+| `desbloquearPersonal` | la clave de cuentas personales la comprueba el servidor contra un hash |
 | `downloadAttachment`, `downloadActivityFile` | abren la URL del archivo en vez de un data-URL |
 | `confirmWipe` | vacía cada colección por la API (borrado lógico) |
 
@@ -96,10 +101,11 @@ elimina el problema de raíz y reduce el tráfico.
 | `POST api/index.php?accion=login` | `{usuario, clave}` |
 | `POST api/index.php?accion=logout` | cierra la sesión |
 | `GET  api/index.php?accion=sesion` | si hace falta iniciar sesión y si ya hay una |
+| `POST api/index.php?accion=personal_pin` | `{pin}` → comprueba la clave de cuentas personales |
 | `GET  api/archivo.php?id=<uuid>` | entrega un adjunto (exige sesión si el login está activo) |
 | `POST api/dni.php` | `{dni}` → nombre desde apiperu.dev |
 
-Claves de colección: las 13 del panel, más `historia_<uid del paciente>`.
+Claves de colección: las 16 del panel, más `historia_<uid del paciente>`.
 
 ## Migración de los datos existentes
 
@@ -146,6 +152,37 @@ Las contraseñas **no se importan**: en el prototipo estaban en texto plano.
 - **El token de apiperu.dev no sale del servidor.**
 - **Los cruces de agenda se detectan de verdad**: el panel solo comparaba
   horas de inicio idénticas, así que 10:00–11:00 y 10:30–11:30 no chocaban.
+- **La clave de las cuentas personales se guarda con hash** y la comprueba
+  el servidor. Antes viajaba en claro al navegador y salía en el JSON de la
+  copia de seguridad.
+
+## Talleres y cuentas personales
+
+Los dos módulos que el panel sumó después de la primera carga tienen sus
+propias tablas, no un hueco en las que ya había:
+
+- **Talleres** (`talleres` + `taller_sesiones` + `taller_participantes`).
+  Un taller no es un paciente: no abre historia clínica ni paquete. Sus
+  fechas son filas, así que un programa con colegio puede ser cuatro
+  sábados con horarios distintos. Los inscritos también, y de ahí sale lo
+  cobrado en el cobro por participante; en el pago grupal lo cobrado es lo
+  que abonó la entidad contratante y la lista sirve solo para la
+  asistencia. Un inscrito que ya está registrado en el centro se enlaza con
+  su ficha (`persona_id`), así que el buscador por DNI lo encuentra sin
+  gastar consulta de apiperu.dev.
+- **Cuentas personales** (`personal_movimientos` + `personal_pagos`). Es
+  dinero propio, no del centro: no entra en Finanzas ni en
+  `v_resultado_mensual`. Cada mes pagado es una fila con su fecha real, en
+  vez del array `pagados[]` con un objeto `fechasPago{}` en paralelo. Son
+  **privadas por usuario**: cada quien ve solo las suyas. Si el centro no
+  tiene activado el acceso con clave no hay a quién preguntarle, así que se
+  guardan a nombre de la cuenta de administrador.
+
+Además, cada tarifa declara su **ámbito** (paciente, grupal o interno), y
+en la ficha del paciente solo se ofrecen las de ámbito `paciente`: ni
+charlas, ni alquiler del consultorio, ni comisiones. Las tarifas creadas
+antes se clasifican por su nombre —la misma regla que usa el panel— y se
+pueden corregir a mano.
 
 ### Restricción retirada a propósito
 

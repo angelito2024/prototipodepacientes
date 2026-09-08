@@ -60,6 +60,14 @@ final class Personas
             'eliminado_en'   => null,
         ];
 
+        // El sexo solo lo pregunta la ficha del paciente. Si el elemento no
+        // lo trae, la columna no se toca: un profesional que además se
+        // atiende como paciente perdería el dato cada vez que se guardara
+        // la lista de profesionales.
+        if (array_key_exists('sex', $item)) {
+            $campos['sexo'] = self::sexoEnum($item['sex']);
+        }
+
         if ($id !== null) {
             $id = (int) $id;
             $set = implode(', ', array_map(static fn($c) => "$c = ?", array_keys($campos)));
@@ -82,7 +90,7 @@ final class Personas
      * guarda como documento lo que parece uno; el resto se descarta para no
      * chocar contra el UNIQUE con basura repetida ('-', 'no tiene', ...).
      */
-    private static function soloDocumento(mixed $v): ?string
+    public static function soloDocumento(mixed $v): ?string
     {
         $s = R::nz($v);
         if ($s === null) {
@@ -90,6 +98,32 @@ final class Personas
         }
         $s = preg_replace('/\s+/', '', $s) ?? '';
         return preg_match('/^[0-9A-Za-z]{6,20}$/', $s) === 1 ? strtoupper($s) : null;
+    }
+
+    /**
+     * Sexo del panel ('Femenino', 'Masculino', 'Otro') -> ENUM de la base.
+     * Se acepta también la inicial, por si el dato viene de una migración.
+     */
+    public static function sexoEnum(mixed $v): ?string
+    {
+        $s = mb_strtoupper(R::txt($v));
+        return match (true) {
+            str_starts_with($s, 'F') => 'F',
+            str_starts_with($s, 'M') => 'M',
+            str_starts_with($s, 'O'), $s === 'X' => 'X',
+            default => null,
+        };
+    }
+
+    /** ENUM de la base -> la palabra que muestra el panel. */
+    public static function sexoTexto(mixed $v): string
+    {
+        return match (R::txt($v)) {
+            'F' => 'Femenino',
+            'M' => 'Masculino',
+            'X' => 'Otro',
+            default => '',
+        };
     }
 
     private static function tipoDocumento(?string $doc): string

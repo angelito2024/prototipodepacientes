@@ -27,9 +27,12 @@ INSERT INTO consultorios (sede_id, nombre, descripcion) VALUES
 ON DUPLICATE KEY UPDATE descripcion = VALUES(descripcion);
 
 -- --- Catálogos -------------------------------------------------------
+-- Las cuatro últimas son el gasto del día a día del centro, que antes
+-- caía todo en 'Otro' y no se podía leer en el reporte de finanzas.
 INSERT INTO categorias_gasto (nombre) VALUES
   ('Alquiler'), ('Servicios'), ('Materiales / pruebas psicológicas'),
-  ('Pago a profesionales'), ('Planilla'), ('Marketing'), ('Impuestos'), ('Otro')
+  ('Pago a profesionales'), ('Planilla'), ('Marketing'), ('Impuestos'), ('Otro'),
+  ('Insumos y limpieza'), ('Útiles de oficina'), ('Publicidad'), ('Mantenimiento')
 ON DUPLICATE KEY UPDATE activo = 1;
 
 INSERT INTO metodos_pago (nombre, requiere_ref) VALUES

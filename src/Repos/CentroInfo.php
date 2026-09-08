@@ -32,6 +32,7 @@ final class CentroInfo extends Repositorio
             'slogan'              => (string) ($c['lema'] ?? ''),
             'paymentMethods'      => (string) ($c['medios_pago'] ?? ''),
             'reminderMinutes'     => (int) ($c['minutos_recordatorio'] ?? 10),
+            'sessionMinutes'      => (int) ($c['minutos_sesion'] ?? 60),
             'rescheduleHours'     => (int) ($c['horas_reprogramacion'] ?? 24),
             'latePenaltyPercent'  => (float) ($c['porcentaje_penalidad'] ?? 10),
             'includePolicy'       => (int) ($c['incluir_politica'] ?? 1) === 1,
@@ -52,13 +53,15 @@ final class CentroInfo extends Repositorio
         Database::query(
             'INSERT INTO centro_config
                 (id, razon_social, direccion, telefono, ruc, lema, medios_pago,
-                 minutos_recordatorio, horas_reprogramacion, porcentaje_penalidad, incluir_politica)
-             VALUES (1,?,?,?,?,?,?,?,?,?,?)
+                 minutos_recordatorio, minutos_sesion, horas_reprogramacion,
+                 porcentaje_penalidad, incluir_politica)
+             VALUES (1,?,?,?,?,?,?,?,?,?,?,?)
              ON DUPLICATE KEY UPDATE
                 razon_social=VALUES(razon_social), direccion=VALUES(direccion),
                 telefono=VALUES(telefono), ruc=VALUES(ruc), lema=VALUES(lema),
                 medios_pago=VALUES(medios_pago),
                 minutos_recordatorio=VALUES(minutos_recordatorio),
+                minutos_sesion=VALUES(minutos_sesion),
                 horas_reprogramacion=VALUES(horas_reprogramacion),
                 porcentaje_penalidad=VALUES(porcentaje_penalidad),
                 incluir_politica=VALUES(incluir_politica)',
@@ -70,6 +73,9 @@ final class CentroInfo extends Repositorio
                 self::nz($valor['slogan'] ?? null),
                 self::nz($valor['paymentMethods'] ?? null),
                 self::ent($valor['reminderMinutes'] ?? 10) ?: 10,
+                // Duración de la sesión: es el rango con el que se comparan
+                // los cruces de agenda.
+                self::ent($valor['sessionMinutes'] ?? 60) ?: 60,
                 self::ent($valor['rescheduleHours'] ?? 24) ?: 24,
                 self::num($valor['latePenaltyPercent'] ?? 10),
                 self::bool($valor['includePolicy'] ?? true),

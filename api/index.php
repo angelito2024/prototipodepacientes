@@ -9,6 +9,7 @@ declare(strict_types=1);
  *   POST   ?accion=login                       <- {usuario, clave}
  *   POST   ?accion=logout
  *   GET    ?accion=sesion                      -> estado de la sesión
+ *   POST   ?accion=personal_pin                <- {pin} (cuentas personales)
  *   GET    ?accion=salud                       -> diagnóstico de conexión
  *
  * El panel guarda enviando el array completo de la colección. Para evitar
@@ -63,6 +64,23 @@ try {
                 ) ?? 0) === 1,
                 'usuario'         => $id === null ? null : Auth::perfil($id),
             ]);
+
+        case 'personal_pin':
+            // La clave de las cuentas personales se comprueba aquí, contra
+            // el hash. En el panel se comparaba en JavaScript contra el
+            // valor en claro, que viajaba al navegador y salía también en
+            // el JSON de la copia de seguridad.
+            if (Http::metodo() !== 'POST') {
+                Http::error('Método no permitido.', 405);
+            }
+            if ((int) (Database::valor('SELECT login_requerido FROM centro_config WHERE id = 1') ?? 0) === 1) {
+                Auth::exigir();
+            }
+            $c = Http::cuerpo();
+            if (!\Centro\Repos\PersonalConfig::verificar((string) ($c['pin'] ?? ''))) {
+                Http::error('Clave incorrecta.', 401);
+            }
+            Http::ok();
 
         case 'coleccion':
             manejarColeccion();

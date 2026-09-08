@@ -1,7 +1,7 @@
 # Base de datos — Centro Psicológico
 
 Esquema relacional que reemplaza el almacenamiento actual del prototipo
-(`index.html`, 14 colecciones JSON en `localStorage` + un blob `historia_<id>`
+(`index.html`, 17 colecciones JSON en `localStorage` + un blob `historia_<id>`
 por paciente).
 
 ## Motor
@@ -18,9 +18,14 @@ El usuario `root` de esta instalación tiene contraseña **vacía**, no `root`.
 ### Desde phpMyAdmin
 Importar en este orden, uno por uno:
 
-1. `01_schema.sql` — crea la base y las 41 tablas
-2. `02_vistas_triggers.sql` — 6 vistas, 5 triggers, 1 procedimiento
+1. `01_schema.sql` — crea la base y las 49 tablas
+2. `02_vistas_triggers.sql` — 9 vistas, 13 triggers, 1 procedimiento
 3. `03_datos_base.sql` — catálogos, roles, permisos y usuario `admin`
+4. `04_api.sql` — versiones de colección y sesiones, para la capa PHP
+
+En una instalación **nueva** eso es todo: `01` ya incluye talleres y cuentas
+personales. `05_actualizacion_talleres.sql` es solo para una base instalada
+antes de que existieran esos módulos (ver *Actualizaciones*).
 
 > En phpMyAdmin, `02_vistas_triggers.sql` usa `DELIMITER`. phpMyAdmin lo
 > soporta, pero si diera error, ajustar el campo "Delimitador" a `$$`.
@@ -32,7 +37,22 @@ MYSQL="/c/laragon/bin/mysql/mysql-8.4.3-winx64/bin/mysql"
 $MYSQL -uroot --default-character-set=utf8mb4 < 01_schema.sql
 $MYSQL -uroot --default-character-set=utf8mb4 < 02_vistas_triggers.sql
 $MYSQL -uroot --default-character-set=utf8mb4 < 03_datos_base.sql
+$MYSQL -uroot --default-character-set=utf8mb4 < 04_api.sql
 ```
+
+### Actualizaciones
+
+Si la base ya estaba instalada antes de que el panel tuviera talleres y
+cuentas personales, hay que ponerla al día una vez:
+
+```bash
+$MYSQL -uroot --default-character-set=utf8mb4 < 05_actualizacion_talleres.sql
+```
+
+Agrega las seis tablas nuevas, el ámbito de las tarifas, los destinatarios
+de los recordatorios y la duración de la sesión. Es reejecutable y no toca
+los datos existentes: deja la base igual que una instalación desde cero
+(verificado comparando columnas e índices de ambas).
 
 ### Después de instalar
 1. Cambiar la contraseña del usuario `admin` (temporal: `Magusa2026*`).
@@ -59,6 +79,9 @@ $MYSQL -uroot --default-character-set=utf8mb4 < 03_datos_base.sql
 | `products` | `productos` |
 | `centerInfo` | `centro_config` + `sedes` + `consultorios` + `integraciones` |
 | `authConfig` | `usuarios` + `roles` + `permisos` + `rol_permisos` + `usuario_roles` |
+| `talleres` | `talleres` + `taller_sesiones` + `taller_participantes` |
+| `personalEntries` | `personal_movimientos` + `personal_pagos` |
+| `personalConfig` | `personal_config` (la clave, con hash) |
 | (no existía) | `archivos`, `auditoria`, `liquidaciones_profesional`, `cie10_catalogo` |
 
 ## Migración de los datos existentes
@@ -104,6 +127,8 @@ Puntos que requieren decisión durante la migración:
 | `v_agenda_fechas` | `viewCalendario()` + `nextBirthdayDays()` |
 | `v_resultado_mensual` | los totales de la pestaña Finanzas |
 | `v_agenda_citas` | el cruce de 4 colecciones que hace `viewCitas()` |
+| `v_taller_resumen` | `tallerCobrado()` + `tallerPorCobrar()` + el conteo de inscritos |
+| `v_personal_mes` | `personalDelMes()` |
 
 ## Reglas que la base garantiza
 
@@ -115,6 +140,11 @@ Verificadas contra MySQL 8.4.3:
 - Una historia clínica no puede tener dos episodios abiertos.
 - Una nota de evolución firmada no se puede modificar.
 - Un pago de alquiler exige profesional; uno de paciente exige paciente.
+- Un participante de taller marcado como pagado tiene que tener importe.
+- Un movimiento personal fijo lleva día de vencimiento y no fecha suelta;
+  uno variable, al revés. Mezclarlos era lo que hacía que una compra de
+  marzo siguiera restando del margen en setiembre.
+- Un mes solo se puede marcar pagado una vez por movimiento personal.
 - Una cita presencial exige consultorio.
 - El documento de identidad es único en todo el centro.
 - La mensualidad de alquiler de un mes no se puede registrar dos veces.

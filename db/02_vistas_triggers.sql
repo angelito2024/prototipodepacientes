@@ -218,6 +218,78 @@ WHERE a.estado NOT IN ('Cancelada','Reprogramada')
   AND a.eliminado_en IS NULL AND b.eliminado_en IS NULL;
 
 
+
+-- ---------------------------------------------------------------------
+-- VISTA: estado de cada taller — cuánto se cobró y cuánto falta.
+-- Reemplaza a tallerCobrado() / tallerPorCobrar(), que recorrían el
+-- array de participantes en memoria cada vez que se pintaba la tabla.
+--
+-- Lo cobrado se lee distinto según el modo, porque el negocio es distinto:
+-- en 'participante' es la suma de los inscritos que pagaron; en 'grupal'
+-- es lo que ya abonó la entidad contratante.
+-- ---------------------------------------------------------------------
+CREATE OR REPLACE VIEW v_taller_resumen AS
+SELECT
+  t.id,
+  t.uid,
+  t.nombre,
+  t.tipo,
+  t.modo_cobro,
+  t.estado,
+  t.fecha_inicio,
+  t.cupo,
+  pro.nombre_completo AS profesional,
+  (SELECT COUNT(*) FROM taller_participantes p WHERE p.taller_id = t.id) AS inscritos,
+  (SELECT COUNT(*) FROM taller_participantes p WHERE p.taller_id = t.id AND p.asistio = 1) AS asistieron,
+  (SELECT COUNT(*) FROM taller_participantes p WHERE p.taller_id = t.id AND p.diploma_entregado = 1) AS diplomas,
+  (SELECT COUNT(*) FROM taller_sesiones s WHERE s.taller_id = t.id) AS fechas,
+  CASE t.modo_cobro
+    WHEN 'grupal' THEN t.monto_cobrado
+    ELSE COALESCE((SELECT SUM(p.monto) FROM taller_participantes p
+                    WHERE p.taller_id = t.id AND p.pagado = 1), 0)
+  END AS cobrado,
+  CASE t.modo_cobro
+    WHEN 'grupal' THEN GREATEST(COALESCE(t.monto_acordado, 0) - t.monto_cobrado, 0)
+    ELSE COALESCE((SELECT SUM(p.monto) FROM taller_participantes p
+                    WHERE p.taller_id = t.id AND p.pagado = 0), 0)
+  END AS por_cobrar
+FROM talleres t
+LEFT JOIN personas pro ON pro.id = t.profesional_id
+WHERE t.eliminado_en IS NULL;
+
+
+-- ---------------------------------------------------------------------
+-- VISTA: cuentas personales del mes en curso, por usuario.
+--
+-- Un fijo pesa todos los meses hasta que se dé de baja; un variable pesa
+-- solo en el mes de su fecha. Mezclarlos era lo que hacía que una compra
+-- de marzo siguiera restando del margen en setiembre.
+--
+-- No se cruza con `pagos` ni con `gastos`: este dinero no es del centro y
+-- no debe aparecer en v_resultado_mensual.
+-- ---------------------------------------------------------------------
+CREATE OR REPLACE VIEW v_personal_mes AS
+SELECT
+  m.usuario_id,
+  DATE_FORMAT(CURDATE(), '%Y-%m') AS periodo,
+  m.id,
+  m.uid,
+  m.tipo,
+  m.clase,
+  m.nombre,
+  m.categoria,
+  m.monto,
+  m.dia_vencimiento,
+  m.fecha,
+  pg.fecha_pago,
+  (pg.id IS NOT NULL) AS pagado
+FROM personal_movimientos m
+LEFT JOIN personal_pagos pg
+       ON pg.movimiento_id = m.id
+      AND pg.periodo = DATE_FORMAT(CURDATE(), '%Y-%m')
+WHERE m.clase = 'fijo'
+   OR DATE_FORMAT(m.fecha, '%Y-%m') = DATE_FORMAT(CURDATE(), '%Y-%m');
+
 -- =====================================================================
 -- TRIGGERS
 -- =====================================================================
@@ -377,6 +449,50 @@ FOR EACH ROW
 BEGIN
   IF NEW.pago_id IS NOT NULL AND OLD.pago_id IS NULL THEN
     SET NEW.cobrado = 1;
+  END IF;
+END$$
+
+
+-- La fecha de inicio del taller es siempre la primera de sus sesiones.
+-- Se mantiene aquí y no en la aplicación: si se agrega una fecha anterior
+-- desde cualquier sitio, el orden de la lista sigue siendo correcto.
+CREATE TRIGGER trg_taller_sesion_ins
+AFTER INSERT ON taller_sesiones
+FOR EACH ROW
+BEGIN
+  UPDATE talleres
+     SET fecha_inicio = (SELECT MIN(fecha) FROM taller_sesiones WHERE taller_id = NEW.taller_id)
+   WHERE id = NEW.taller_id;
+END$$
+
+CREATE TRIGGER trg_taller_sesion_upd
+AFTER UPDATE ON taller_sesiones
+FOR EACH ROW
+BEGIN
+  UPDATE talleres
+     SET fecha_inicio = (SELECT MIN(fecha) FROM taller_sesiones WHERE taller_id = NEW.taller_id)
+   WHERE id = NEW.taller_id;
+END$$
+
+CREATE TRIGGER trg_taller_sesion_del
+AFTER DELETE ON taller_sesiones
+FOR EACH ROW
+BEGIN
+  UPDATE talleres
+     SET fecha_inicio = (SELECT MIN(fecha) FROM taller_sesiones WHERE taller_id = OLD.taller_id)
+   WHERE id = OLD.taller_id;
+END$$
+
+-- Un participante marcado como pagado tiene que tener un monto. En modo
+-- grupal no paga nadie, así que ahí no aplica.
+CREATE TRIGGER trg_tpart_monto_ins
+BEFORE INSERT ON taller_participantes
+FOR EACH ROW
+BEGIN
+  IF NEW.pagado = 1 AND NEW.monto <= 0
+     AND (SELECT modo_cobro FROM talleres WHERE id = NEW.taller_id) = 'participante' THEN
+    SIGNAL SQLSTATE '45000'
+      SET MESSAGE_TEXT = 'Un participante marcado como pagado necesita un monto mayor a cero.';
   END IF;
 END$$
 

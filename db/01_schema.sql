@@ -44,6 +44,9 @@ CREATE TABLE centro_config (
   logo_archivo_id       BIGINT UNSIGNED NULL, -- FK -> archivos (saca el base64 del HTML)
   qr_yape_archivo_id    BIGINT UNSIGNED NULL,
   minutos_recordatorio  SMALLINT UNSIGNED NOT NULL DEFAULT 10,
+  -- Cuánto dura una sesión. De aquí sale el rango con el que se comparan
+  -- los cruces de agenda: sin esto, 10:00-11:00 y 10:30-11:30 no chocaban.
+  minutos_sesion        SMALLINT UNSIGNED NOT NULL DEFAULT 60,
   horas_reprogramacion  SMALLINT UNSIGNED NOT NULL DEFAULT 24,
   porcentaje_penalidad   DECIMAL(5,2) NOT NULL DEFAULT 10.00,
   incluir_politica      TINYINT(1)    NOT NULL DEFAULT 1,
@@ -261,6 +264,9 @@ CREATE TABLE pacientes (
   -- (evaluaciones puntuales, convenios con colegios, organizacional).
   estado_pago_manual ENUM('Pendiente','Parcial','Completo') NOT NULL DEFAULT 'Pendiente',
   fecha_limite_informe DATE NULL,
+  -- ¿Se le avisa a él directamente? NULL = por defecto (un adulto sí, un
+  -- menor no: el aviso le llega a su apoderado).
+  avisar_paciente    TINYINT(1) NULL,
   fecha_alta         DATE NULL,                     -- alta terapéutica
   motivo_alta        VARCHAR(255) NULL,
   PRIMARY KEY (persona_id),
@@ -281,9 +287,16 @@ CREATE TABLE paciente_acompanantes (
   telefono     VARCHAR(30)  NULL,
   email        VARCHAR(150) NULL,
   es_apoderado TINYINT(1)   NOT NULL DEFAULT 0,
+  -- Orden dentro de la ficha. El primer apoderado es el contacto principal:
+  -- es a quien se le avisa por defecto cuando el paciente es menor.
+  orden        SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  -- ¿Recibe los recordatorios de cita? NULL = lo que corresponda por defecto
+  -- (el apoderado principal de un menor sí, los demás no). Un valor explícito
+  -- es una decisión tomada en la ficha y se respeta en todas las citas.
+  avisar       TINYINT(1)   NULL,
   creado_en    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
-  KEY idx_acomp_paciente (paciente_id),
+  KEY idx_acomp_paciente (paciente_id, orden, id),
   CONSTRAINT fk_acomp_paciente FOREIGN KEY (paciente_id)
     REFERENCES pacientes(persona_id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
@@ -398,6 +411,10 @@ CREATE TABLE servicios (
   unidad            ENUM('Por sesión','Por paquete','Mensual','Por taller',
                          'Por paciente atendido','Por evento','Otro')
                     NOT NULL DEFAULT 'Por sesión',
+  -- A quién se le cobra esta tarifa. En la ficha del paciente solo deben
+  -- ofrecerse las de ámbito 'paciente': ni charlas, ni alquiler del
+  -- consultorio, ni comisiones del profesional.
+  ambito            ENUM('paciente','grupal','interno') NOT NULL DEFAULT 'paciente',
   moneda            CHAR(3)      NOT NULL DEFAULT 'PEN',
   -- Precio por sesión derivado, para comparar paquetes contra sesión suelta.
   precio_por_sesion DECIMAL(12,2) AS (
@@ -408,7 +425,7 @@ CREATE TABLE servicios (
   creado_en         TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY uq_servicio_uid (uid),
-  KEY idx_servicio_activo (activo, nombre),
+  KEY idx_servicio_activo (activo, ambito, nombre),
   CONSTRAINT chk_servicio_paquete CHECK (es_paquete = 0 OR sesiones_paquete > 0)
 ) ENGINE=InnoDB;
 
@@ -984,8 +1001,195 @@ CREATE TABLE productos (
 ) ENGINE=InnoDB;
 
 
+
+
 -- =====================================================================
--- 11. AUDITORÍA
+-- 11. TALLERES, CHARLAS Y PROGRAMAS
+--     Servicios que se dan en grupo. No son pacientes: no abren historia
+--     clínica ni paquete, y el dinero entra por una vía distinta.
+--
+--     Dos modelos de cobro, porque el negocio es distinto en cada uno:
+--      · 'participante' — el centro organiza y cada inscrito paga su cupo.
+--        Lo cobrado es la suma de los participantes marcados como pagados.
+--      · 'grupal'       — un colegio o una empresa contrata el taller
+--        completo por un monto acordado. Los asistentes no pagan y su
+--        lista sirve solo como control de asistencia.
+-- =====================================================================
+
+CREATE TABLE talleres (
+  id                BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  uid               VARCHAR(32)  NULL,
+  nombre            VARCHAR(200) NOT NULL,
+  tipo              ENUM('Taller','Charla','Programa organizacional','Programa con colegio')
+                    NOT NULL DEFAULT 'Taller',
+  modo_cobro        ENUM('participante','grupal') NOT NULL DEFAULT 'participante',
+  -- Entidad contratante. Solo tiene sentido en el modo 'grupal'.
+  cliente_nombre    VARCHAR(200) NULL,
+  cliente_contacto  VARCHAR(200) NULL,
+  monto_acordado    DECIMAL(12,2) NULL,
+  monto_cobrado     DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  -- Precio del cupo. Solo tiene sentido en el modo 'participante'.
+  precio_persona    DECIMAL(12,2) NULL,
+  cupo              SMALLINT UNSIGNED NULL,
+  profesional_id    BIGINT UNSIGNED NULL,     -- quien lo dicta
+  servicio_id       BIGINT UNSIGNED NULL,     -- tarifa de ámbito 'grupal', si se usó
+  modalidad         ENUM('Presencial','Virtual','Mixto') NOT NULL DEFAULT 'Presencial',
+  lugar             VARCHAR(255) NULL,
+  enlace            VARCHAR(500) NULL,        -- videollamada
+  estado            ENUM('Planificado','En curso','Realizado','Cancelado')
+                    NOT NULL DEFAULT 'Planificado',
+  notas             TEXT NULL,
+  -- Primera fecha, mantenida por trg_taller_sesion_ini. Ordenar la lista y
+  -- sacar los "próximos" no debe costar un recorrido de taller_sesiones.
+  fecha_inicio      DATE NULL,
+  creado_en         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actualizado_en    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  -- Borrado lógico: detrás de un taller dictado hay dinero cobrado y
+  -- diplomas entregados.
+  eliminado_en      DATETIME NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_taller_uid (uid),
+  KEY idx_taller_fecha (fecha_inicio, estado),
+  KEY idx_taller_estado (estado, eliminado_en),
+  KEY idx_taller_prof (profesional_id),
+  CONSTRAINT fk_taller_prof     FOREIGN KEY (profesional_id) REFERENCES profesionales(persona_id),
+  CONSTRAINT fk_taller_servicio FOREIGN KEY (servicio_id)    REFERENCES servicios(id),
+  CONSTRAINT chk_taller_montos  CHECK (
+    (monto_acordado IS NULL OR monto_acordado >= 0) AND
+    (precio_persona IS NULL OR precio_persona >= 0) AND
+    monto_cobrado >= 0
+  )
+) ENGINE=InnoDB;
+
+-- Un taller puede darse en varias fechas, cada una con su horario propio
+-- (un programa con colegio son cuatro sábados). En el panel era un solo
+-- par de campos fecha/hora, así que la segunda fecha no cabía.
+CREATE TABLE taller_sesiones (
+  id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  uid          VARCHAR(32) NULL,
+  taller_id    BIGINT UNSIGNED NOT NULL,
+  fecha        DATE NOT NULL,
+  hora_inicio  TIME NULL,
+  hora_fin     TIME NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_taller_sesion (taller_id, fecha, hora_inicio),
+  KEY idx_tsesion_fecha (fecha),
+  CONSTRAINT fk_tsesion_taller FOREIGN KEY (taller_id) REFERENCES talleres(id) ON DELETE CASCADE,
+  CONSTRAINT chk_tsesion_horas CHECK (hora_fin IS NULL OR hora_inicio IS NULL OR hora_fin > hora_inicio)
+) ENGINE=InnoDB;
+
+-- Inscritos (modo 'participante') o asistentes (modo 'grupal').
+--
+-- `persona_id` enlaza con el supertipo cuando la persona ya está en el
+-- centro: quien fue a una charla y después pide cita no se registra dos
+-- veces, y el buscador por DNI la encuentra sin salir a apiperu.dev.
+-- Cuando no lo está, sus datos se quedan aquí: un asistente a una charla
+-- no es un paciente y no debe aparecer en la lista de pacientes.
+CREATE TABLE taller_participantes (
+  id                BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  uid               VARCHAR(32) NULL,
+  taller_id         BIGINT UNSIGNED NOT NULL,
+  persona_id        BIGINT UNSIGNED NULL,
+  nombre            VARCHAR(200) NOT NULL,   -- tal como irá en el diploma
+  documento         VARCHAR(20)  NULL,
+  sexo              ENUM('F','M','X') NULL,
+  telefono          VARCHAR(30)  NULL,
+  email             VARCHAR(150) NULL,
+  procedencia       VARCHAR(180) NULL,       -- colegio, empresa o institución
+  monto             DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  pagado            TINYINT(1) NOT NULL DEFAULT 0,
+  asistio           TINYINT(1) NOT NULL DEFAULT 0,
+  diploma_entregado TINYINT(1) NOT NULL DEFAULT 0,
+  inscrito_el       DATE NULL,
+  creado_en         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_tpart_uid (uid),
+  KEY idx_tpart_taller (taller_id, id),
+  -- No es UNIQUE: el panel avisa del documento repetido y deja decidir.
+  -- Hay casos reales (una madre que inscribe a dos hijos con su documento).
+  KEY idx_tpart_doc (documento),
+  KEY idx_tpart_persona (persona_id),
+  CONSTRAINT fk_tpart_taller  FOREIGN KEY (taller_id)  REFERENCES talleres(id) ON DELETE CASCADE,
+  CONSTRAINT fk_tpart_persona FOREIGN KEY (persona_id) REFERENCES personas(id),
+  CONSTRAINT chk_tpart_monto  CHECK (monto >= 0)
+) ENGINE=InnoDB;
+
+
+-- =====================================================================
+-- 12. CUENTAS PERSONALES
+--     El dinero propio del gerente, separado por completo del dinero del
+--     centro: no entra en v_resultado_mensual ni en ningún reporte de
+--     finanzas. Vive aquí y no en `gastos` justamente para que no se mezcle.
+--
+--     Es privado por usuario: cada quien ve solo lo suyo. En el panel era
+--     una colección más del navegador, legible por cualquiera que abriera
+--     la pestaña y presente en el JSON de la copia de seguridad.
+-- =====================================================================
+
+CREATE TABLE personal_movimientos (
+  id              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  uid             VARCHAR(32) NULL,
+  usuario_id      BIGINT UNSIGNED NOT NULL,
+  tipo            ENUM('ingreso','gasto') NOT NULL DEFAULT 'gasto',
+  -- 'fijo' se repite cada mes y se marca pagado mes a mes; 'variable'
+  -- ocurre una sola vez y pesa solo en el mes de su fecha.
+  clase           ENUM('fijo','variable') NOT NULL DEFAULT 'fijo',
+  nombre          VARCHAR(180) NOT NULL,
+  categoria       VARCHAR(60) NULL,
+  monto           DECIMAL(12,2) NOT NULL,
+  -- Solo para los fijos: día del mes en que vence. Se deduce de la fecha
+  -- de pago, no se pide aparte.
+  dia_vencimiento TINYINT UNSIGNED NULL,
+  -- Solo para los variables: el día en que ocurrió.
+  fecha           DATE NULL,
+  notas           VARCHAR(500) NULL,
+  creado_en       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actualizado_en  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_personal_uid (uid),
+  KEY idx_personal_usuario (usuario_id, tipo, clase),
+  KEY idx_personal_fecha (usuario_id, fecha),
+  CONSTRAINT fk_personal_usuario FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE,
+  CONSTRAINT chk_personal_monto  CHECK (monto > 0),
+  CONSTRAINT chk_personal_dia    CHECK (dia_vencimiento IS NULL OR dia_vencimiento BETWEEN 1 AND 31),
+  -- Un fijo no lleva fecha suelta y un variable no lleva vencimiento. Son
+  -- dos cosas distintas, y mezclarlas fue lo que hacía que una compra de
+  -- marzo siguiera restando en setiembre.
+  CONSTRAINT chk_personal_clase  CHECK (
+    (clase = 'fijo'     AND fecha IS NULL) OR
+    (clase = 'variable' AND dia_vencimiento IS NULL)
+  )
+) ENGINE=InnoDB;
+
+-- Un fijo pagado en marzo y en abril son dos filas, no un campo que se
+-- pisa. Así el historial existe de verdad y marcar un pago tardío no
+-- corre el vencimiento de los meses siguientes.
+CREATE TABLE personal_pagos (
+  id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  movimiento_id BIGINT UNSIGNED NOT NULL,
+  periodo       CHAR(7) NOT NULL,          -- 'AAAA-MM'
+  fecha_pago    DATE NULL,                 -- el día real en que se pagó
+  creado_en     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_personal_pago (movimiento_id, periodo),
+  CONSTRAINT fk_ppago_movimiento FOREIGN KEY (movimiento_id)
+    REFERENCES personal_movimientos(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- Clave de la pestaña. Se guarda el hash, nunca la clave: en el panel
+-- viajaba en texto plano al navegador y salía también en la copia de
+-- seguridad, que es un archivo de texto.
+CREATE TABLE personal_config (
+  usuario_id     BIGINT UNSIGNED NOT NULL,
+  pin_activo     TINYINT(1) NOT NULL DEFAULT 0,
+  pin_hash       VARCHAR(255) NULL,
+  actualizado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (usuario_id),
+  CONSTRAINT fk_pconfig_usuario FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- =====================================================================
+-- 13. AUDITORÍA
 --     Datos de salud = "datos sensibles" (Ley 29733). Se necesita saber
 --     quién vio y quién modificó cada historia clínica.
 -- =====================================================================

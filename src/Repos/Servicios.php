@@ -14,6 +14,13 @@ final class Servicios extends Repositorio
         'Por paciente atendido','Por evento','Otro',
     ];
 
+    /**
+     * A quién se le cobra la tarifa. Sin esto, la ficha del paciente
+     * ofrecía charlas, alquiler del consultorio y comisiones del
+     * profesional junto a las sesiones de terapia.
+     */
+    private const AMBITOS = ['paciente', 'grupal', 'interno'];
+
     public function clave(): string
     {
         return 'services';
@@ -24,7 +31,7 @@ final class Servicios extends Repositorio
         $salida = [];
         foreach (Database::todos(
             'SELECT uid, nombre, es_paquete, sesiones_paquete, precio,
-                    precio_texto, unidad, unidad_texto, descripcion
+                    precio_texto, unidad, unidad_texto, descripcion, ambito
                FROM servicios WHERE activo = 1 ORDER BY id'
         ) as $f) {
             $esPaquete = (int) $f['es_paquete'] === 1;
@@ -39,6 +46,7 @@ final class Servicios extends Repositorio
                 'price'           => (string) ($f['precio_texto']
                                      ?? ($f['precio'] !== null ? 'S/ ' . number_format((float) $f['precio'], 2) : '')),
                 'unit'            => (string) ($f['unidad_texto'] ?? $f['unidad']),
+                'ambito'          => (string) $f['ambito'],
                 'notes'           => (string) ($f['descripcion'] ?? ''),
             ];
         }
@@ -69,14 +77,14 @@ final class Servicios extends Repositorio
             Database::query(
                 'INSERT INTO servicios
                     (uid, nombre, es_paquete, sesiones_paquete, precio, precio_texto,
-                     unidad, unidad_texto, descripcion, activo)
-                 VALUES (?,?,?,?,?,?,?,?,?,1)
+                     unidad, unidad_texto, descripcion, ambito, activo)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,1)
                  ON DUPLICATE KEY UPDATE
                     nombre=VALUES(nombre), es_paquete=VALUES(es_paquete),
                     sesiones_paquete=VALUES(sesiones_paquete), precio=VALUES(precio),
                     precio_texto=VALUES(precio_texto), unidad=VALUES(unidad),
                     unidad_texto=VALUES(unidad_texto), descripcion=VALUES(descripcion),
-                    activo=1',
+                    ambito=VALUES(ambito), activo=1',
                 [
                     $uid,
                     self::txt($item['name']),
@@ -88,6 +96,14 @@ final class Servicios extends Repositorio
                     self::unidadEnum($unidadTexto, $esPaquete === 1),
                     $unidadTexto,
                     self::nz($item['notes'] ?? null),
+                    // Las tarifas creadas antes de que existiera el ámbito
+                    // llegan sin él: se deduce del nombre, igual que hace el
+                    // panel, y queda guardado para poder corregirlo a mano.
+                    self::enum(
+                        $item['ambito'] ?? null,
+                        self::AMBITOS,
+                        self::ambitoDeducido(self::txt($item['name']), $esPaquete === 1)
+                    ),
                 ]
             );
         }
@@ -114,6 +130,19 @@ final class Servicios extends Repositorio
             return (float) str_replace(',', '.', $m[1]);
         }
         return null;   // "A definir", "Variable", ...
+    }
+
+    /** Misma regla que ambitoDeTarifa() del panel, para no discrepar. */
+    private static function ambitoDeducido(string $nombre, bool $esPaquete): string
+    {
+        if ($esPaquete) {
+            return 'paciente';
+        }
+        return match (true) {
+            preg_match('/alquiler|comisi[oó]n/i', $nombre) === 1 => 'interno',
+            preg_match('/charla|capacitaci|organizacional|empresa|colegio|taller/i', $nombre) === 1 => 'grupal',
+            default => 'paciente',
+        };
     }
 
     private static function unidadEnum(?string $texto, bool $esPaquete): string

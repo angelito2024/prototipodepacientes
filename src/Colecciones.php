@@ -12,10 +12,13 @@ use Centro\Repos\Gastos;
 use Centro\Repos\Historia;
 use Centro\Repos\Pacientes;
 use Centro\Repos\Pagos;
+use Centro\Repos\PersonalConfig;
+use Centro\Repos\Personales;
 use Centro\Repos\Practicantes;
 use Centro\Repos\Productos;
 use Centro\Repos\Profesionales;
 use Centro\Repos\Servicios;
+use Centro\Repos\Talleres;
 use Centro\Repos\UsosConsultorio;
 
 /** Traduce la clave de colección que usa el panel al repositorio adecuado. */
@@ -29,6 +32,9 @@ final class Colecciones
         'centerInfo', 'authConfig', 'services', 'professionals', 'practicantes',
         'patients', 'appointments', 'payments', 'roomUsage', 'expenses',
         'attendanceLog', 'calendarEvents', 'products',
+        // Los talleres necesitan al profesional que los dicta. Las cuentas
+        // personales no dependen de nada del centro: van al final.
+        'talleres', 'personalConfig', 'personalEntries',
     ];
 
     public static function para(string $clave): ?Repositorio
@@ -52,6 +58,9 @@ final class Colecciones
             'roomUsage'      => new UsosConsultorio(),
             'attendanceLog'  => new Asistencia(),
             'authConfig'     => new AuthConfig(),
+            'talleres'       => new Talleres(),
+            'personalEntries' => new Personales(),
+            'personalConfig' => new PersonalConfig(),
             default          => null,
         };
     }

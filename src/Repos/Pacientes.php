@@ -31,10 +31,11 @@ final class Pacientes extends Repositorio
     {
         $filas = Database::todos(
             "SELECT p.id, p.uid, p.nombre_completo, p.documento, p.telefono, p.email,
-                    p.dia_cumple, p.notas, p.activo,
+                    p.dia_cumple, p.sexo, p.notas, p.activo,
                     pa.tipo_atencion, pa.modalidad_default, pa.es_menor,
                     pa.enlace_default, pa.direccion_default, pa.referencia_default,
                     pa.estado_informe, pa.fecha_limite_informe, pa.estado_pago_manual,
+                    pa.avisar_paciente,
                     prof.uid AS profesional_uid
                FROM pacientes pa
                JOIN personas p    ON p.id = pa.persona_id
@@ -77,10 +78,16 @@ final class Pacientes extends Repositorio
                 'reportDueDate'      => (string) ($f['fecha_limite_informe'] ?? ''),
                 'birthday'           => (string) ($f['dia_cumple'] ?? ''),
                 'isMinor'            => (int) $f['es_menor'] === 1,
-                'guardianName'       => $a['apoderado']['name']  ?? '',
-                'guardianPhone'      => $a['apoderado']['phone'] ?? '',
-                'guardianEmail'      => $a['apoderado']['email'] ?? '',
-                'guardianDni'        => $a['apoderado']['dni']   ?? '',
+                'sex'                => Personas::sexoTexto($f['sexo'] ?? null),
+                'guardians'          => $a['apoderados'],
+                // El primer apoderado es el contacto principal. Se copia a
+                // los campos sueltos porque de ahí los leen los recibos y
+                // los mensajes de cita.
+                'guardianName'       => $a['apoderados'][0]['name']  ?? '',
+                'guardianPhone'      => $a['apoderados'][0]['phone'] ?? '',
+                'guardianEmail'      => $a['apoderados'][0]['email'] ?? '',
+                'guardianDni'        => $a['apoderados'][0]['dni']   ?? '',
+                'notifyOverrides'    => self::destinatarios($f['avisar_paciente'] ?? null, $a['avisos']),
                 'defaultMeetingLink' => (string) ($f['enlace_default'] ?? ''),
                 'defaultAddress'     => (string) ($f['direccion_default'] ?? ''),
                 'defaultReference'   => (string) ($f['referencia_default'] ?? ''),
@@ -92,31 +99,65 @@ final class Pacientes extends Repositorio
         return $salida;
     }
 
-    /** @return array<int,array{apoderado:?array,lista:list<array>}> */
+    /**
+     * Apoderados y acompañantes de cada paciente, en orden.
+     *
+     * Un paciente puede tener más de un apoderado (padre y madre, o el
+     * abuelo que lo trae los martes): antes solo cabía uno y el segundo se
+     * perdía. `avisos` recoge, por clave de destinatario, quién quedó
+     * silenciado o reactivado a mano.
+     *
+     * @return array<int,array{apoderados:list<array>,lista:list<array>,avisos:array<string,bool>}>
+     */
     private function leerAcompanantes(): array
     {
         $out = [];
         $filas = Database::todos(
-            'SELECT paciente_id, id, nombre, documento, telefono, email, es_apoderado
-               FROM paciente_acompanantes ORDER BY id'
+            'SELECT paciente_id, id, nombre, documento, parentesco, telefono, email,
+                    es_apoderado, avisar
+               FROM paciente_acompanantes ORDER BY paciente_id, orden, id'
         );
         foreach ($filas as $f) {
             $pid = (int) $f['paciente_id'];
-            $out[$pid] ??= ['apoderado' => null, 'lista' => []];
+            $out[$pid] ??= ['apoderados' => [], 'lista' => [], 'avisos' => []];
+            $esApoderado = (int) $f['es_apoderado'] === 1;
+            $id  = 'ac' . $f['id'];
             $reg = [
-                'id'    => 'ac' . $f['id'],
+                'id'    => $id,
                 'name'  => (string) $f['nombre'],
                 'dni'   => (string) ($f['documento'] ?? ''),
                 'phone' => (string) ($f['telefono'] ?? ''),
                 'email' => (string) ($f['email'] ?? ''),
             ];
-            if ((int) $f['es_apoderado'] === 1) {
-                $out[$pid]['apoderado'] = $reg;
+            if ($esApoderado) {
+                $reg['relationship'] = (string) ($f['parentesco'] ?? '');
+                $out[$pid]['apoderados'][] = $reg;
             } else {
                 $out[$pid]['lista'][] = $reg;
             }
+            if ($f['avisar'] !== null) {
+                $out[$pid]['avisos'][($esApoderado ? 'g:' : 'c:') . $id] = (int) $f['avisar'] === 1;
+            }
         }
         return $out;
+    }
+
+    /**
+     * A quién se le avisa y a quién no. Solo se devuelven las decisiones
+     * tomadas a mano: lo que no está aquí lo resuelve el panel por defecto
+     * (a un menor se le avisa al apoderado; a un adulto, a él).
+     *
+     * @param array<string,bool> $avisos
+     * @return array<string,bool>|\stdClass
+     */
+    private static function destinatarios(mixed $avisarPaciente, array $avisos): mixed
+    {
+        if ($avisarPaciente !== null) {
+            $avisos['patient'] = (int) $avisarPaciente === 1;
+        }
+        // Sin decisiones, un array vacío se serializaría como [] y el panel
+        // espera un objeto.
+        return $avisos === [] ? new \stdClass() : $avisos;
     }
 
     /** @return array<int,array{activo:?array,historial:list<array>}> */
@@ -175,8 +216,9 @@ final class Pacientes extends Repositorio
                 'INSERT INTO pacientes
                     (persona_id, tipo_atencion, modalidad_default, profesional_id, es_menor,
                      enlace_default, direccion_default, referencia_default,
-                     estado_informe, fecha_limite_informe, estado_pago_manual)
-                 VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                     estado_informe, fecha_limite_informe, estado_pago_manual,
+                     avisar_paciente)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
                  ON DUPLICATE KEY UPDATE
                     tipo_atencion        = VALUES(tipo_atencion),
                     modalidad_default    = VALUES(modalidad_default),
@@ -187,7 +229,8 @@ final class Pacientes extends Repositorio
                     referencia_default   = VALUES(referencia_default),
                     estado_informe       = VALUES(estado_informe),
                     fecha_limite_informe = VALUES(fecha_limite_informe),
-                    estado_pago_manual   = VALUES(estado_pago_manual)',
+                    estado_pago_manual   = VALUES(estado_pago_manual),
+                    avisar_paciente      = VALUES(avisar_paciente)',
                 [
                     $personaId,
                     self::enum($item['type'] ?? null, self::TIPOS, 'Individual'),
@@ -200,6 +243,7 @@ final class Pacientes extends Repositorio
                     self::enum($item['reportStatus'] ?? null, self::INFORMES, 'No aplica'),
                     self::fecha($item['reportDueDate'] ?? null),
                     self::enum($item['paymentStatus'] ?? null, self::ESTADOS_PAGO, 'Pendiente'),
+                    self::avisoDe($item, 'patient'),
                 ]
             );
 
@@ -219,27 +263,39 @@ final class Pacientes extends Repositorio
     private function guardarAcompanantes(int $pacienteId, array $item): void
     {
         $conservar = [];
+        $orden = 0;
 
-        $apoderado = self::nz($item['guardianName'] ?? null);
-        if ($apoderado !== null) {
+        $apoderados = (array) ($item['guardians'] ?? []);
+        if ($apoderados === [] && self::nz($item['guardianName'] ?? null) !== null) {
+            // Ficha guardada antes de que hubiera lista de apoderados: se
+            // toma el suelto, y se enlaza con la fila que ya exista para no
+            // duplicarlo en cada guardado.
             $idApoderado = Database::valor(
-                'SELECT id FROM paciente_acompanantes WHERE paciente_id = ? AND es_apoderado = 1 LIMIT 1',
+                'SELECT id FROM paciente_acompanantes
+                  WHERE paciente_id = ? AND es_apoderado = 1 ORDER BY orden, id LIMIT 1',
                 [$pacienteId]
             );
-            $conservar[] = $this->upsertAcompanante($pacienteId, [
+            $apoderados = [[
                 'id'    => $idApoderado === null ? null : 'ac' . $idApoderado,
-                'name'  => $apoderado,
+                'name'  => $item['guardianName'],
                 'dni'   => $item['guardianDni'] ?? null,
                 'phone' => $item['guardianPhone'] ?? null,
                 'email' => $item['guardianEmail'] ?? null,
-            ], true);
+            ]];
+        }
+
+        foreach ($apoderados as $g) {
+            if (!is_array($g) || self::nz($g['name'] ?? null) === null) {
+                continue;
+            }
+            $conservar[] = $this->upsertAcompanante($pacienteId, $g, true, $orden++, $item);
         }
 
         foreach ((array) ($item['companions'] ?? []) as $c) {
             if (!is_array($c) || self::nz($c['name'] ?? null) === null) {
                 continue;
             }
-            $conservar[] = $this->upsertAcompanante($pacienteId, $c, false);
+            $conservar[] = $this->upsertAcompanante($pacienteId, $c, false, $orden++, $item);
         }
 
         $sql = 'DELETE FROM paciente_acompanantes WHERE paciente_id = ?';
@@ -251,15 +307,26 @@ final class Pacientes extends Repositorio
         Database::query($sql, $par);
     }
 
-    private function upsertAcompanante(int $pacienteId, array $c, bool $esApoderado): int
-    {
+    private function upsertAcompanante(
+        int $pacienteId,
+        array $c,
+        bool $esApoderado,
+        int $orden,
+        array $paciente
+    ): int {
         $params = [
             $pacienteId,
             self::txt($c['name']),
             self::nz($c['dni'] ?? null),
+            self::nz($c['parentesco'] ?? $c['relationship'] ?? null),
             self::nz($c['phone'] ?? null),
             self::nz($c['email'] ?? null),
             $esApoderado ? 1 : 0,
+            $orden,
+            // La decisión de avisar viaja indexada por el id que trae el
+            // panel, que en un apoderado recién creado todavía no es el de
+            // la base. Por eso se busca con ese id, no con el definitivo.
+            self::avisoDe($paciente, ($esApoderado ? 'g:' : 'c:') . self::txt($c['id'] ?? '')),
         ];
 
         $marcado = self::txt($c['id'] ?? '');
@@ -272,7 +339,8 @@ final class Pacientes extends Repositorio
             if ($existe !== null) {
                 Database::query(
                     'UPDATE paciente_acompanantes
-                        SET paciente_id=?, nombre=?, documento=?, telefono=?, email=?, es_apoderado=?
+                        SET paciente_id=?, nombre=?, documento=?, parentesco=?, telefono=?,
+                            email=?, es_apoderado=?, orden=?, avisar=?
                       WHERE id=?',
                     [...$params, $id]
                 );
@@ -282,11 +350,25 @@ final class Pacientes extends Repositorio
 
         Database::query(
             'INSERT INTO paciente_acompanantes
-                (paciente_id, nombre, documento, telefono, email, es_apoderado)
-             VALUES (?,?,?,?,?,?)',
+                (paciente_id, nombre, documento, parentesco, telefono, email,
+                 es_apoderado, orden, avisar)
+             VALUES (?,?,?,?,?,?,?,?,?)',
             $params
         );
         return Database::ultimoId();
+    }
+
+    /**
+     * Decisión explícita sobre un destinatario de recordatorios, o NULL si
+     * no la hay (y entonces manda el criterio por defecto del panel).
+     */
+    private static function avisoDe(array $item, string $clave): ?int
+    {
+        $ov = $item['notifyOverrides'] ?? null;
+        if (!is_array($ov) || !array_key_exists($clave, $ov)) {
+            return null;
+        }
+        return self::bool($ov[$clave]);
     }
 
     /**

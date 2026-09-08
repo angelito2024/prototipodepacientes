@@ -117,7 +117,9 @@ if ($vaciar) {
         'informes','historias_clinicas','asistencia_registros','cita_historial','citas',
         'pagos','usos_consultorio','liquidaciones_profesional','paciente_paquetes',
         'paciente_acompanantes','persona_horario_excepciones','persona_horarios',
-        'practicante_actividades','pacientes','profesionales','practicantes','personas',
+        'practicante_actividades','pacientes','profesionales','practicantes',
+        'taller_participantes','taller_sesiones','talleres',
+        'personal_pagos','personal_movimientos','personas',
         'eventos_calendario','productos','archivos',
     ] as $t) {
         Database::query("DELETE FROM {$t}");
@@ -136,6 +138,15 @@ if ($vaciar) {
 // choque pero deja guardarlo igual. Se permiten aquí y luego se informa
 // de los que quedaron, para revisarlos con calma.
 Database::query('SET @centro_permitir_solape = 1');
+
+// Las cuentas personales son privadas de una persona, así que necesitan un
+// dueño. Por consola no hay sesión iniciada: si el centro tiene activado el
+// acceso con clave, no hay a nombre de quién guardarlas y se avisa en vez
+// de dejar que se pierdan sin decir nada.
+$avisoPersonal = null;
+if (array_key_exists('personalEntries', $json) && \Centro\Auth::duenioDeLoPersonal() === null) {
+    $avisoPersonal = count((array) $json['personalEntries']);
+}
 
 $errores = 0;
 foreach (Colecciones::ORDEN as $clave) {
@@ -192,6 +203,7 @@ foreach ([
     'personas','pacientes','profesionales','practicantes','citas','pagos',
     'usos_consultorio','gastos','historias_clinicas','hc_episodios',
     'hc_evoluciones','hc_diagnosticos','hc_adjuntos','archivos','asistencia_registros',
+    'talleres','taller_sesiones','taller_participantes','personal_movimientos',
 ] as $t) {
     decir(sprintf('  %-22s %s', $t, Database::valor("SELECT COUNT(*) FROM {$t}")));
 }
@@ -245,6 +257,29 @@ if ($descuadre !== []) {
         decir(sprintf('      %s: contador=%s citas=%s',
             $d['nombre_completo'], $d['sesiones_usadas'], $d['sesiones_citas']));
     }
+}
+
+if ($avisoPersonal !== null) {
+    decir("  · Las {$avisoPersonal} cuentas personales NO se importaron: son privadas de");
+    decir('    una persona y el centro tiene activado el acceso con clave, así que por');
+    decir('    consola no hay a nombre de quién guardarlas. Impórtalas entrando al panel');
+    decir('    con tu usuario y usando "Restaurar copia de seguridad".');
+}
+
+$sinAmbito = Database::valor(
+    "SELECT COUNT(*) FROM servicios WHERE activo = 1 AND ambito = 'paciente'
+      AND nombre REGEXP 'harla|aller|olegio|mpresa|lquiler|omisi'"
+);
+if ((int) $sinAmbito > 0) {
+    decir("  · {$sinAmbito} tarifas quedaron como \"de paciente\" pero su nombre sugiere otra");
+    decir('    cosa (taller, colegio, alquiler…). El ámbito se dedujo del nombre;');
+    decir('    revísalo en Tarifas para que no aparezcan en la ficha del paciente.');
+}
+
+$pinPlano = Database::valor('SELECT COUNT(*) FROM personal_config WHERE pin_hash IS NOT NULL');
+if ((int) $pinPlano > 0) {
+    decir('  · La clave de cuentas personales se importó con hash. A partir de ahora no');
+    decir('    viaja al navegador ni sale en la copia de seguridad, como sí ocurría antes.');
 }
 
 decir('  · Las contraseñas del panel no se importaron: estaban en texto plano.');

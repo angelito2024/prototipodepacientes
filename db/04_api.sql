@@ -41,4 +41,4 @@ INSERT IGNORE INTO coleccion_version (clave, version) VALUES
   ('patients',1), ('appointments',1), ('professionals',1), ('practicantes',1),
   ('services',1), ('payments',1), ('expenses',1), ('calendarEvents',1),
   ('products',1), ('centerInfo',1), ('roomUsage',1), ('attendanceLog',1),
-  ('authConfig',1);
+  ('authConfig',1), ('talleres',1), ('personalEntries',1), ('personalConfig',1);
