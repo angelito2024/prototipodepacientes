@@ -6675,11 +6675,13 @@ function estadoVencimiento(e, mes){
     const verbo = e.tipo==='ingreso'? 'Cobrado' : 'Pagado';
     return {clase:'ok', texto: f? `${verbo} el ${tallerFechaLarga(f)}` : verbo, dias:null};
   }
+  // La columna "Vence" ya dice el día; aquí va cuánto falta, que es lo que no se sabe
+  // de un vistazo. Repetir el número del día en ambas columnas no aportaba nada.
   const dias = daysUntil(vencimientoDe(e, mes));
   if(dias < 0) return {clase:'alert', texto:`Vencido hace ${Math.abs(dias)} día${Math.abs(dias)===1?'':'s'}`, dias};
   if(dias === 0) return {clase:'alert', texto:'Vence hoy', dias};
-  if(dias <= 5) return {clase:'warn', texto:`Vence en ${dias} día${dias===1?'':'s'}`, dias};
-  return {clase:'neutral', texto:`Vence el ${vencimientoDe(e, mes).slice(8)}`, dias};
+  if(dias === 1) return {clase:'warn', texto:'Falta 1 día', dias};
+  return {clase: dias<=5? 'warn':'neutral', texto:`Faltan ${dias} días`, dias};
 }
 function personalDelMes(mes){
   const todas = personalEntradas();
