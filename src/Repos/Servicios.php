@@ -126,8 +126,18 @@ final class Servicios extends Repositorio
         if ($texto === null) {
             return null;
         }
-        if (preg_match('/(\d+(?:[.,]\d{1,2})?)/', $texto, $m) === 1) {
-            return (float) str_replace(',', '.', $m[1]);
+        // Se aceptan separadores de miles: "S/ 1,250.00" y "S/ 1250" dan lo
+        // mismo. Sin esto, "1,250.00" se leía como 1.25.
+        if (preg_match('/(\d[\d.,]*)/', $texto, $m) === 1) {
+            $n = $m[1];
+            // El último separador con 1-2 decimales detrás es el decimal;
+            // cualquier otro punto o coma es separador de miles.
+            if (preg_match('/^(.*)([.,])(\d{1,2})$/', $n, $d) === 1) {
+                $n = str_replace([',', '.'], '', $d[1]) . '.' . $d[3];
+            } else {
+                $n = str_replace([',', '.'], '', $n);
+            }
+            return $n === '' ? null : (float) $n;
         }
         return null;   // "A definir", "Variable", ...
     }

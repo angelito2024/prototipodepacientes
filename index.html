@@ -3,6 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- El navegador no debe guardar copia de esta pantalla: si lo hace, después
+     de una mejora se sigue viendo la versión vieja y parece que el arreglo no
+     se aplicó. Los datos vienen de la base, no de aquí, así que no hay nada
+     que ganar guardándola en caché. -->
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>Centro Psicológico — Panel de Gestión</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -675,6 +682,9 @@
           <span class="dot"></span><span id="backupBtnText">Respaldo</span>
         </button>
         <span class="today" id="todayLabel"></span>
+        <!-- Marca de versión: sirve para saber de un vistazo si la pantalla
+             que estás viendo es la última o una copia vieja del navegador. -->
+        <span class="today" id="versionLabel" title="Versión del panel" style="opacity:.6"></span>
       </div>
     </div>
   </header>
@@ -861,6 +871,30 @@
     <div class="receiptActions">
       <button class="btn" onclick="downloadPaymentCardImage(this)">Descargar imagen (PNG)</button>
       <button class="btn secondary" onclick="document.getElementById('paymentCardModal').classList.remove('open')">Cerrar</button>
+    </div>
+  </div>
+</div>
+
+<div class="modalOverlay" id="abonoModal">
+  <div class="receiptCard" style="max-width:560px">
+    <div style="padding:24px 26px">
+      <h2 style="margin-top:0" id="abonoTitle">Pagos del mes</h2>
+      <p id="abonoResumen" style="margin:0 0 14px"></p>
+
+      <div class="formgrid">
+        <div class="field"><label id="abonoLabelMonto">Monto que pagaste (S/)</label>
+          <input type="number" step="0.01" id="ab_monto" onkeydown="if(event.key==='Enter'){event.preventDefault();saveAbono();}">
+        </div>
+        <div class="field"><label>Fecha</label><input type="date" id="ab_fecha"></div>
+      </div>
+      <p class="hint" id="abonoAvisoTotal" style="margin-top:4px"></p>
+      <button class="btn" style="margin-top:8px" id="abonoSubmit" onclick="saveAbono()">Registrar pago</button>
+
+      <h3 style="margin:20px 0 6px;font-size:14px" id="abonoListaTitulo">Lo registrado este mes</h3>
+      <div class="tablewrap" id="abonoLista"></div>
+    </div>
+    <div class="receiptActions">
+      <button class="btn secondary" onclick="closeAbonoModal()">Cerrar</button>
     </div>
   </div>
 </div>
@@ -1222,6 +1256,7 @@ async function exportBackupJSON(){
     centerInfo: DB.centerInfo, historias, roomUsage: DB.roomUsage, attendanceLog: DB.attendanceLog,
     talleres: DB.talleres,
     personalEntries: DB.personalEntries, personalConfig: DB.personalConfig,
+    prestamos: DB.prestamos, recaudaciones: DB.recaudaciones, juntas: DB.juntas,
   };
   const blob = new Blob([JSON.stringify(backup, null, 2)], {type:'application/json'});
   const url = URL.createObjectURL(blob);
@@ -1255,7 +1290,9 @@ async function importBackupFile(event){
     DB.roomUsage = data.roomUsage||[];
     DB.attendanceLog = data.attendanceLog||[];
     DB.talleres = data.talleres||[];
-    DB.personalEntries = data.personalEntries||[];
+    // Un respaldo puede ser anterior a los pagos parciales: se convierte igual
+    // que al cargar, para que sus meses marcados no se pierdan.
+    DB.personalEntries = (data.personalEntries||[]).map(normalizarPersonal);
     DB.personalConfig = data.personalConfig||{pinEnabled:false, pin:''};
     const saves = [
       setColl('patients', DB.patients), setColl('appointments', DB.appointments),
@@ -1288,7 +1325,12 @@ let DB = {
   patients:[], appointments:[], professionals:[], practicantes:[],
   services:[], payments:[], expenses:[], calendarEvents:[], products:[],
   centerInfo:{}, roomUsage:[], attendanceLog:[], talleres:[],
-  personalEntries:[], personalConfig:{}, authConfig:{}
+  personalEntries:[], personalConfig:{}, authConfig:{},
+  // Finanzas personales, aparte de las del centro:
+  //   prestamos     deudas totales con cada acreedor y los abonos hechos
+  //   recaudaciones fondos colectivos que él organiza (aporte por persona y mes)
+  //   juntas        juntas de terceros en las que participa aportando
+  prestamos:[], recaudaciones:[], juntas:[]
 };
 let currentTab = 'resumen';
 let currentHistoryPatientId = null;
@@ -1500,7 +1542,13 @@ async function loadAll(){
   DB.attendanceLog = await getColl('attendanceLog', []);
   DB.talleres = await getColl('talleres', []);
   DB.personalEntries = await getColl('personalEntries', []);
+  // Migración: antes un mes solo estaba pagado o no. Cada mes marcado pasa a ser
+  // un pago por el monto completo, que es lo que significaba.
+  DB.personalEntries = DB.personalEntries.map(normalizarPersonal);
   DB.personalConfig = await getColl('personalConfig', {pinEnabled:false, pin:''});
+  DB.prestamos     = await getColl('prestamos', []);
+  DB.recaudaciones = await getColl('recaudaciones', []);
+  DB.juntas        = await getColl('juntas', []);
   DB.talleres.forEach(t=>{
     if(!Array.isArray(t.participantes)) t.participantes = [];
     if(!t.billingMode) t.billingMode = 'participante'; // los talleres creados antes de existir el cobro grupal
@@ -1538,6 +1586,86 @@ async function loadAll(){
     DB.centerInfo = {...DB.centerInfo, paymentMethods: DB.centerInfo.paymentMethods.replace('Cuenta BBVA (Independencia):', 'Cuenta BBVA:')};
     setColl('centerInfo', DB.centerInfo);
   }
+  await cuadrarSesionesConCitas();
+}
+
+/* Ajustes de contador pendientes de avisar al usuario (se muestran una vez
+   terminado el arranque, cuando ya hay pantalla donde mostrarlos). */
+let pendienteAvisoSesiones = null;
+
+function mostrarAvisoSesiones(){
+  if(!pendienteAvisoSesiones) return;
+  const {ajustes, bajaron} = pendienteAvisoSesiones;
+  pendienteAvisoSesiones = null;
+  const detalle = ajustes
+    .map(a=>`  · ${a.nombre}: ${a.antes} → ${a.ahora} sesiones`)
+    .join('\n');
+  if(bajaron.length){
+    alert(
+      'Se cuadraron los contadores de sesiones con la agenda:\n\n' + detalle +
+      '\n\nOJO: a ' + bajaron.map(a=>a.nombre).join(', ') +
+      ' le bajó el conteo. Eso pasa cuando hay sesiones cobradas cuya cita nunca' +
+      ' se registró en la agenda.\nSi esas sesiones sí se atendieron, regístralas' +
+      ' en la pestaña Citas y márcalas como "Completada" — ahí el número sube solo.'
+    );
+  } else {
+    showToast('Contadores de sesiones cuadrados con la agenda.');
+  }
+}
+
+/* Desde cuándo cuentan las sesiones del paquete vigente: desde que se cerró
+   el paquete anterior. Si nunca cerró ninguno, cuentan todas sus citas. */
+function inicioDelPaqueteVigente(p){
+  const cerrados = (p.paquetesHistorial||[]).map(h=>h.cerradoEl).filter(Boolean).sort();
+  return cerrados.length ? cerrados[cerrados.length-1] : '';
+}
+
+/* Sesiones realmente atendidas: se cuentan las citas marcadas "Completada".
+   Es la única fuente de verdad — antes había un contador aparte que se
+   despegaba cuando una cita se registraba ya completada (por ejemplo al
+   importar, o al anotar consultas que ya habían ocurrido). */
+function sesionesAtendidas(p){
+  if(!p) return 0;
+  const desde = inicioDelPaqueteVigente(p);
+  return DB.appointments.filter(a =>
+    a.patientId === p.id &&
+    a.status === 'Completada' &&
+    (!desde || a.date > desde)
+  ).length;
+}
+
+/* Pone el contador de cada paciente a la par de sus citas completadas.
+   Se ejecuta al abrir el panel, así que un descuadre se corrige solo. */
+async function cuadrarSesionesConCitas(){
+  const ajustes = [];
+  DB.patients = DB.patients.map(p => {
+    const real = sesionesAtendidas(p);
+    const antes = Number(p.sessionsUsed||0);
+    if(antes === real) return p;
+    ajustes.push({nombre:p.name, antes, ahora:real});
+    return {...p, sessionsUsed: real};
+  });
+  const cambios = ajustes.length;
+  // Si el contador baja es porque hay sesiones cobradas sin su cita registrada:
+  // conviene que se entere, no que el número cambie solo y sin explicación.
+  if(cambios){
+    const bajaron = ajustes.filter(a=>a.ahora < a.antes);
+    pendienteAvisoSesiones = {ajustes, bajaron};
+  }
+  // Las citas completadas quedan marcadas como contadas, para que al cambiarles
+  // el estado después se descuenten bien.
+  let citasTocadas = false;
+  DB.appointments = DB.appointments.map(a => {
+    const debeContar = a.status === 'Completada';
+    // Comparación estricta: una cita sin el dato puesto queda con un "no"
+    // explícito, en vez de quedarse sin definir y arrastrar esa ambigüedad
+    // a los respaldos y a la base de datos.
+    if(a.countedSession === debeContar) return a;
+    citasTocadas = true;
+    return {...a, countedSession: debeContar};
+  });
+  if(cambios) await setColl('patients', DB.patients);
+  if(citasTocadas) await setColl('appointments', DB.appointments);
 }
 
 /* ===================== TABS ===================== */
@@ -1793,7 +1921,12 @@ function toggleForm(id){
 }
 
 /* ===================== UTIL ===================== */
-function fmtMoney(n){ return 'S/ ' + (Math.round((n||0)*100)/100).toFixed(2); }
+/* Montos con separador de miles: con deudas de seis cifras, "S/ 232602.00"
+   se lee mal y se presta a confundir un 23 260 con un 232 602. */
+function fmtMoney(n){
+  const v = Math.round((Number(n)||0)*100)/100;
+  return 'S/ ' + v.toLocaleString('es-PE', {minimumFractionDigits:2, maximumFractionDigits:2});
+}
 /* La fecha del DÍA LOCAL, no la de UTC. En Perú (UTC-5), toISOString() devuelve el día
    siguiente a partir de las 7 de la noche: un pago registrado a las 10 p. m. quedaba
    fechado mañana y dejaba de contarse. Todas las fechas del panel salen de aquí. */
@@ -2300,6 +2433,21 @@ function contactButtons(phone, email, message, subject){
    - Alquiler de espacio: S/10 fijo por cada pago/sesión registrada (el resto es del profesional externo)
    - Comisión: el monto "centerShareAmount" definido en la ficha del profesional, por cada pago/sesión
      (con tope al monto realmente pagado, por si fue un pago parcial) */
+/* Cuántas sesiones cubre un pago.
+   Un cobro suelto cubre una sesión. Un pago de paquete cubre tantas como
+   alcance su monto según la tarifa del paciente (S/450 a S/45 = 10 sesiones).
+   Sin tarifa registrada no se puede dividir, así que cuenta como una. */
+function sesionesQueCubreElPago(pm, patient){
+  const tipo = pm.paymentType || '';
+  // "Otro" y los convenios con colegios no se dividen: no representan un
+  // número de sesiones de este paciente.
+  if(tipo==='otro' || tipo==='colegio') return 1;
+  const precio = Number(patient && patient.pricePerSession || 0);
+  if(precio <= 0) return 1;
+  // Todo lo demás se divide entre su tarifa: un cobro de S/150 con sesiones
+  // de S/50 cubre 3 sesiones, y al centro le toca su parte por cada una.
+  return Math.max(1, Math.round(Number(pm.amount||0) / precio));
+}
 function centerIncomeByProfessional(fromDate, toDate){
   const byProf = {};
   DB.professionals.forEach(pr=>{ byProf[pr.id] = {professional:pr, sessions:0, income:0}; });
@@ -2311,8 +2459,16 @@ function centerIncomeByProfessional(fromDate, toDate){
     const pr = DB.professionals.find(p=>p.id===patient.professionalId);
     if(!pr || pr.paymentModel!=='Comisión') return;
     if(!byProf[pr.id]) byProf[pr.id] = {professional:pr, sessions:0, income:0};
-    byProf[pr.id].sessions += 1;
-    byProf[pr.id].income += Math.min(Number(pm.amount||0), Number(pr.centerShareAmount||0));
+    // Cuántas sesiones cubre este pago. Un pago de paquete (ej. S/450 de 10
+    // sesiones a S/45) cubre 10 sesiones, y al centro le corresponde su parte
+    // por CADA una — antes se contaba como si fuera una sola sesión y el
+    // centro se quedaba con S/20 en vez de S/200.
+    const sesionesCubiertas = sesionesQueCubreElPago(pm, patient);
+    byProf[pr.id].sessions += sesionesCubiertas;
+    byProf[pr.id].income += Math.min(
+      Number(pm.amount||0),
+      sesionesCubiertas * Number(pr.centerShareAmount||0)
+    );
   });
   // Alquiler de espacio: se calcula del registro de uso de consultorio, SIN necesidad de crear
   // una ficha de paciente (el paciente es del profesional externo, no del centro).
@@ -2498,11 +2654,47 @@ function viewPacientes(){
         <div class="field"><label>Profesional asignado</label>
           <select id="pf_prof"><option value="">— sin asignar —</option>${DB.professionals.filter(pr=>pr.active!==false || (editingPatientId && (DB.patients.find(p=>p.id===editingPatientId)||{}).professionalId===pr.id)).map(pr=>`<option value="${pr.id}">${pr.name}</option>`).join('')}</select>
         </div>
-        <div class="field"><label>Contratación</label>
+        <div style="grid-column:1/-1" id="pf_consultaBloque">
+          <div style="border:2px solid var(--accent);border-radius:10px;padding:12px 14px;margin:6px 0 2px">
+            <b style="font-size:15px">1️⃣ La consulta (primera atención)</b>
+            <p class="hint" style="margin:4px 0 10px">Es lo primero que ocurre: se atiende, se cobra la consulta y recién después el paciente decide si toma un paquete. Deja la fecha vacía si todavía no lo has atendido.</p>
+            <div class="formgrid">
+              <div class="field"><label>Fecha de la consulta</label>
+                <input type="date" id="pf_firstDate" value="${todayISO()}">
+                <p class="hint" style="margin-top:3px">Puede ser de días atrás.</p>
+              </div>
+              <div class="field"><label>Hora</label><input type="time" id="pf_firstTime" value="09:00"></div>
+              <div class="field" id="pf_consultaRoomWrap"><label>Consultorio</label>
+                <select id="pf_consultaRoom">
+                  <option value="">— elegir —</option>
+                  <option value="Consultorio 1 (Adultos)">Consultorio 1 (Adultos)</option>
+                  <option value="Consultorio 2 (Niños)">Consultorio 2 (Niños)</option>
+                  <option value="Consultorio 3 (Mixto)">Consultorio 3 (Mixto)</option>
+                </select>
+              </div>
+              <div class="field" id="pf_consultaEnlaceWrap" style="display:none"><label>Enlace de la reunión</label>
+                <input type="text" id="pf_consultaEnlace" placeholder="Zoom o Google Meet usado en la consulta">
+              </div>
+              <div class="field"><label>Monto de la consulta (S/)</label>
+                <input type="number" id="pf_consultaMonto" value="50" min="0">
+              </div>
+              <div class="field"><label>¿Ya pagó la consulta?</label>
+                <select id="pf_consultaPagada">
+                  <option value="true">Sí — registrar el pago</option>
+                  <option value="false">Todavía no</option>
+                </select>
+              </div>
+            </div>
+            <p class="hint" style="margin:6px 0 0">La consulta queda registrada como cita <b>Completada</b> y cuenta como su primera sesión. Si marcas que ya pagó, el cobro se registra solo en <b>Pagos</b>.</p>
+          </div>
+          <p class="hint" style="margin:10px 0 2px"><b>2️⃣ Después de la consulta</b> — si toma paquete, configúralo aquí abajo.</p>
+        </div>
+        <div class="field" id="pf_contratacionWrap"><label>Contratación (después de la consulta)</label>
           <select id="pf_billingType" onchange="toggleBillingType()">
             <option value="Paquete">Paquete (varias sesiones)</option>
             <option value="Individual">Individual (se agenda sesión por sesión)</option>
           </select>
+          <p class="hint" style="margin-top:3px">Lo que toma <b>después</b> de la consulta. Si todavía no decide, déjalo en "Individual".</p>
         </div>
         <div class="field"><label>Tarifa</label>
           <select id="pf_service" onchange="applyTarifaAlPaciente()">
@@ -2516,11 +2708,15 @@ function viewPacientes(){
         </div>
         <div class="field" id="pf_totalWrap"><label>Sesiones del paquete</label><input type="number" id="pf_total" value="4" oninput="updateResumenCobro()"></div>
         <div class="field"><label>Informe / evaluación</label>
-          <select id="pf_report"><option value="No aplica">No aplica</option><option value="Pendiente">Pendiente por presentar</option></select>
+          <select id="pf_report" onchange="toggleReportDue()"><option value="No aplica">No aplica</option><option value="Pendiente">Pendiente por presentar</option></select>
           <p class="hint" style="margin-top:3px">Cuando lo entregues, márcalo en la pestaña <b>Informes</b>.</p>
         </div>
-        <div class="field"><label>Fecha límite del informe</label><input type="date" id="pf_reportDue"></div>
-        <div class="field"><label>Cumpleaños (mes-día)</label><input type="date" id="pf_birthday"></div>
+        <div class="field" id="pf_reportDueWrap"><label>Fecha límite del informe</label><input type="date" id="pf_reportDue">
+          <p class="hint" style="margin-top:3px" id="pf_reportDueHint"></p>
+        </div>
+        <div class="field"><label>Fecha de nacimiento</label><input type="date" id="pf_birthday">
+          <p class="hint" style="margin-top:3px">Con el año completo se calcula la edad y se llena sola la historia clínica.</p>
+        </div>
         <div class="field"><label>¿Es niño/adolescente (menor de edad)?</label>
           <select id="pf_isMinor" onchange="toggleMinorAndCompanionFields()"><option value="false">No</option><option value="true">Sí</option></select>
         </div>
@@ -2645,11 +2841,38 @@ function toggleModalityDefaultFields(){
   const modality = document.getElementById('pf_modality').value;
   document.getElementById('pf_meetingDefaultWrap').style.display = modality==='Virtual'? 'block':'none';
   document.getElementById('pf_addressDefaultWrap').style.display = modality==='Domicilio'? 'grid':'none';
+  toggleConsultaLugar();
 }
 function toggleBillingType(){
   const type = document.getElementById('pf_billingType').value;
   document.getElementById('pf_totalWrap').style.display = type==='Individual'? 'none':'block';
   if(type==='Individual') document.getElementById('pf_total').value = 0;
+}
+/* Si no corresponde presentar informe, la fecha límite no tiene sentido:
+   se apaga y se vacía, para que no quede una fecha suelta generando alertas. */
+/* En el bloque de la consulta, el consultorio solo aplica si fue presencial;
+   si fue virtual lo que hace falta es el enlace. Sigue a la modalidad que se
+   eligió arriba en la ficha. */
+function toggleConsultaLugar(){
+  const mod = (document.getElementById('pf_modality')||{}).value || 'Presencial';
+  const room = document.getElementById('pf_consultaRoomWrap');
+  const link = document.getElementById('pf_consultaEnlaceWrap');
+  if(room) room.style.display = mod==='Presencial' ? 'block' : 'none';
+  if(link) link.style.display = mod==='Virtual' ? 'block' : 'none';
+}
+function toggleReportDue(){
+  const aplica = document.getElementById('pf_report').value !== 'No aplica';
+  const campo = document.getElementById('pf_reportDue');
+  const hint  = document.getElementById('pf_reportDueHint');
+  const wrap  = document.getElementById('pf_reportDueWrap');
+  if(!campo) return;
+  campo.disabled = !aplica;
+  if(!aplica){ campo.value = ''; }
+  campo.style.background = aplica? '' : '#eee';
+  if(wrap) wrap.style.opacity = aplica? '1' : '0.55';
+  if(hint) hint.textContent = aplica
+    ? 'Hasta cuándo tienes plazo para entregarlo.'
+    : 'No aplica: no hay informe que entregar, así que no hace falta fecha.';
 }
 let currentCompanions = [];
 /* ----- Apoderados: varios por paciente, cada uno con su parentesco -----
@@ -2831,7 +3054,9 @@ function editPatient(id){
   }
   selReport.value = p.reportStatus||'No aplica';
   document.getElementById('pf_reportDue').value = p.reportDueDate||'';
-  document.getElementById('pf_birthday').value = p.birthday? ('2000-'+p.birthday) : '';
+  // Fecha de nacimiento: se usa la completa si existe. Las fichas antiguas
+  // solo guardaban mes y día, así que se muestran con año 2000 como marcador.
+  document.getElementById('pf_birthday').value = fechaNacimientoDe(p);
   document.getElementById('pf_isMinor').value = String(!!p.isMinor);
   document.getElementById('pf_sex').value = p.sex||'';
   currentGuardians = guardiansFromPatient(p); limpiarFormApoderado();
@@ -2845,14 +3070,38 @@ function editPatient(id){
   toggleMinorAndCompanionFields();
   toggleModalityDefaultFields();
   toggleBillingType();
+  toggleReportDue();
+  // La primera consulta solo se pregunta al registrar: en una ficha que ya
+  // existe, sus citas y sus cobros se manejan desde Citas y Pagos.
+  const bloqueConsulta = document.getElementById('pf_consultaBloque');
+  if(bloqueConsulta) bloqueConsulta.style.display = 'none';
   // Al editar SÍ mostramos "sesiones ya usadas" (informativo); al crear uno nuevo se mantiene oculto.
   document.getElementById('pf_usedWrap').style.display = 'block';
+}
+/* Fecha de nacimiento completa de un paciente, mirando primero su ficha y
+   después su historia clínica: el dato se escribe una vez y se ve en las dos
+   pestañas. Las fichas viejas solo tienen mes y día, sin año. */
+function fechaNacimientoDe(p){
+  if(!p) return '';
+  if(p.birthDate) return p.birthDate;
+  const h = historiaEnMemoria(p.id);
+  if(h && h.fechaNacimiento) return h.fechaNacimiento;
+  return p.birthday ? ('2000-'+p.birthday) : '';
+}
+/* La historia clínica que ya esté abierta en pantalla, para poder cruzar datos
+   sin volver a leerla del almacenamiento. */
+function historiaEnMemoria(patientId){
+  return (currentHistoryPatientId===patientId && currentHistoriaData) ? currentHistoriaData : null;
 }
 async function savePatient(){
   const name = document.getElementById('pf_name').value.trim();
   if(!name){ alert('Ingresa el nombre del paciente.'); return; }
   const bdayRaw = document.getElementById('pf_birthday').value;
   const bday = bdayRaw ? bdayRaw.slice(5) : '';
+  // Se conserva la fecha completa (con año) además del mes-día que usan las
+  // alertas de cumpleaños. El año con 2000 es el marcador de las fichas
+  // viejas, así que ese no cuenta como fecha real.
+  const bdayCompleto = (bdayRaw && !bdayRaw.startsWith('2000-')) ? bdayRaw : '';
   const esMenor = document.getElementById('pf_isMinor').value==='true';
   // Si escribió un apoderado pero no pulsó "+ Agregar", lo tomamos igual en vez de perderlo.
   const datosSueltos = leerFormApoderado();
@@ -2876,13 +3125,19 @@ async function savePatient(){
     professionalId: document.getElementById('pf_prof').value,
     billingType: document.getElementById('pf_billingType').value,
     packageTotal: document.getElementById('pf_billingType').value==='Individual'? 0 : (Number(document.getElementById('pf_total').value)||0),
-    sessionsUsed: editingPatientId? (Number(document.getElementById('pf_used').value)||0) : 0,
+    // No se toma del formulario: se cuenta de las citas completadas, que es
+    // el dato real. Editar la ficha ya no puede descuadrar el contador.
+    sessionsUsed: editingPatientId? sesionesAtendidas(DB.patients.find(x=>x.id===editingPatientId)) : 0,
     serviceId: document.getElementById('pf_service').value,
     pricePerSession: Number(document.getElementById('pf_price').value)||0,
     paymentStatus: (editingPatientId? ((DB.patients.find(x=>x.id===editingPatientId)||{}).paymentStatus||'Pendiente') : 'Pendiente'),
     reportStatus: document.getElementById('pf_report').value,
-    reportDueDate: document.getElementById('pf_reportDue').value,
+    // Si no corresponde informe, no se guarda fecha límite: una fecha suelta
+    // con "No aplica" quedaría generando avisos de algo que nadie debe entregar.
+    reportDueDate: document.getElementById('pf_report').value==='No aplica'
+      ? '' : document.getElementById('pf_reportDue').value,
     birthday: bday,
+    birthDate: bdayCompleto || (editingPatientId? ((DB.patients.find(x=>x.id===editingPatientId)||{}).birthDate || '') : ''),
     isMinor: document.getElementById('pf_isMinor').value==='true',
     sex: document.getElementById('pf_sex').value,
     guardians: [...currentGuardians],
@@ -2911,21 +3166,163 @@ async function savePatient(){
   editingPatientId = null;
   currentCompanions = [];
   currentGuardians = []; limpiarFormApoderado();
+
+  // Primera consulta: al registrar la ficha se registra también la sesión que
+  // ya se atendió, porque en el centro primero se atiende y después se llena
+  // el papeleo. Queda como "Completada" y cuenta como su primera sesión.
+  let primeraCita = null;
+  let pagoConsultaRegistrado = 0;
+  if(esNuevoRegistro){
+    const fechaCons = (document.getElementById('pf_firstDate')||{}).value || '';
+    if(fechaCons){
+      primeraCita = {
+        id: uid(),
+        patientId: data.id,
+        professionalId: data.professionalId,
+        date: fechaCons,
+        time: (document.getElementById('pf_firstTime')||{}).value || '09:00',
+        modality: data.modality,
+        // El consultorio lo elige el usuario en el bloque de la consulta.
+        room: data.modality==='Presencial'
+          ? ((document.getElementById('pf_consultaRoom')||{}).value || '')
+          : '',
+        status: 'Completada',
+        meetingLink: data.modality==='Virtual'
+          ? (((document.getElementById('pf_consultaEnlace')||{}).value || '').trim() || data.defaultMeetingLink || '')
+          : '',
+        address: data.modality==='Domicilio'? (data.defaultAddress||'') : '',
+        reference: data.modality==='Domicilio'? (data.defaultReference||'') : '',
+        reminderSent: false,
+        countedSession: true,
+      };
+      DB.appointments.push(primeraCita);
+      data.sessionsUsed = sesionesAtendidas(data);
+      DB.patients = DB.patients.map(p=>p.id===data.id? data : p);
+      await setColl('appointments', DB.appointments);
+
+      // El cobro de la consulta: es lo primero que paga el paciente, antes de
+      // decidir si toma paquete. Se registra aquí para no tener que ir a Pagos
+      // a buscarlo de nuevo.
+      const montoCons = Number((document.getElementById('pf_consultaMonto')||{}).value)||0;
+      const yaPago = (document.getElementById('pf_consultaPagada')||{}).value === 'true';
+      if(yaPago && montoCons>0){
+        DB.payments.push({
+          id: uid(),
+          patientId: data.id,
+          date: fechaCons,
+          time: (document.getElementById('pf_firstTime')||{}).value || '',
+          amount: montoCons,
+          concept: 'Consulta (primera atención)',
+          method: 'Efectivo',
+          paymentType: 'sesion_completa',
+        });
+        // Para los de sesión por sesión, ese cobro abre una sesión facturada.
+        if(data.billingType==='Individual'){
+          data.billedSessions = (data.billedSessions||0) + 1;
+          DB.patients = DB.patients.map(p=>p.id===data.id? data : p);
+        }
+        pagoConsultaRegistrado = montoCons;
+        await setColl('payments', DB.payments);
+      }
+    }
+  }
+
   await setColl('patients', DB.patients);
   toggleForm('patientForm');
   renderPanel();
-  // Recién registrado y con tarifa puesta: se ofrece pasar directo a cobrarle, con sus
-  // datos y su monto ya cargados, en vez de tener que buscarlo de nuevo en Pagos.
-  if(esNuevoRegistro && data.pricePerSession>0){
+
+  if(!esNuevoRegistro) return;
+
+  let cita = primeraCita
+    ? `\n• Consulta del ${primeraCita.date} registrada como primera sesión.`
+    : '';
+  if(pagoConsultaRegistrado>0){
+    cita += `\n• Cobro de la consulta: ${fmtMoney(pagoConsultaRegistrado)} registrado en Pagos.`;
+  }
+
+  // Ya cobrada la consulta, lo que queda pendiente es el paquete (si lo toma).
+  // Si no se cobró nada todavía, se ofrece ir a cobrar.
+  if(data.pricePerSession>0 && pagoConsultaRegistrado===0){
     const bal = patientBalance(data);
     const detalle = data.billingType==='Individual'
       ? `${fmtMoney(data.pricePerSession)} por sesión`
       : `paquete de ${data.packageTotal} sesiones — ${fmtMoney(bal.totalPrice)} en total`;
-    if(confirm(`${data.name} quedó registrado (${detalle}).\n\n¿Registrar ahora su pago?`)){
+    if(confirm(`${data.name} quedó registrado (${detalle}).${cita}\n\n¿Registrar ahora su pago?`)){
       irACobrarPaciente(data.id);
+      return;
     }
+  } else if(pagoConsultaRegistrado>0 && data.billingType!=='Individual' && data.packageTotal>0){
+    const bal = patientBalance(data);
+    if(confirm(`${data.name} quedó registrado.${cita}\n\n`
+      + `Además tomó un paquete de ${data.packageTotal} sesiones (${fmtMoney(bal.totalPrice)}).\n`
+      + `¿Registrar ahora el pago del paquete?`)){
+      irACobrarPaciente(data.id);
+      return;
+    }
+  } else if(cita){
+    alert(`${data.name} quedó registrado.${cita}`);
   }
+  // Si no se fue a cobrar, se le ofrece agendar la siguiente sesión.
+  ofrecerAgendarSiguiente(data.id);
 }
+/* Cuántas sesiones le faltan por agendar a un paciente de paquete:
+   las del paquete menos las que ya tiene con cita (atendida o programada). */
+function sesionesPorAgendar(p){
+  if(!p || p.billingType==='Individual') return null;
+  const total = Number(p.packageTotal||0);
+  if(total<=0) return null;
+  const conCita = DB.appointments.filter(a=>a.patientId===p.id && a.status!=='Cancelada').length;
+  return Math.max(0, total - conCita);
+}
+
+/* Ofrece agendar la próxima sesión. Se llama después de registrar al paciente
+   y después de cobrarle, y vuelve a ofrecerse cada vez hasta que el paquete
+   quede completo — así no hay que acordarse de entrar a Citas cada semana. */
+function ofrecerAgendarSiguiente(patientId){
+  const p = DB.patients.find(x=>x.id===patientId);
+  if(!p) return;
+  const faltan = sesionesPorAgendar(p);
+
+  let mensaje;
+  if(faltan===null){
+    mensaje = `${p.name} se atiende sesión por sesión.\n\n¿Agendar su próxima cita?`;
+  } else if(faltan<=0){
+    showToast(`${p.name} ya tiene agendadas todas las sesiones de su paquete.`);
+    return;
+  } else {
+    const conCita = Number(p.packageTotal||0) - faltan;
+    mensaje = `${p.name}: ${conCita} de ${p.packageTotal} sesiones agendadas.\n`
+            + `Le faltan ${faltan} por agendar.\n\n¿Agendar la siguiente ahora?`;
+  }
+  if(!confirm(mensaje)) return;
+  irAAgendarPaciente(patientId);
+}
+
+/* Abre Citas con el paciente y su profesional ya elegidos. */
+function irAAgendarPaciente(patientId){
+  const p = DB.patients.find(x=>x.id===patientId);
+  if(!p) return;
+  agendarEnCadenaPara = patientId;   // para volver a ofrecer al guardar la cita
+  goTab('citas');
+  setTimeout(()=>{
+    const form = document.getElementById('apptForm');
+    if(form && !form.classList.contains('open')) toggleForm('apptForm');
+    const sel = document.getElementById('af_patient');
+    if(sel){
+      sel.value = patientId;
+      fillApptFromPatient();
+    }
+    const fecha = document.getElementById('af_date');
+    if(fecha){ fecha.focus(); fecha.scrollIntoView({block:'center', behavior:'smooth'}); }
+    const faltan = sesionesPorAgendar(p);
+    showToast(faltan===null
+      ? `Agendando para ${p.name}. Elige fecha y hora.`
+      : `Agendando para ${p.name}. Le faltan ${faltan} sesiones del paquete.`);
+  }, 120);
+}
+/* Paciente para el que se está agendando en cadena; se limpia al terminar. */
+let agendarEnCadenaPara = null;
+
 /* Abre Pagos con el paciente ya elegido y el monto calculado de su tarifa. */
 function irACobrarPaciente(patientId){
   goTab('pagos');
@@ -3060,6 +3457,7 @@ function viewCitas(){
     </div>
     <div class="formpanel" id="apptForm">
       <div id="af_editBanner"></div>
+      <div id="af_paqueteHint"></div>
       <div id="af_availabilityHint"></div>
       <div class="formgrid">
         <div class="field"><label>Paciente</label>
@@ -3244,6 +3642,13 @@ async function saveAppt(){
   await setColl('appointments', DB.appointments);
   toggleForm('apptForm');
   renderPanel();
+  // Si se venía agendando en cadena para este paciente, se ofrece la siguiente
+  // sesión de una vez, hasta completar su paquete.
+  if(agendarEnCadenaPara === a.patientId){
+    setTimeout(()=>ofrecerAgendarSiguiente(a.patientId), 150);
+  } else {
+    agendarEnCadenaPara = null;
+  }
 }
 async function markReminder(id){
   DB.appointments = DB.appointments.map(a=>a.id===id? {...a, reminderSent:true} : a);
@@ -3320,23 +3725,23 @@ async function confirmReschedule(){
 async function changeStatus(id,status){
   const appt = DB.appointments.find(a=>a.id===id);
   if(!appt) return;
-  const wasCounted = !!appt.countedSession;
   appt.status = status;
-  // Al completar una cita, se suma automáticamente 1 sesión al paquete del paciente (sin digitarlo de nuevo).
-  // Si se revierte el estado, se descuenta para no dejar el conteo inflado.
+  appt.countedSession = (status==='Completada');
+  DB.appointments = DB.appointments.map(a=>a.id===id? appt : a);
+
+  // El contador no se suma ni se resta a mano: se vuelve a contar de las citas
+  // completadas. Así da igual el orden en que se marquen o si alguna se
+  // registró ya completada — el número siempre cuadra con la agenda.
   const patient = DB.patients.find(p=>p.id===appt.patientId);
   let justCompletedPackage = false;
-  if(status==='Completada' && !wasCounted){
-    if(patient){
-      patient.sessionsUsed = (patient.sessionsUsed||0)+1;
-      if(patient.packageTotal>0 && patient.sessionsUsed>=patient.packageTotal) justCompletedPackage = true;
-    }
-    appt.countedSession = true;
-  } else if(status!=='Completada' && wasCounted){
-    if(patient) patient.sessionsUsed = Math.max(0,(patient.sessionsUsed||0)-1);
-    appt.countedSession = false;
+  if(patient){
+    const antes = Number(patient.sessionsUsed||0);
+    patient.sessionsUsed = sesionesAtendidas(patient);
+    justCompletedPackage = patient.packageTotal>0
+      && patient.sessionsUsed >= patient.packageTotal
+      && antes < patient.packageTotal;
+    DB.patients = DB.patients.map(p=>p.id===patient.id? patient : p);
   }
-  DB.appointments = DB.appointments.map(a=>a.id===id? appt : a);
   const ok = await setColl('appointments', DB.appointments);
   showToast(ok? `Cita actualizada a "${status}". Revisa la pestaña Alertas para avisar al paciente y al profesional.` : `No se pudo guardar el cambio, reintentando…`, ok);
 
@@ -3369,6 +3774,53 @@ function fillApptFromPatient(){
   toggleMeetingLinkField();
   toggleRoomField();
   checkProfAvailabilityHint();
+  mostrarAvanceDelPaquete();
+}
+
+/* Muestra en qué sesión del paquete va el paciente al agendarle una cita.
+   Sin esto hay que salir a la ficha para saber si le queda paquete o si esta
+   es la última sesión — que es justo cuando toca cobrarle el siguiente o
+   preparar el informe de alta. */
+function mostrarAvanceDelPaquete(){
+  const el = document.getElementById('af_paqueteHint');
+  if(!el) return;
+  const pid = document.getElementById('af_patient').value;
+  const p = DB.patients.find(x=>x.id===pid);
+  if(!p){ el.innerHTML=''; return; }
+
+  // Las que ya atendió más las que ya tiene agendadas por delante: esta cita
+  // nueva sería la siguiente de la fila.
+  const atendidas  = sesionesAtendidas(p);
+  const desde      = inicioDelPaqueteVigente(p);
+  const agendadas  = DB.appointments.filter(a =>
+      a.patientId===p.id && a.id!==editingApptId &&
+      a.status!=='Cancelada' && a.status!=='Completada' &&
+      (!desde || a.date > desde)).length;
+  const numero = atendidas + agendadas + 1;
+
+  if(p.billingType==='Individual' || !Number(p.packageTotal)){
+    el.innerHTML = `<p class="hint">${p.name} se atiende <b>sesión por sesión</b>`
+      + (p.pricePerSession? ` — ${fmtMoney(p.pricePerSession)} cada una` : '')
+      + `. Sería su sesión N° ${numero}.</p>`;
+    return;
+  }
+
+  const total = Number(p.packageTotal);
+  if(numero > total){
+    el.innerHTML = `<p class="hint" style="color:var(--alert)"><b>⚠ Su paquete de ${total} sesiones ya está completo</b>`
+      + ` (${atendidas} atendidas, ${agendadas} agendadas).<br>`
+      + `Esta cita quedaría fuera del paquete: corresponde iniciarle uno nuevo desde su ficha, o cobrarla aparte.</p>`;
+    return;
+  }
+  const esUltima = numero === total;
+  const color = esUltima? 'var(--accent)' : 'var(--ok)';
+  el.innerHTML = `<p class="hint" style="color:${color}">`
+    + `<b>Sesión ${numero} de ${total}</b> del paquete de ${p.name}`
+    + ` — ${atendidas} atendida(s)${agendadas? `, ${agendadas} ya agendada(s)` : ''}.`
+    + (esUltima
+        ? `<br><b>⚠ Es la ÚLTIMA del paquete.</b> Al completarla toca decidir si se le abre otro paquete o se le da de alta con su informe.`
+        : `<br>Le quedarían ${total - numero} después de esta.`)
+    + `</p>`;
 }
 function checkProfAvailabilityHint(){
   const hintEl = document.getElementById('af_availabilityHint');
@@ -3918,22 +4370,89 @@ async function saveProf(){
   await setColl('professionals', DB.professionals);
   toggleForm('profForm'); renderPanel();
 }
+/* Lo que realmente se le debe a un profesional. El estado "al día" se decide
+   por el monto, no por una marca aparte: antes una ficha marcada como pagada
+   podía seguir arrastrando un saldo y mostrarse igual como "Al día". */
+function saldoProf(pr){
+  return Math.round((Number(pr && pr.amountToPay || 0))*100)/100;
+}
+
 async function applySuggestedPay(id){
+  const pr = DB.professionals.find(p=>p.id===id);
   const earnings = professionalEarningsSince(id);
-  DB.professionals = DB.professionals.map(p=>p.id===id? {...p, amountToPay: Math.round((Number(p.amountToPay||0)+earnings.total)*100)/100, paid:false} : p);
-  await setColl('professionals', DB.professionals);
+  const actual = saldoProf(pr);
+  const nuevo = Math.round((actual + earnings.total)*100)/100;
+  if(!confirm(
+      `${professionalDisplayName(pr)}\n\n`
+    + `Le debes ahora: ${fmtMoney(actual)}\n`
+    + `Sus ${earnings.sessions} atención(es) sin liquidar suman: ${fmtMoney(earnings.total)}\n\n`
+    + `Quedaría debiendo: ${fmtMoney(nuevo)}\n\n`
+    + `¿Sumarlo? (si el monto de arriba está mal, usa "Editar monto")`)) return;
+  DB.professionals = DB.professionals.map(p=>p.id===id? {...p, amountToPay:nuevo, paid:false} : p);
+  const ok = await setColl('professionals', DB.professionals);
+  showToast(ok? `Ahora le debes ${fmtMoney(nuevo)}.` : 'No se pudo guardar, reintentando…', ok);
   renderPanel();
 }
+
+/* Corrige a mano el monto adeudado. Hace falta cuando el saldo quedó mal por
+   liquidaciones antiguas: sin esto solo se podía sumar o poner en cero. */
+async function editProfAmount(id){
+  const pr = DB.professionals.find(p=>p.id===id);
+  if(!pr) return;
+  const earnings = professionalEarningsSince(id);
+  const resp = prompt(
+      `${professionalDisplayName(pr)}\n\n`
+    + `¿Cuánto le debes en total? (en soles)\n\n`
+    + `Como referencia: sus ${earnings.sessions} atención(es) desde la última\n`
+    + `liquidación suman ${fmtMoney(earnings.total)}.`,
+    String(saldoProf(pr)));
+  if(resp===null) return;
+  const monto = Number(String(resp).replace(',','.'));
+  if(!isFinite(monto) || monto < 0){ alert('Escribe un número válido (0 o más).'); return; }
+  const nuevo = Math.round(monto*100)/100;
+  DB.professionals = DB.professionals.map(p=>p.id===id
+    ? {...p, amountToPay:nuevo, paid: nuevo<=0} : p);
+  const ok = await setColl('professionals', DB.professionals);
+  showToast(ok
+    ? (nuevo>0? `Ahora le debes ${fmtMoney(nuevo)}.` : `${pr.name} queda al día.`)
+    : 'No se pudo guardar, reintentando…', ok);
+  renderPanel();
+}
+
+/* Registrar un pago al profesional, total o por partes: lo que importa ver es
+   cuánto falta. El gasto se anota en Finanzas por el monto realmente pagado. */
 async function markProfPaid(id){
   const pr = DB.professionals.find(p=>p.id===id);
-  const amountPaid = pr? Number(pr.amountToPay||0) : 0;
-  DB.professionals = DB.professionals.map(p=>p.id===id? {...p, paid:true, amountToPay:0, lastSettledDate: todayISO()} : p);
+  if(!pr) return;
+  const debe = saldoProf(pr);
+  const resp = prompt(
+      `${professionalDisplayName(pr)}\n\n`
+    + `Le debes ${fmtMoney(debe)}.\n\n`
+    + `¿Cuánto le estás pagando ahora?\n`
+    + `(déjalo igual para pagarle todo, o pon menos para un pago a cuenta)`,
+    String(debe));
+  if(resp===null) return;
+  const pagado = Math.round((Number(String(resp).replace(',','.'))||0)*100)/100;
+  if(!isFinite(pagado) || pagado <= 0){ alert('Escribe un monto mayor que cero.'); return; }
+  if(pagado > debe && !confirm(
+      `Le estás pagando ${fmtMoney(pagado)} pero solo le debes ${fmtMoney(debe)}.\n\n¿Continuar igual?`)) return;
+
+  const resta = Math.max(0, Math.round((debe - pagado)*100)/100);
+  DB.professionals = DB.professionals.map(p=>p.id===id
+    ? {...p, paid: resta<=0, amountToPay: resta,
+       lastSettledDate: resta<=0? todayISO() : (p.lastSettledDate||'')} : p);
   await setColl('professionals', DB.professionals);
-  // Registra automáticamente el gasto para no tener que digitarlo de nuevo en Finanzas
-  if(pr){
-    DB.expenses.push({id:uid(), name:'Pago a profesional: '+pr.name, amount:amountPaid, recurring:false, category:'Pago a profesionales', paymentDate: todayISO()});
-    await setColl('expenses', DB.expenses);
-  }
+
+  // Se anota el gasto por lo efectivamente pagado, para no inflar Finanzas.
+  DB.expenses.push({id:uid(),
+    name: 'Pago a profesional: '+pr.name + (resta>0? ' (a cuenta)' : ''),
+    amount: pagado, recurring:false,
+    category:'Pago a profesionales', paymentDate: todayISO()});
+  await setColl('expenses', DB.expenses);
+
+  showToast(resta>0
+    ? `Pagado ${fmtMoney(pagado)}. Le queda debiendo ${fmtMoney(resta)}.`
+    : `${pr.name} queda al día. Gasto registrado en Finanzas.`);
   renderPanel();
 }
 async function deleteProf(id){
@@ -4661,7 +5180,7 @@ function viewPagos(){
   const rows = sorted.map(pm=>`<tr>
     <td>${pm.date}<br><span class="hint">${pm.time||''}</span></td><td>${findName(DB.patients,pm.patientId)}</td><td>${pm.concept}</td><td>${pm.method}</td>
     <td style="text-align:right">${fmtMoney(pm.amount)}</td>
-    <td><button class="btn small secondary" onclick="showReceipt('${pm.id}')">Recibo</button> <button class="btn small danger" onclick="deletePayment('${pm.id}')">Eliminar</button></td>
+    <td><button class="btn small secondary" onclick="editPayment('${pm.id}')">Editar</button> <button class="btn small secondary" onclick="showReceipt('${pm.id}')">Recibo</button> <button class="btn small danger" onclick="deletePayment('${pm.id}')">Eliminar</button></td>
   </tr>`).join('');
   const total = DB.payments.reduce((s,p)=>s+Number(p.amount||0),0);
 
@@ -4723,10 +5242,13 @@ function viewPagos(){
       <td>${professionalDisplayName(pr)}</td>
       <td>${earnings.sessions}</td>
       <td>${fmtMoney(earnings.total)}</td>
-      <td>${pr.paid===false? `<b style="color:var(--alert)">Debe: ${fmtMoney(pr.amountToPay)}</b>` : '<span class="chip ok">Al día</span>'}</td>
+      <td>${saldoProf(pr)>0
+            ? `<b style="color:var(--alert)">Debe: ${fmtMoney(saldoProf(pr))}</b>`
+            : '<span class="chip ok">Al día</span>'}</td>
       <td>
-        ${earnings.sessions>0? `<button class="btn small secondary" onclick="applySuggestedPay('${pr.id}')">Usar sugerido</button>`:''}
-        ${pr.paid===false? `<button class="btn small secondary" onclick="markProfPaid('${pr.id}')">Marcar pagado</button>`:''}
+        ${earnings.sessions>0? `<button class="btn small secondary" onclick="applySuggestedPay('${pr.id}')">+ Sumar sugerido</button>`:''}
+        <button class="btn small secondary" onclick="editProfAmount('${pr.id}')">Editar monto</button>
+        ${saldoProf(pr)>0? `<button class="btn small secondary" onclick="markProfPaid('${pr.id}')">Registrar pago</button>`:''}
       </td>
     </tr>`;
   }).join('');
@@ -4777,7 +5299,10 @@ function viewPagos(){
     })()}
 
     <h3 style="margin-top:26px">Pagos a profesionales (Comisión)</h3>
-    <p class="hint">Lo que le corresponde a cada profesional contratado, calculado de sus atenciones desde la última vez que se le pagó.</p>
+    <p class="hint">Lo que le corresponde a cada profesional contratado, calculado de sus atenciones desde la última vez que se le pagó.<br>
+      <b>El "monto sugerido" y lo que "debe" son cosas distintas:</b> el sugerido es lo que suman sus atenciones sin liquidar;
+      lo que debe es el saldo acumulado. Con <b>"+ Sumar sugerido"</b> pasas el sugerido al saldo, con <b>"Editar monto"</b> lo corriges a mano,
+      y con <b>"Registrar pago"</b> le pagas todo o una parte.</p>
     <div class="tablewrap" style="margin-bottom:20px">
       ${profComisionRows? `<table><tr><th>Profesional</th><th>Atenciones desde el último pago</th><th>Monto sugerido</th><th>Estado</th><th></th></tr>${profComisionRows}</table>`
       : `<div class="empty">No hay profesionales con modelo de Comisión registrados.</div>`}
@@ -4850,9 +5375,10 @@ function viewPagos(){
         <p class="hint" style="margin-top:3px">Este paciente todavía no tiene tarifa asignada — ponla aquí y se guarda junto con el pago.</p>
       </div>
       <div id="pyf_balanceInfo" class="hint" style="margin-top:6px"></div>
+      <div id="pyf_editBanner"></div>
       <p class="hint">El monto y el concepto se sugieren automáticamente según el tipo de pago y el paciente elegido — puedes ajustarlos.</p>
-      <button class="btn" onclick="savePayment()">Guardar pago</button>
-      <button class="btn secondary" onclick="toggleForm('payForm')">Cancelar</button>
+      <button class="btn" id="pyf_saveBtn" onclick="savePayment()">Guardar pago</button>
+      <button class="btn secondary" onclick="cancelPaymentEdit(); toggleForm('payForm')">Cancelar</button>
       </div>
       <div id="pyf_rentalSection" style="display:none">
         <div class="formgrid">
@@ -5104,10 +5630,103 @@ function selectPatientForPayment(id){
   document.getElementById('paymentPatientResults').style.display='none';
   fillPaymentFromPatient();
 }
+/* ----- Editar un pago ya registrado -----
+   Antes solo se podía eliminar y volver a crearlo, lo que cambiaba la fecha y
+   el número de recibo. Ahora se corrige el mismo pago: si te equivocaste en el
+   monto, el método o la fecha, se arregla sin perder el registro. */
+let editingPaymentId = null;
+
+function editPayment(id){
+  const pm = DB.payments.find(p=>p.id===id);
+  if(!pm){ return; }
+  editingPaymentId = id;
+  const form = document.getElementById('payForm');
+  if(form && !form.classList.contains('open')) toggleForm('payForm');
+
+  const cat = document.getElementById('pyf_category');
+  if(cat){ cat.value = pm.paymentType==='colegio'? 'colegio' : 'paciente'; togglePaymentCategory(); }
+
+  const sel = document.getElementById('pyf_patient');
+  if(sel){ sel.value = pm.patientId; sel.style.display='block'; }
+  const filtro = document.getElementById('pyf_patientFilter');
+  if(filtro){ filtro.value = findName(DB.patients, pm.patientId); }
+
+  document.getElementById('pyf_type').value = pm.paymentType || 'otro';
+  document.getElementById('pyf_date').value = pm.date || todayISO();
+  document.getElementById('pyf_amount').value = pm.amount || 0;
+  document.getElementById('pyf_concept').value = pm.concept || '';
+  document.getElementById('pyf_method').value = pm.method || 'Efectivo';
+
+  const btn = document.getElementById('pyf_saveBtn');
+  if(btn) btn.textContent = 'Guardar cambios del pago';
+  const banner = document.getElementById('pyf_editBanner');
+  if(banner) banner.innerHTML = `<p class="hint" style="color:var(--accent)">✏️ Corrigiendo el pago de ${findName(DB.patients, pm.patientId)} del ${pm.date} — <button type="button" class="linkbtn" onclick="cancelPaymentEdit()">Cancelar edición</button></p>`;
+
+  renderSaldoDelPago();
+  document.getElementById('pyf_amount').scrollIntoView({block:'center', behavior:'smooth'});
+}
+
+function cancelPaymentEdit(){
+  editingPaymentId = null;
+  const btn = document.getElementById('pyf_saveBtn');
+  if(btn) btn.textContent = 'Guardar pago';
+  const banner = document.getElementById('pyf_editBanner');
+  if(banner) banner.innerHTML = '';
+}
+
+/* ¿Este tipo de pago abre el cobro de una sesión nueva? Se usa para mantener
+   cuadrado el contador de sesiones cobradas al editar o borrar un pago. */
+function pagoAbreSesion(tipo){
+  return tipo==='sesion_completa' || tipo==='adelanto_sesion';
+}
+
 async function savePayment(){
   if(DB.patients.length===0){ alert('Registra al menos un paciente primero.'); return; }
   const patientId = document.getElementById('pyf_patient').value;
   const paymentType = document.getElementById('pyf_type').value;
+
+  // --- Corrección de un pago existente ---
+  if(editingPaymentId){
+    const anterior = DB.payments.find(p=>p.id===editingPaymentId);
+    if(!anterior){ cancelPaymentEdit(); return; }
+    const corregido = {
+      ...anterior,
+      patientId,
+      date: document.getElementById('pyf_date').value,
+      amount: Number(document.getElementById('pyf_amount').value)||0,
+      concept: document.getElementById('pyf_concept').value.trim(),
+      method: document.getElementById('pyf_method').value,
+      paymentType,
+      editadoEl: new Date().toISOString(),
+    };
+    DB.payments = DB.payments.map(p=>p.id===editingPaymentId? corregido : p);
+
+    // El contador de sesiones cobradas se ajusta si cambió el tipo de pago o
+    // el paciente: si antes abría sesión y ahora no, se descuenta, y al revés.
+    const antesAbria = pagoAbreSesion(anterior.paymentType);
+    const ahoraAbre  = pagoAbreSesion(paymentType);
+    const ajustar = (pid, delta)=>{
+      const p = DB.patients.find(x=>x.id===pid);
+      if(!p || p.billingType!=='Individual') return;
+      p.billedSessions = Math.max(0, (p.billedSessions||0) + delta);
+      DB.patients = DB.patients.map(x=>x.id===pid? p : x);
+    };
+    if(anterior.patientId !== patientId){
+      if(antesAbria) ajustar(anterior.patientId, -1);
+      if(ahoraAbre)  ajustar(patientId, +1);
+    } else if(antesAbria !== ahoraAbre){
+      ajustar(patientId, ahoraAbre? +1 : -1);
+    }
+
+    await setColl('patients', DB.patients);
+    const ok = await setColl('payments', DB.payments);
+    showToast(ok? 'Pago corregido.' : 'No se pudo guardar, reintentando…', ok);
+    cancelPaymentEdit();
+    toggleForm('payForm');
+    renderPanel();
+    return;
+  }
+
   const pm={id:uid(), patientId,
     date:document.getElementById('pyf_date').value,
     time: new Date().toLocaleTimeString('es-PE',{hour:'2-digit',minute:'2-digit'}),
@@ -5141,6 +5760,9 @@ async function savePayment(){
   await setColl('payments', DB.payments);
   toggleForm('payForm'); renderPanel();
   showReceipt(pm.id);
+  // Cobrado el paquete (o la sesión), lo natural es dejar agendada la próxima
+  // cita antes de que el paciente se vaya.
+  setTimeout(()=>ofrecerAgendarSiguiente(patientId), 400);
 }
 async function deletePayment(id){
   if(!confirm('¿Eliminar este pago?')) return;
@@ -5392,6 +6014,17 @@ function viewFinanzas(){
   const byProf = centerIncomeByProfessional(mesActual+'-01', mesActual+'-31');
   const ingresoProfesionales = sumCenterIncome(byProf);
   const ingresoProductos = DB.products.reduce((s,pr)=>s+((Number(pr.price||0)-Number(pr.cost||0))*Number(pr.monthlyUnits||0)),0);
+  // Lo que realmente entró por recepción este mes (el total de la pestaña
+  // Pagos, acotado al mes). Se muestra para que se vea de dónde sale el
+  // ingreso del centro: lo cobrado menos la parte del profesional.
+  const cobradoPacientesMes = DB.payments
+    .filter(pm => String(pm.date||'').slice(0,7) === mesActual)
+    .reduce((s,pm)=>s+Number(pm.amount||0), 0);
+  const cobradoOtrosMeses = DB.payments
+    .filter(pm => String(pm.date||'').slice(0,7) !== mesActual)
+    .reduce((s,pm)=>s+Number(pm.amount||0), 0);
+  const parteProfesionales = Math.max(0,
+    Math.round((cobradoPacientesMes - ingresoProfesionales)*100)/100);
   const gastos = gastosDelMes(mesActual);
   const gastosFijos = gastos.total;
   const ingresoTotal = ingresoProfesionales+ingresoProductos;
@@ -5434,12 +6067,17 @@ function viewFinanzas(){
         <h3 style="color:${margen>=0?'var(--ok)':'var(--alert)'}">Margen neto: ${fmtMoney(margen)}</h3>
       </div>
       <div class="col card">
-        <h3 style="margin-top:0">Detalle de ingresos</h3>
+        <h3 style="margin-top:0">De lo cobrado, cuánto queda al centro</h3>
         <table>
-          <tr><td>Profesionales (alquiler + comisión)</td><td style="text-align:right">${fmtMoney(ingresoProfesionales)}</td></tr>
-          <tr><td>Productos adicionales</td><td style="text-align:right">${fmtMoney(ingresoProductos)}</td></tr>
+          <tr><td>Cobrado a pacientes este mes</td><td style="text-align:right"><b>${fmtMoney(cobradoPacientesMes)}</b></td></tr>
+          <tr><td style="color:var(--muted)">− Parte de los profesionales</td><td style="text-align:right;color:var(--muted)">−${fmtMoney(parteProfesionales)}</td></tr>
+          <tr style="border-top:2px solid var(--line)"><td><b>= Ingreso del centro</b></td><td style="text-align:right"><b>${fmtMoney(ingresoProfesionales)}</b></td></tr>
+          <tr><td>+ Productos adicionales</td><td style="text-align:right">${fmtMoney(ingresoProductos)}</td></tr>
         </table>
-        <p class="hint">Esto es lo que ingresa AL CENTRO, no lo que pagan los pacientes en total (una parte de ese dinero es del profesional). Se calcula a partir de los pagos registrados en la pestaña Pagos, según el modelo de cada profesional — no depende de marcar las citas como "Completada".</p>
+        <p class="hint"><b>Por eso Pagos y Finanzas dan números distintos, y los dos están bien:</b>
+          en <b>Pagos</b> ves todo el dinero que entró por recepción (${fmtMoney(cobradoPacientesMes)} este mes);
+          aquí ves solo <b>la parte del centro</b>, porque el resto le corresponde al profesional que atendió.</p>
+        ${cobradoOtrosMeses>0? `<p class="hint" style="color:var(--accent)">⚠ Hay ${fmtMoney(cobradoOtrosMeses)} cobrados en <b>otros meses</b> que no entran en este cuadro. Esta pantalla muestra solo ${mesActual}.</p>`:''}
       </div>
     </div>
 
@@ -6769,9 +7407,68 @@ let editingPersonalId = null;
 function personalConfig(){ return DB.personalConfig || {pinEnabled:false, pin:''}; }
 function personalEntradas(){ return Array.isArray(DB.personalEntries)? DB.personalEntries : []; }
 function esFijo(e){ return e.clase==='fijo'; }
-function pagadoEn(e, mes){ return Array.isArray(e.pagados) && e.pagados.includes(mes); }
-/* El día de vencimiento dice cuándo TOCA pagar; esto guarda cuándo se pagó de verdad. */
-function fechaPagoDe(e, mes){ return (e.fechasPago||{})[mes] || ''; }
+
+/* ===== Abonos =====
+   Un mes no es "pagado sí o no": se puede ir dando adelantos hasta completarlo.
+   Cada abono es una fila con su fecha y su monto, igual que los pagos de un
+   paciente. Lo pagado de un mes es la suma de sus abonos, y lo que falta es el
+   monto menos esa suma. */
+function abonosDe(e){ return Array.isArray(e.abonos)? e.abonos : []; }
+/* Los abonos que cuentan para un gasto en un mes dado.
+   Un fijo se paga todos los meses, así que solo cuentan los de ese mes. Un
+   variable es un pago único —se paga una vez y se acabó, no se renueva—, así
+   que cuentan todos los suyos: si se corrige su fecha, lo ya pagado no se
+   pierde de vista. */
+function abonosDeMes(e, mes){
+  const suyos = esFijo(e)? abonosDe(e).filter(a=>a.periodo===mes) : abonosDe(e);
+  return suyos.sort((a,b)=>(a.fecha||'').localeCompare(b.fecha||''));
+}
+function pagadoDe(e, mes){
+  return abonosDeMes(e, mes).reduce((s,a)=>s+Number(a.monto||0), 0);
+}
+function saldoDe(e, mes){
+  return Math.max(0, Number(e.amount||0) - pagadoDe(e, mes));
+}
+/* Saldado: se cubrió el monto. Un abono de más no lo deja "a medias". */
+function pagadoEn(e, mes){
+  return Number(e.amount||0) > 0 && pagadoDe(e, mes) >= Number(e.amount||0) - 0.005;
+}
+/* Hay algo abonado pero todavía falta: es el caso del adelanto. */
+function abonadoParcial(e, mes){
+  return pagadoDe(e, mes) > 0 && !pagadoEn(e, mes);
+}
+/* El día de vencimiento dice cuándo TOCA pagar; esto dice cuándo se pagó de
+   verdad — la fecha del último abono, que es la que salda la cuenta. */
+function fechaPagoDe(e, mes){
+  const lista = abonosDeMes(e, mes);
+  return lista.length? (lista[lista.length-1].fecha || '') : '';
+}
+
+/* Movimientos guardados antes de que existieran los abonos: traían `pagados`
+   (los meses marcados) y `fechasPago` (la fecha de cada uno). Cada mes marcado
+   se convierte en un abono por el monto completo, que es lo que significaba.
+   No se pierde nada y no hay que volver a marcar nada a mano. */
+function normalizarPersonal(e){
+  if(!e || typeof e !== 'object') return e;
+  if(Array.isArray(e.abonos)) return e;
+  const fechas = e.fechasPago || {};
+  const abonos = (Array.isArray(e.pagados)? e.pagados : []).map(mes=>({
+    id: uid(), periodo: mes, fecha: fechas[mes] || '', monto: Number(e.amount||0),
+  }));
+  // Los gastos sueltos no tenían estado: el panel de antes los sumaba a todos
+  // como ya gastados. Se decide por su fecha:
+  //   · fecha pasada -> pagado. Es el mercado, el transporte, una salida:
+  //     cosas que se anotan después de hacerlas.
+  //   · fecha futura -> pendiente. Nadie anota con fecha del mes que viene
+  //     algo que ya pagó; eso es una deuda con vencimiento.
+  const fechaGasto = String(e.date||'');
+  if(e.clase!=='fijo' && abonos.length===0 && Number(e.amount||0) > 0
+     && fechaGasto && fechaGasto <= todayISO()){
+    abonos.push({id: uid(), periodo: fechaGasto.slice(0,7), fecha: fechaGasto, monto: Number(e.amount)});
+  }
+  const {pagados, fechasPago, ...resto} = e;
+  return {...resto, abonos};
+}
 /* Fecha de vencimiento de un fijo dentro de un mes, ajustando el día 31 a meses cortos. */
 function vencimientoDe(e, mes){
   const dia = Math.min(Math.max(Number(e.dueDay)||1, 1), 31);
@@ -6779,15 +7476,43 @@ function vencimientoDe(e, mes){
   const ultimoDia = new Date(y, m, 0).getDate();
   return `${mes}-${String(Math.min(dia, ultimoDia)).padStart(2,'0')}`;
 }
+/* Para cuándo hay que tenerlo pagado.
+   En un fijo el día se repite cada mes; en un variable es su propia fecha y
+   no se renueva: se paga una vez y se termina hasta el próximo gasto. */
+function fechaLimiteDe(e, mes){
+  return esFijo(e)? vencimientoDe(e, mes) : String(e.date||'');
+}
+/* El periodo al que se imputa un pago. En un variable es el de su fecha, que
+   es el mes en el que el gasto pesa. */
+function periodoDe(e, mes){
+  return esFijo(e)? mes : (String(e.date||'').slice(0,7) || mes);
+}
 function estadoVencimiento(e, mes){
   if(pagadoEn(e, mes)){
     const f = fechaPagoDe(e, mes);
     const verbo = e.tipo==='ingreso'? 'Cobrado' : 'Pagado';
     return {clase:'ok', texto: f? `${verbo} el ${tallerFechaLarga(f)}` : verbo, dias:null};
   }
+  const limite = fechaLimiteDe(e, mes);
+  // Un gasto suelto sin fecha no tiene contra qué avisar: se dice que está
+  // pendiente y ya, en vez de inventar un vencimiento.
+  if(!limite){
+    return abonadoParcial(e, mes)
+      ? {clase:'warn', texto:`Falta ${fmtMoney(saldoDe(e, mes))}`, dias:null}
+      : {clase:'warn', texto:'Pendiente', dias:null};
+  }
+  const dias = daysUntil(limite);
+  // Con adelantos de por medio, lo que hay que ver de un vistazo es cuánto
+  // falta, no solo si vence. Se dice igual si está vencido, porque un
+  // adelanto no quita que el resto tenga fecha.
+  if(abonadoParcial(e, mes)){
+    const cuanto = `Falta ${fmtMoney(saldoDe(e, mes))}`;
+    if(dias < 0) return {clase:'alert', texto:`${cuanto} · vencido hace ${Math.abs(dias)} día${Math.abs(dias)===1?'':'s'}`, dias};
+    if(dias === 0) return {clase:'alert', texto:`${cuanto} · vence hoy`, dias};
+    return {clase: dias<=5? 'warn':'neutral', texto:`${cuanto} · en ${dias} día${dias===1?'':'s'}`, dias};
+  }
   // La columna "Vence" ya dice el día; aquí va cuánto falta, que es lo que no se sabe
   // de un vistazo. Repetir el número del día en ambas columnas no aportaba nada.
-  const dias = daysUntil(vencimientoDe(e, mes));
   if(dias < 0) return {clase:'alert', texto:`Vencido hace ${Math.abs(dias)} día${Math.abs(dias)===1?'':'s'}`, dias};
   if(dias === 0) return {clase:'alert', texto:'Vence hoy', dias};
   if(dias === 1) return {clase:'warn', texto:'Falta 1 día', dias};
@@ -6801,13 +7526,31 @@ function personalDelMes(mes){
   const gastosVar = todas.filter(e=>e.tipo==='gasto' && !esFijo(e) && enMes(e));
   const ingFijos = todas.filter(e=>e.tipo==='ingreso' && esFijo(e));
   const ingVar = todas.filter(e=>e.tipo==='ingreso' && !esFijo(e) && enMes(e));
+  // Un gasto variable de un mes anterior que quedó a medias se sigue debiendo,
+  // así que no puede desaparecer de la pantalla al cambiar el mes. Se lista
+  // aparte y suma en "aún por pagar", pero NO en el total del mes: ese gasto
+  // ya pesó en su propio mes y no debe volver a bajar el margen de este.
+  const arrastre = todas.filter(e=>e.tipo==='gasto' && !esFijo(e) && !enMes(e)
+                                   && String(e.date||'').slice(0,7) < mes && saldoDe(e, mes)>0);
+
+  // Lo que falta pagar es la suma de los saldos, no de los montos completos:
+  // de un gasto de 900 con 300 adelantados quedan debiendo 600, no 900.
+  const sumaSaldos = arr => arr.reduce((s,e)=>s+saldoDe(e, mes), 0);
+  const pendiente = e => !pagadoEn(e, mes) && !!fechaLimiteDe(e, mes);
+  const diasDe = e => daysUntil(fechaLimiteDe(e, mes));
+  // Los avisos miran los fijos y los variables por igual: lo que importa es
+  // que haya algo con fecha y sin pagar, sea del tipo que sea.
+  const conFecha = [...gastosFijos, ...gastosVar, ...arrastre];
+
   return {
-    gastosFijos, gastosVar, ingFijos, ingVar,
+    gastosFijos, gastosVar, ingFijos, ingVar, arrastre,
     totalGastoFijo: suma(gastosFijos), totalGastoVar: suma(gastosVar),
     totalIngFijo: suma(ingFijos), totalIngVar: suma(ingVar),
-    porPagar: suma(gastosFijos.filter(e=>!pagadoEn(e, mes))),
-    vencidos: gastosFijos.filter(e=>!pagadoEn(e, mes) && daysUntil(vencimientoDe(e, mes))<0),
-    porVencer: gastosFijos.filter(e=>!pagadoEn(e, mes) && daysUntil(vencimientoDe(e, mes))>=0 && daysUntil(vencimientoDe(e, mes))<=5),
+    pagadoGastoFijo: gastosFijos.reduce((s,e)=>s+Math.min(pagadoDe(e, mes), Number(e.amount||0)), 0),
+    porPagar: sumaSaldos(gastosFijos) + sumaSaldos(gastosVar) + sumaSaldos(arrastre),
+    porCobrar: sumaSaldos(ingFijos),
+    vencidos: conFecha.filter(e=>pendiente(e) && diasDe(e)<0),
+    porVencer: conFecha.filter(e=>pendiente(e) && diasDe(e)>=0 && diasDe(e)<=5),
   };
 }
 /* Cuántas cuentas personales piden atención — se muestra junto a la pestaña. */
@@ -6869,6 +7612,728 @@ function bloquearPersonal(){
   renderPanel();
 }
 
+/* =====================================================================
+   PRÉSTAMOS, RECAUDACIONES Y JUNTAS
+   Van dentro de la pestaña Personal para que queden bajo la misma clave:
+   son datos privados, no del centro.
+   ===================================================================== */
+
+/* ---------- Préstamos que le dieron a Luis ----------
+   Cada préstamo tiene quién lo da, quién lo recibe, capital, tasa mensual y
+   un cronograma de cuotas. Dos formas de pago:
+     'cuotas'  cuota fija que amortiza capital e intereses (sistema francés)
+     'interes' solo se paga el interés cada mes; el capital queda entero
+               hasta que se cancela. Así son los de SS IRMA y ramiro.
+   La "liquidación" de una cuota es lo que costaría cancelar todo ese mes:
+   el capital que queda más el interés de ese periodo.                      */
+function prestamosLista(){ return Array.isArray(DB.prestamos)? DB.prestamos : []; }
+function redondear(n){ return Math.round((Number(n)||0)*100)/100; }
+
+/* Suma meses a una fecha respetando el día de pago (el 31 cae al último día). */
+function sumarMeses(fechaISO, meses){
+  const [y,m,d] = String(fechaISO).split('-').map(Number);
+  const base = new Date(y, (m-1)+meses, 1);
+  const ultimo = new Date(base.getFullYear(), base.getMonth()+1, 0).getDate();
+  const dia = Math.min(d || 1, ultimo);
+  return `${base.getFullYear()}-${String(base.getMonth()+1).padStart(2,'0')}-${String(dia).padStart(2,'0')}`;
+}
+
+/* Arma el cronograma completo a partir del capital, la tasa y el número de
+   cuotas. Conserva qué cuotas ya estaban marcadas como pagadas. */
+function generarCronograma(p){
+  const pagadas = {};
+  (p.cuotas||[]).forEach(c=>{ if(c.pagada) pagadas[c.n] = c.fechaPago || ''; });
+
+  const capital = Number(p.capital||0);
+  const tasa    = Number(p.tasaMensual||0)/100;
+  const n       = Math.max(1, Number(p.nCuotas||1));
+  const primera = p.fechaPrimera || todayISO();
+  const cuotas  = [];
+
+  if(p.tipo === 'interes'){
+    // Solo intereses: cada mes se paga el interés y el capital sigue igual.
+    // La última cuota incluye la devolución del capital.
+    for(let i=1; i<=n; i++){
+      const intereses = redondear(capital * tasa);
+      const esUltima  = i === n;
+      cuotas.push({
+        n:i, saldoInicial: capital,
+        amortizacion: esUltima? capital : 0,
+        intereses,
+        cuota: redondear(esUltima? capital + intereses : intereses),
+        fecha: sumarMeses(primera, i-1),
+        pagada: !!pagadas[i], fechaPago: pagadas[i] || '',
+      });
+    }
+    return cuotas;
+  }
+
+  if(p.tipo === 'acumula'){
+    // El interés se acumula: no se paga nada mes a mes y la deuda crece.
+    // Cada mes que pasa, cancelar cuesta un interés más.
+    for(let i=1; i<=n; i++){
+      const intereses = redondear(capital * tasa * i);
+      cuotas.push({
+        n:i, saldoInicial: capital,
+        amortizacion: capital, intereses,
+        cuota: redondear(capital + intereses),
+        fecha: sumarMeses(primera, i-1),
+        pagada: !!pagadas[i], fechaPago: pagadas[i] || '',
+        acumulado: true,
+      });
+    }
+    return cuotas;
+  }
+
+  // Cuota fija: el interés se calcula sobre el saldo, el resto amortiza.
+  let saldo = capital;
+  const cuotaFija = Number(p.cuotaFija||0) > 0
+    ? Number(p.cuotaFija)
+    : (tasa>0 ? redondear(capital * tasa / (1 - Math.pow(1+tasa, -n))) : redondear(capital/n));
+
+  for(let i=1; i<=n; i++){
+    const intereses = redondear(saldo * tasa);
+    let amortizacion = redondear(cuotaFija - intereses);
+    let cuota = cuotaFija;
+    // En la última se cancela lo que quede, aunque la cuota salga distinta.
+    if(i === n || amortizacion >= saldo){
+      amortizacion = redondear(saldo);
+      cuota = redondear(amortizacion + intereses);
+    }
+    cuotas.push({
+      n:i, saldoInicial: redondear(saldo), amortizacion, intereses, cuota,
+      fecha: sumarMeses(primera, i-1),
+      pagada: !!pagadas[i], fechaPago: pagadas[i] || '',
+    });
+    saldo = redondear(saldo - amortizacion);
+    if(saldo <= 0) break;
+  }
+  return cuotas;
+}
+
+/* Cuota que corresponde a un capital, una tasa y un número de meses,
+   sin redondear. Es la fórmula de cuota fija de toda la vida. */
+function cuotaCalculada(p){
+  const capital = Number(p.capital||0);
+  const tasa    = Number(p.tasaMensual||0)/100;
+  const n       = Math.max(1, Number(p.nCuotas||1));
+  if(capital <= 0) return 0;
+  if(tasa <= 0) return redondear(capital / n);
+  return redondear(capital * tasa / (1 - Math.pow(1+tasa, -n)));
+}
+
+/* La cuota ya redondeada a soles enteros, y siempre para el lado que le
+   conviene a Luis: si el préstamo se lo dieron a él, hacia abajo (paga
+   menos cada mes); si él lo prestó, hacia arriba (cobra más cada mes).
+   La última cuota del cronograma absorbe la diferencia. */
+function cuotaRedondeada(p){
+  const exacta = cuotaCalculada(p);
+  if(exacta <= 0) return 0;
+  const aFavor = p.direccion === 'otorgado' ? Math.ceil(exacta) : Math.floor(exacta);
+  // Si al bajarla la cuota no alcanza ni para el interés del primer mes,
+  // la deuda nunca bajaría: en ese caso se sube.
+  const interesMes = redondear(Number(p.capital||0) * Number(p.tasaMensual||0)/100);
+  if(aFavor < 1 || (p.tipo !== 'interes' && p.tipo !== 'acumula' && aFavor <= interesMes)){
+    return Math.ceil(exacta);
+  }
+  return aFavor;
+}
+
+function cuotasDe(p){
+  return (p.cuotas && p.cuotas.length)? p.cuotas : generarCronograma(p);
+}
+/* Lo que costaría cancelar todo en esa cuota: capital pendiente + su interés. */
+function liquidacionEn(c){ return redondear(Number(c.saldoInicial||0) + Number(c.intereses||0)); }
+
+function cuotasPagadasDe(p){ return cuotasDe(p).filter(c=>c.pagada); }
+function abonadoDePrestamo(p){
+  return redondear(cuotasPagadasDe(p).reduce((s,c)=>s+Number(c.cuota||0), 0));
+}
+/* Saldo = lo que falta por pagar.
+   En los de interés acumulado, las filas del cronograma NO se suman: cada una
+   es una alternativa (cancelar en ese mes cuesta eso). El saldo es lo que
+   costaría cancelar en el mes que toca ahora. */
+function saldoDePrestamo(p){
+  const pendientes = cuotasDe(p).filter(c=>!c.pagada);
+  if(pendientes.length === 0) return 0;
+  if(p.tipo === 'acumula'){
+    const hoy = todayISO();
+    const vigente = pendientes.filter(c=>c.fecha <= hoy).pop() || pendientes[0];
+    return redondear(vigente.cuota);
+  }
+  return redondear(pendientes.reduce((s,c)=>s+Number(c.cuota||0), 0));
+}
+/* Si quisiera cancelarlo hoy: la liquidación de la primera cuota sin pagar. */
+function liquidacionHoyDe(p){
+  const pend = cuotasDe(p).find(c=>!c.pagada);
+  return pend? liquidacionEn(pend) : 0;
+}
+function proximaCuotaDe(p){
+  return cuotasDe(p).find(c=>!c.pagada) || null;
+}
+function totalDeudaPrestamos(){
+  return redondear(prestamosLista().reduce((s,p)=>s+saldoDePrestamo(p), 0));
+}
+function totalInteresesDe(p){
+  return redondear(cuotasDe(p).reduce((s,c)=>s+Number(c.intereses||0), 0));
+}
+
+async function guardarPrestamos(msg){
+  const ok = await setColl('prestamos', DB.prestamos);
+  if(msg) showToast(ok? msg : 'No se pudo guardar, reintentando…', ok);
+  renderPanel();
+}
+/* Nombre de quien recibe el préstamo. Por defecto Luis, que es el caso de
+   todos los suyos, pero se puede cambiar por ficha. */
+function receptorPorDefecto(){
+  return (DB.centerInfo && DB.centerInfo.titular) || 'Luis Yangua';
+}
+
+/* Un préstamo puede ir en dos direcciones:
+     'recibido' te lo dieron a ti — es una deuda
+     'otorgado' tú lo diste     — es plata que te deben
+   Los cálculos son los mismos; lo que cambia es quién debe a quién. */
+function esOtorgado(p){ return (p.direccion||'recibido') === 'otorgado'; }
+function prestamosPorDireccion(dir){
+  return prestamosLista().filter(p=>(p.direccion||'recibido')===dir);
+}
+function totalPorDireccion(dir){
+  return redondear(prestamosPorDireccion(dir).reduce((s,p)=>s+saldoDePrestamo(p), 0));
+}
+
+/* ---------- Formulario con cálculo en vivo ---------- */
+let editandoPrestamoId = null;
+
+/* Lee el formulario y arma el préstamo, sin guardarlo todavía. */
+function leerFormPrestamo(){
+  const g = id => (document.getElementById(id)||{}).value ?? '';
+  const num = id => Number(String(g(id)).replace(',','.')) || 0;
+  return {
+    id: editandoPrestamoId || uid(),
+    direccion: g('pr_direccion') || 'recibido',
+    prestamista: g('pr_prestamista').trim(),
+    receptor: g('pr_receptor').trim(),
+    capital: redondear(num('pr_capital')),
+    tasaMensual: redondear(num('pr_tasa')),
+    tipo: g('pr_tipo') || 'cuotas',
+    nCuotas: Math.max(1, Number(g('pr_ncuotas'))||1),
+    cuotaFija: redondear(num('pr_cuota')),
+    cuotaModo: g('pr_cuotaModo') || 'auto',
+    fechaPrimera: /^\d{4}-\d{2}-\d{2}$/.test(g('pr_fecha'))? g('pr_fecha') : todayISO(),
+    notas: g('pr_notas').trim(),
+    cuotas: [],
+    createdAt: todayISO(),
+  };
+}
+
+/* Recalcula y muestra la simulación cada vez que se toca un campo.
+   Es la "evaluación": pones monto y meses, y ves de cuánto sale la cuota. */
+function simularPrestamo(){
+  const caja = document.getElementById('pr_simulacion');
+  if(!caja) return;
+
+  // Quién presta y quién recibe se autocompletan según la dirección.
+  const dir = (document.getElementById('pr_direccion')||{}).value || 'recibido';
+  const lblQuien = document.getElementById('pr_lblPrestamista');
+  const lblRecibe = document.getElementById('pr_lblReceptor');
+  if(lblQuien)  lblQuien.textContent  = dir==='otorgado'? 'Quién presta (tú)' : 'Quién te presta';
+  if(lblRecibe) lblRecibe.textContent = dir==='otorgado'? 'Quién lo solicita y recibe' : 'Quién lo recibe';
+
+  const esCuotas = ((document.getElementById('pr_tipo')||{}).value || 'cuotas') === 'cuotas';
+  const wrapCuota = document.getElementById('pr_cuotaWrap');
+  if(wrapCuota) wrapCuota.style.display = esCuotas? 'block' : 'none';
+
+  // La cuota se calcula y se escribe en el campo, para que se vea el número
+  // con el que se va a trabajar en vez de un 0. Redondeada a soles enteros
+  // es más cómoda de cobrar: nadie anda pagando S/ 319.66.
+  const modo   = (document.getElementById('pr_cuotaModo')||{}).value || 'auto';
+  const campo  = document.getElementById('pr_cuota');
+  const hintC  = document.getElementById('pr_cuotaHint');
+  if(esCuotas && campo){
+    const manual = modo === 'manual';
+    campo.readOnly = !manual;
+    campo.style.background = manual? '' : '#eee';
+    if(!manual){
+      const borrador = leerFormPrestamo();
+      const exacta = cuotaCalculada(borrador);
+      const valor  = modo==='auto' ? cuotaRedondeada(borrador) : exacta;
+      campo.value = valor > 0 ? valor : '';
+      if(hintC){
+        const recibido = dir !== 'otorgado';
+        hintC.innerHTML = (valor>0 && modo==='auto' && Math.abs(valor-exacta)>0.004)
+          ? (recibido
+              ? `Cuota exacta ${fmtMoney(exacta)} → redondeada <b>a tu favor: pagas ${fmtMoney(valor)}</b>. La última cuota absorbe la diferencia.`
+              : `Cuota exacta ${fmtMoney(exacta)} → redondeada <b>a tu favor: cobras ${fmtMoney(valor)}</b>. La última cuota se ajusta sola.`)
+          : 'Calculada a partir del monto, el interés y los meses.';
+      }
+    } else if(hintC){
+      hintC.textContent = 'Escribe la cuota acordada; el panel arma el cronograma con ella.';
+    }
+  }
+
+  const p = leerFormPrestamo();
+  if(p.capital <= 0){
+    caja.innerHTML = '<p class="hint">Escribe el monto para ver la simulación.</p>';
+    return;
+  }
+  const cuotas = generarCronograma(p);
+  const totalPagar    = redondear(cuotas.reduce((s,c)=>s+Number(c.cuota||0),0));
+  const totalInteres  = redondear(cuotas.reduce((s,c)=>s+Number(c.intereses||0),0));
+  const cuotaTipica   = cuotas.length? cuotas[0].cuota : 0;
+  const quienPaga     = p.direccion==='otorgado'? (p.receptor||'quien lo recibe') : 'tú';
+
+  // En el interés acumulado no se suman las filas: cada una es una alternativa.
+  const resumen = p.tipo==='acumula'
+    ? `<tr><td>Si cancela al mes ${cuotas.length}</td><td style="text-align:right"><b>${fmtMoney(cuotas[cuotas.length-1].cuota)}</b></td></tr>
+       <tr><td>Interés que se acumula por mes</td><td style="text-align:right">${fmtMoney(redondear(p.capital*p.tasaMensual/100))}</td></tr>`
+    : `<tr><td>Cuota mensual</td><td style="text-align:right"><b style="font-size:18px">${fmtMoney(cuotaTipica)}</b></td></tr>
+       <tr><td>Número de cuotas</td><td style="text-align:right">${cuotas.length}</td></tr>
+       <tr><td>Total a pagar</td><td style="text-align:right"><b>${fmtMoney(totalPagar)}</b></td></tr>
+       <tr><td>De eso, intereses</td><td style="text-align:right">${fmtMoney(totalInteres)}</td></tr>
+       <tr><td>Última cuota</td><td style="text-align:right">${fmtMoney(cuotas[cuotas.length-1].cuota)}</td></tr>`;
+
+  caja.innerHTML = `
+    <div style="border:2px solid var(--accent);border-radius:10px;padding:12px 14px">
+      <b>Evaluación del préstamo</b>
+      <p class="hint" style="margin:4px 0 8px">Cambia el monto, la tasa o los meses y esto se recalcula solo.</p>
+      <table style="width:100%">${resumen}</table>
+      <p class="hint" style="margin:8px 0 0">Sobre ${fmtMoney(p.capital)} al ${p.tasaMensual}% mensual, ${quienPaga===''?'':quienPaga+' '}
+        ${p.tipo==='acumula'? 'no paga nada mes a mes y la deuda crece'
+          : `paga ${fmtMoney(cuotaTipica)} al mes durante ${cuotas.length} meses`}.</p>
+      <details style="margin-top:8px"><summary class="linkbtn">Ver el cronograma completo</summary>
+        <div class="tablewrap" style="margin-top:6px"><table>
+          <tr><th>N°</th><th>Fecha</th><th style="text-align:right">Deuda</th><th style="text-align:right">Amortiza</th>
+              <th style="text-align:right">Interés</th><th style="text-align:right">Cuota</th></tr>
+          ${cuotas.map(c=>`<tr><td>${c.n}</td><td>${c.fecha}</td>
+            <td style="text-align:right">${fmtMoney(c.saldoInicial)}</td>
+            <td style="text-align:right">${fmtMoney(c.amortizacion)}</td>
+            <td style="text-align:right">${fmtMoney(c.intereses)}</td>
+            <td style="text-align:right"><b>${fmtMoney(c.cuota)}</b></td></tr>`).join('')}
+        </table></div>
+      </details>
+    </div>`;
+}
+
+function nuevoPrestamo(direccion){
+  editandoPrestamoId = null;
+  const form = document.getElementById('prestamoForm');
+  if(form && !form.classList.contains('open')) toggleForm('prestamoForm');
+  const set = (id,v)=>{ const e=document.getElementById(id); if(e) e.value = v; };
+  set('pr_direccion', direccion || 'recibido');
+  set('pr_prestamista', direccion==='otorgado'? receptorPorDefecto() : '');
+  set('pr_receptor',    direccion==='otorgado'? '' : receptorPorDefecto());
+  set('pr_capital',''); set('pr_tasa','5'); set('pr_tipo','cuotas');
+  set('pr_ncuotas','12'); set('pr_cuotaModo','auto'); set('pr_cuota','0');
+  set('pr_fecha', todayISO()); set('pr_notas','');
+  const btn = document.getElementById('pr_saveBtn');
+  if(btn) btn.textContent = 'Guardar préstamo';
+  simularPrestamo();
+  const el = document.getElementById('pr_capital');
+  if(el){ el.focus(); el.scrollIntoView({block:'center', behavior:'smooth'}); }
+}
+function editarPrestamo(id){
+  const p = prestamosLista().find(x=>x.id===id); if(!p) return;
+  editandoPrestamoId = id;
+  const form = document.getElementById('prestamoForm');
+  if(form && !form.classList.contains('open')) toggleForm('prestamoForm');
+  const set = (i,v)=>{ const e=document.getElementById(i); if(e) e.value = v; };
+  set('pr_direccion', p.direccion||'recibido');
+  set('pr_prestamista', p.prestamista||''); set('pr_receptor', p.receptor||'');
+  set('pr_capital', p.capital); set('pr_tasa', p.tasaMensual);
+  set('pr_tipo', p.tipo||'cuotas'); set('pr_ncuotas', p.nCuotas);
+  set('pr_cuotaModo', p.cuotaModo || 'manual');
+  set('pr_cuota', p.cuotaFija||0); set('pr_fecha', p.fechaPrimera||todayISO());
+  set('pr_notas', p.notas||'');
+  const btn = document.getElementById('pr_saveBtn');
+  if(btn) btn.textContent = 'Guardar cambios';
+  simularPrestamo();
+  document.getElementById('pr_capital').scrollIntoView({block:'center', behavior:'smooth'});
+}
+async function guardarPrestamoForm(){
+  const d = leerFormPrestamo();
+  if(!d.prestamista){ alert('Falta indicar quién presta.'); return; }
+  if(!d.receptor){ alert('Falta indicar quién recibe el dinero.'); return; }
+  if(d.capital<=0){ alert('El monto tiene que ser mayor que cero.'); return; }
+
+  if(editandoPrestamoId){
+    const anterior = prestamosLista().find(x=>x.id===editandoPrestamoId);
+    d.cuotas = generarCronograma({...d, cuotas: anterior? anterior.cuotas : []});
+    d.createdAt = anterior? anterior.createdAt : todayISO();
+    DB.prestamos = DB.prestamos.map(x=>x.id===editandoPrestamoId? d : x);
+  } else {
+    d.cuotas = generarCronograma(d);
+    DB.prestamos.push(d);
+  }
+  editandoPrestamoId = null;
+  toggleForm('prestamoForm');
+  const quien = esOtorgado(d)? d.receptor : d.prestamista;
+  guardarPrestamos(`Préstamo de ${quien} guardado: ${d.cuotas.length} cuotas de ${fmtMoney(d.cuotas[0].cuota)}.`);
+}
+function cancelarPrestamoForm(){
+  editandoPrestamoId = null;
+  toggleForm('prestamoForm');
+}
+/* Marca o desmarca una cuota como pagada. */
+function marcarCuota(id, n){
+  const p = prestamosLista().find(x=>x.id===id); if(!p) return;
+  const cuotas = cuotasDe(p);
+  const c = cuotas.find(x=>x.n===n); if(!c) return;
+  const nuevas = cuotas.map(x=>x.n!==n? x
+    : {...x, pagada: !x.pagada, fechaPago: !x.pagada? todayISO() : ''});
+  DB.prestamos = DB.prestamos.map(x=>x.id===id? {...x, cuotas:nuevas} : x);
+  guardarPrestamos(c.pagada
+    ? `Cuota ${n} marcada como NO pagada.`
+    : `Cuota ${n} pagada (${fmtMoney(c.cuota)}).`);
+}
+/* Cancelar todo el préstamo en este momento, pagando la liquidación. */
+function liquidarPrestamo(id){
+  const p = prestamosLista().find(x=>x.id===id); if(!p) return;
+  const prox = proximaCuotaDe(p);
+  if(!prox){ showToast('Ese préstamo ya está cancelado.'); return; }
+  const liq = liquidacionEn(prox);
+  if(!confirm(`Cancelar el préstamo de ${p.prestamista} en la cuota ${prox.n}.\n\n`
+    + `Capital pendiente: ${fmtMoney(prox.saldoInicial)}\n`
+    + `Interés del mes: ${fmtMoney(prox.intereses)}\n`
+    + `LIQUIDACIÓN: ${fmtMoney(liq)}\n\n`
+    + `Se darán por pagadas las ${cuotasDe(p).filter(c=>!c.pagada).length} cuotas que faltan. ¿Continuar?`)) return;
+  const nuevas = cuotasDe(p).map(c=>c.pagada? c
+    : {...c, pagada:true, fechaPago:todayISO(), liquidadaEn: prox.n});
+  DB.prestamos = DB.prestamos.map(x=>x.id===id
+    ? {...x, cuotas:nuevas, liquidado:{fecha:todayISO(), monto:liq, enCuota:prox.n}} : x);
+  guardarPrestamos(`${p.prestamista}: liquidado por ${fmtMoney(liq)}.`);
+}
+function borrarPrestamo(id){
+  const p = prestamosLista().find(x=>x.id===id); if(!p) return;
+  if(!confirm(`¿Eliminar el préstamo de ${p.prestamista}? Se pierde su cronograma y lo marcado como pagado.`)) return;
+  DB.prestamos = DB.prestamos.filter(x=>x.id!==id);
+  guardarPrestamos('Préstamo eliminado.');
+}
+/* Muestra u oculta el cronograma completo de un préstamo. */
+let prestamoAbierto = null;
+function verCronograma(id){
+  prestamoAbierto = (prestamoAbierto===id)? null : id;
+  renderPanel();
+}
+
+/* ---------- Recaudación: fondo colectivo que él organiza ----------
+   Cada participante aporta una cuota por mes. Interesa ver quién ya pagó,
+   quién debe y de qué mes, y poder liquidar lo reunido cuando toque. */
+const MESES_CORTOS = ['01','02','03','04','05','06','07','08','09','10','11','12'];
+const MES_NOMBRE = {'01':'Ene','02':'Feb','03':'Mar','04':'Abr','05':'May','06':'Jun',
+                    '07':'Jul','08':'Ago','09':'Set','10':'Oct','11':'Nov','12':'Dic'};
+
+function recaudacionesLista(){ return Array.isArray(DB.recaudaciones)? DB.recaudaciones : []; }
+function aporteDe(part, mes){ return Number((part.aportes||{})[mes] || 0); }
+function totalAportadoPor(part){
+  return Object.values(part.aportes||{}).reduce((s,v)=>s+Number(v||0), 0);
+}
+function totalRecaudado(rec){
+  return (rec.participantes||[]).reduce((s,p)=>s+totalAportadoPor(p), 0);
+}
+function totalLiquidado(rec){
+  return (rec.liquidaciones||[]).reduce((s,l)=>s+Number(l.monto||0), 0);
+}
+function saldoEnCaja(rec){
+  return Math.round((totalRecaudado(rec) - totalLiquidado(rec))*100)/100;
+}
+/* Meses que un participante debe y no ha aportado, hasta el mes en curso. */
+function mesesQueDebe(rec, part){
+  const hoy = todayISO().slice(0,7);
+  return MESES_CORTOS
+    .map(m=>`${rec.anio}-${m}`)
+    .filter(mes => mes <= hoy && aporteDe(part, mes) <= 0);
+}
+
+async function guardarRecaudaciones(msg){
+  const ok = await setColl('recaudaciones', DB.recaudaciones);
+  if(msg) showToast(ok? msg : 'No se pudo guardar, reintentando…', ok);
+  renderPanel();
+}
+function nuevaRecaudacion(){
+  const nombre = prompt('Nombre del fondo', 'Aporte para fin de año');
+  if(!nombre || !nombre.trim()) return;
+  const cuota = Number(String(prompt('Cuota mensual por persona (soles)','50')||'').replace(',','.'));
+  if(!isFinite(cuota) || cuota<=0){ alert('Escribe una cuota mayor que cero.'); return; }
+  const anio = String(prompt('Año del fondo', todayISO().slice(0,4)) || todayISO().slice(0,4)).trim();
+  DB.recaudaciones.push({id:uid(), nombre:nombre.trim(), cuotaMensual:Math.round(cuota*100)/100,
+    anio, participantes:[], liquidaciones:[], createdAt:todayISO()});
+  guardarRecaudaciones('Fondo creado.');
+}
+function editarRecaudacion(id){
+  const r = recaudacionesLista().find(x=>x.id===id); if(!r) return;
+  const nombre = prompt('Nombre del fondo', r.nombre); if(nombre===null) return;
+  const cuota = prompt('Cuota mensual por persona (soles)', String(r.cuotaMensual)); if(cuota===null) return;
+  const n = Number(String(cuota).replace(',','.'));
+  if(!isFinite(n) || n<=0){ alert('Escribe una cuota válida.'); return; }
+  DB.recaudaciones = DB.recaudaciones.map(x=>x.id===id
+    ? {...x, nombre:nombre.trim()||x.nombre, cuotaMensual:Math.round(n*100)/100} : x);
+  guardarRecaudaciones('Fondo actualizado.');
+}
+function agregarParticipante(recId){
+  const nombre = prompt('Nombre del participante');
+  if(!nombre || !nombre.trim()) return;
+  const grado = prompt('Grado o cargo (opcional)', '') || '';
+  DB.recaudaciones = DB.recaudaciones.map(r=>r.id===recId
+    ? {...r, participantes:[...(r.participantes||[]), {id:uid(), nombre:nombre.trim(), grado:grado.trim(), aportes:{}}]}
+    : r);
+  guardarRecaudaciones('Participante agregado.');
+}
+function editarParticipante(recId, partId){
+  const r = recaudacionesLista().find(x=>x.id===recId); if(!r) return;
+  const p = (r.participantes||[]).find(x=>x.id===partId); if(!p) return;
+  const nombre = prompt('Nombre', p.nombre); if(nombre===null) return;
+  const grado = prompt('Grado o cargo', p.grado||'');
+  DB.recaudaciones = DB.recaudaciones.map(x=>x.id!==recId? x : {...x,
+    participantes:x.participantes.map(y=>y.id!==partId? y
+      : {...y, nombre:nombre.trim()||y.nombre, grado:(grado===null? y.grado : grado.trim())})});
+  guardarRecaudaciones('Participante actualizado.');
+}
+function quitarParticipante(recId, partId){
+  const r = recaudacionesLista().find(x=>x.id===recId);
+  const p = r && (r.participantes||[]).find(x=>x.id===partId);
+  if(!p) return;
+  if(!confirm(`¿Quitar a ${p.nombre} del fondo? Se pierden sus aportes registrados.`)) return;
+  DB.recaudaciones = DB.recaudaciones.map(x=>x.id!==recId? x
+    : {...x, participantes:x.participantes.filter(y=>y.id!==partId)});
+  guardarRecaudaciones('Participante quitado.');
+}
+/* Marca o desmarca el aporte de un mes. Un clic registra la cuota; otro lo borra.
+   Si aportó un monto distinto (doble cuota, por ejemplo), se puede escribir. */
+function marcarAporte(recId, partId, mes){
+  const r = recaudacionesLista().find(x=>x.id===recId); if(!r) return;
+  const p = (r.participantes||[]).find(x=>x.id===partId); if(!p) return;
+  const actual = aporteDe(p, mes);
+  let nuevo;
+  if(actual > 0){
+    nuevo = 0;   // ya estaba pagado: se quita
+  } else {
+    const resp = prompt(`${p.nombre} — ${MES_NOMBRE[mes.slice(5)]} ${mes.slice(0,4)}\n\n¿Cuánto aportó?`, String(r.cuotaMensual));
+    if(resp===null) return;
+    nuevo = Number(String(resp).replace(',','.'));
+    if(!isFinite(nuevo) || nuevo<0){ alert('Escribe un monto válido.'); return; }
+  }
+  DB.recaudaciones = DB.recaudaciones.map(x=>x.id!==recId? x : {...x,
+    participantes:x.participantes.map(y=>{
+      if(y.id!==partId) return y;
+      const ap = {...(y.aportes||{})};
+      if(nuevo>0) ap[mes] = Math.round(nuevo*100)/100; else delete ap[mes];
+      return {...y, aportes:ap};
+    })});
+  guardarRecaudaciones();
+}
+/* Liquidar: sacar plata de lo reunido, dejando constancia de cuándo y cuánto. */
+function liquidarRecaudacion(recId){
+  const r = recaudacionesLista().find(x=>x.id===recId); if(!r) return;
+  const caja = saldoEnCaja(r);
+  if(caja<=0){ alert('No hay nada reunido para liquidar.'); return; }
+  const resp = prompt(`${r.nombre}\n\nReunido y disponible: ${fmtMoney(caja)}\n\n¿Cuánto vas a liquidar (entregar)?`, String(caja));
+  if(resp===null) return;
+  const monto = Number(String(resp).replace(',','.'));
+  if(!isFinite(monto) || monto<=0){ alert('Escribe un monto mayor que cero.'); return; }
+  if(monto>caja && !confirm(`Vas a liquidar ${fmtMoney(monto)} pero solo hay ${fmtMoney(caja)}.\n\n¿Continuar igual?`)) return;
+  const nota = prompt('¿A quién o para qué? (queda como constancia)', '') || '';
+  DB.recaudaciones = DB.recaudaciones.map(x=>x.id!==recId? x : {...x,
+    liquidaciones:[...(x.liquidaciones||[]), {id:uid(), fecha:todayISO(), monto:Math.round(monto*100)/100, nota:nota.trim()}]});
+  guardarRecaudaciones(`Liquidación de ${fmtMoney(monto)} registrada.`);
+}
+function quitarLiquidacion(recId, liqId){
+  if(!confirm('¿Eliminar esta liquidación? El dinero vuelve a figurar como disponible.')) return;
+  DB.recaudaciones = DB.recaudaciones.map(x=>x.id!==recId? x
+    : {...x, liquidaciones:(x.liquidaciones||[]).filter(l=>l.id!==liqId)});
+  guardarRecaudaciones('Liquidación eliminada.');
+}
+function borrarRecaudacion(id){
+  const r = recaudacionesLista().find(x=>x.id===id); if(!r) return;
+  if(!confirm(`¿Eliminar el fondo "${r.nombre}"? Se pierden participantes, aportes y liquidaciones.`)) return;
+  DB.recaudaciones = DB.recaudaciones.filter(x=>x.id!==id);
+  guardarRecaudaciones('Fondo eliminado.');
+}
+
+/* ---------- Juntas: las que organiza otra persona y él aporta ---------- */
+function juntasLista(){ return Array.isArray(DB.juntas)? DB.juntas : []; }
+function totalPagadoJunta(j){ return (j.pagos||[]).reduce((s,p)=>s+Number(p.monto||0), 0); }
+function totalComprometidoJunta(j){
+  return Math.round(Number(j.cuota||0) * Number(j.totalCuotas||0) * 100)/100;
+}
+function faltaJunta(j){
+  return Math.max(0, Math.round((totalComprometidoJunta(j) - totalPagadoJunta(j))*100)/100);
+}
+
+/* En una junta, el número que te tocó define en qué mes te entregan el pozo:
+   el participante 4 cobra en el cuarto mes, contando desde el primero. */
+function mesDeMiTurno(j){
+  const n = Number(j.miNumero||0);
+  if(!n || !j.mesInicio) return '';
+  const [y,m] = String(j.mesInicio).split('-').map(Number);
+  if(!y || !m) return '';
+  const d = new Date(y, (m-1) + (n-1), 1);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+}
+/* Lo que te entregan cuando te toca: la cuota por todos los participantes. */
+function montoDeMiTurno(j){
+  return redondear(Number(j.cuota||0) * Number(j.participantes||j.totalCuotas||0));
+}
+/* Fecha de la próxima cuota que te toca pagar, según el día acordado.
+   Si ya registraste la de este mes, salta al siguiente. */
+function proximoPagoJunta(j){
+  const dia = Math.min(Math.max(Number(j.diaPago)||1, 1), 31);
+  const pagados = new Set((j.pagos||[]).map(p=>p.periodo));
+  const inicio = j.mesInicio || todayISO().slice(0,7);
+  for(let i=0; i<Number(j.totalCuotas||12); i++){
+    const [y,m] = inicio.split('-').map(Number);
+    const d = new Date(y, (m-1)+i, 1);
+    const mes = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+    if(!pagados.has(mes)){
+      const ultimo = new Date(d.getFullYear(), d.getMonth()+1, 0).getDate();
+      return {mes, fecha:`${mes}-${String(Math.min(dia,ultimo)).padStart(2,'0')}`};
+    }
+  }
+  return null;
+}
+
+/* ---------- Avisos de lo personal: cuotas por vencer y turno de junta ---------- */
+function avisosPersonales(){
+  const avisos = [];
+  const hoy = todayISO();
+
+  prestamosLista().forEach(p=>{
+    const prox = proximaCuotaDe(p);
+    if(!prox) return;
+    const dias = daysUntil(prox.fecha);
+    const cobrar = esOtorgado(p);
+    const quien  = cobrar? (p.receptor||'—') : p.prestamista;
+    const verbo  = cobrar? 'te debe cobrar' : 'tienes que pagar';
+    if(dias < 0){
+      avisos.push({nivel:'alert',
+        texto:`<b>${quien}</b>: ${cobrar? 'te debe' : 'debes'} la cuota ${prox.n} de ${fmtMoney(prox.cuota)} — <b>vencida hace ${-dias} día(s)</b> (${prox.fecha}).`});
+    } else if(dias <= 7){
+      avisos.push({nivel:'warn',
+        texto:`<b>${quien}</b>: cuota ${prox.n} de ${fmtMoney(prox.cuota)} — ${cobrar? 'te la pagan' : verbo} ${dias===0?'<b>HOY</b>':`en ${dias} día(s)`} (${prox.fecha}).`});
+    }
+  });
+
+  juntasLista().forEach(j=>{
+    const prox = proximoPagoJunta(j);
+    if(prox){
+      const dias = daysUntil(prox.fecha);
+      if(dias < 0){
+        avisos.push({nivel:'alert', texto:`<b>Junta de ${j.organizadora}</b>: cuota de ${prox.mes} (${fmtMoney(j.cuota)}) <b>vencida hace ${-dias} día(s)</b>.`});
+      } else if(dias <= 7){
+        avisos.push({nivel:'warn', texto:`<b>Junta de ${j.organizadora}</b>: te toca pagar ${fmtMoney(j.cuota)} el ${prox.fecha}${dias===0?' — <b>HOY</b>':` (en ${dias} día(s))`}.`});
+      }
+    }
+    const turno = mesDeMiTurno(j);
+    if(turno){
+      const mesHoy = hoy.slice(0,7);
+      const monto = montoDeMiTurno(j);
+      if(turno === mesHoy){
+        avisos.push({nivel:'ok', texto:`<b>¡Este mes te toca cobrar la junta de ${j.organizadora}!</b> Te corresponden ${fmtMoney(monto)}.`});
+      } else if(turno > mesHoy){
+        avisos.push({nivel:'ok', texto:`<b>Junta de ${j.organizadora}</b>: eres el número ${j.miNumero}, te toca cobrar en <b>${turno}</b> (${fmtMoney(monto)}).`});
+      }
+    }
+  });
+
+  return avisos;
+}
+function bloqueAvisosPersonales(){
+  const avisos = avisosPersonales();
+  if(!avisos.length) return '';
+  const color = {alert:'#fdecea', warn:'#fff6e5', ok:'#e8f5e9'};
+  const borde = {alert:'var(--alert)', warn:'var(--accent)', ok:'var(--ok)'};
+  return `<div style="margin:14px 0">
+    ${avisos.map(a=>`<div style="background:${color[a.nivel]};border-left:4px solid ${borde[a.nivel]};
+      border-radius:6px;padding:10px 14px;margin-bottom:6px">${a.texto}</div>`).join('')}
+  </div>`;
+}
+
+async function guardarJuntas(msg){
+  const ok = await setColl('juntas', DB.juntas);
+  if(msg) showToast(ok? msg : 'No se pudo guardar, reintentando…', ok);
+  renderPanel();
+}
+function datosJunta(j){
+  const nombre = prompt('¿Quién organiza la junta?', j? j.organizadora : '');
+  if(nombre===null || !nombre.trim()) return null;
+  const cu = prompt('¿Cuánto aportas por cuota? (soles)', j? String(j.cuota) : '300');
+  if(cu===null) return null;
+  const cuota = Number(String(cu).replace(',','.'));
+  if(!isFinite(cuota) || cuota<=0){ alert('Escribe una cuota mayor que cero.'); return null; }
+
+  const np = prompt('¿Cuántos participantes son en total?', j? String(j.participantes||j.totalCuotas||10) : '10');
+  if(np===null) return null;
+  const participantes = Math.max(1, Number(np)||10);
+
+  const mn = prompt(`¿Qué NÚMERO te tocó a ti?\n\nEse número decide en qué mes te entregan la junta:\nel número 4 cobra en el cuarto mes.`,
+                    j? String(j.miNumero||'') : '');
+  if(mn===null) return null;
+  const miNumero = Math.max(0, Number(mn)||0);
+
+  const mi = prompt('¿En qué mes empezó la junta? (AAAA-MM)', j? (j.mesInicio||todayISO().slice(0,7)) : todayISO().slice(0,7));
+  if(mi===null) return null;
+  const mesInicio = /^\d{4}-\d{2}$/.test(mi.trim())? mi.trim() : todayISO().slice(0,7);
+
+  const di = prompt('¿Qué día del mes se paga?', j? String(j.diaPago||27) : '27');
+  if(di===null) return null;
+
+  return {
+    id: j? j.id : uid(),
+    organizadora: nombre.trim(),
+    cuota: redondear(cuota),
+    participantes,
+    totalCuotas: participantes,   // en una junta hay tantas cuotas como participantes
+    miNumero, mesInicio,
+    diaPago: String(Math.min(Math.max(Number(di)||27,1),31)),
+    pagos: j? j.pagos : [],
+    createdAt: j? j.createdAt : todayISO(),
+  };
+}
+function nuevaJunta(){
+  const d = datosJunta(null);
+  if(!d) return;
+  DB.juntas.push(d);
+  const turno = mesDeMiTurno(d);
+  guardarJuntas(turno? `Junta agregada. Te toca cobrar en ${turno}.` : 'Junta agregada.');
+}
+function editarJunta(id){
+  const j = juntasLista().find(x=>x.id===id); if(!j) return;
+  const d = datosJunta(j);
+  if(!d) return;
+  DB.juntas = DB.juntas.map(x=>x.id===id? d : x);
+  guardarJuntas('Junta actualizada.');
+}
+function pagarCuotaJunta(id){
+  const j = juntasLista().find(x=>x.id===id); if(!j) return;
+  const sugerido = proximoPagoJunta(j);
+  const periodo = prompt('¿De qué mes es la cuota? (AAAA-MM)', sugerido? sugerido.mes : todayISO().slice(0,7));
+  if(!periodo) return;
+  const mes = periodo.trim();
+  // No dejar registrar dos veces el mismo mes: es el error más fácil de
+  // cometer y descuadra el conteo de cuotas.
+  if((j.pagos||[]).some(p=>p.periodo===mes)){
+    alert(`La cuota de ${mes} ya está registrada.\n\nSi la pagaste dos veces o el monto está mal, quita la anterior con "quitar" y vuelve a registrarla.`);
+    return;
+  }
+  const monto = Number(String(prompt('Monto pagado', String(j.cuota))||'').replace(',','.'));
+  if(!isFinite(monto) || monto<=0){ alert('Escribe un monto mayor que cero.'); return; }
+  const dia = Math.min(Math.max(Number(j.diaPago)||27,1),31);
+  DB.juntas = DB.juntas.map(x=>x.id!==id? x : {...x,
+    pagos:[...(x.pagos||[]), {id:uid(), periodo:mes, fecha:`${mes}-${String(dia).padStart(2,'0')}`, monto:redondear(monto)}]
+      .sort((a,b)=>a.periodo.localeCompare(b.periodo))});
+  guardarJuntas(`Cuota de ${mes} registrada.`);
+}
+function quitarPagoJunta(id, pagoId){
+  if(!confirm('¿Eliminar esta cuota pagada?')) return;
+  DB.juntas = DB.juntas.map(x=>x.id!==id? x : {...x, pagos:(x.pagos||[]).filter(p=>p.id!==pagoId)});
+  guardarJuntas('Cuota eliminada.');
+}
+function borrarJunta(id){
+  const j = juntasLista().find(x=>x.id===id); if(!j) return;
+  if(!confirm(`¿Eliminar la junta de ${j.organizadora}? Se pierde el historial de cuotas.`)) return;
+  DB.juntas = DB.juntas.filter(x=>x.id!==id);
+  guardarJuntas('Junta eliminada.');
+}
+
 function viewPersonal(){
   const cfg = personalConfig();
   if(cfg.pinEnabled && !personalDesbloqueado) return vistaPersonalBloqueada();
@@ -6881,27 +8346,51 @@ function viewPersonal(){
   const filaFijo = (e)=>{
     const est = estadoVencimiento(e, mes);
     const pagado = pagadoEn(e, mes);
+    const abonado = pagadoDe(e, mes);
+    const saldo = saldoDe(e, mes);
+    const nAbonos = abonosDeMes(e, mes).length;
+    const esIngreso = e.tipo==='ingreso';
     return `<tr style="${pagado?'opacity:.7':''}">
       <td><b>${e.name}</b><br><span class="hint">${e.category||'Otro'}${e.notes? ' · '+e.notes:''}</span></td>
       <td>Día ${Math.min(Number(e.dueDay)||1,31)}</td>
       <td><span class="chip ${est.clase}">${est.texto}</span></td>
-      <td style="text-align:right">${fmtMoney(e.amount)}</td>
+      <td style="text-align:right;white-space:nowrap">${fmtMoney(e.amount)}</td>
+      <td style="text-align:right;white-space:nowrap">${abonado>0? fmtMoney(abonado) : '—'}
+        ${nAbonos>1? `<br><span class="hint">${nAbonos} abonos</span>`:''}</td>
+      <td style="text-align:right;white-space:nowrap">${saldo>0? `<b style="color:var(--alert)">${fmtMoney(saldo)}</b>` : '<span class="chip ok">Al día</span>'}</td>
       <td>
-        <button class="btn small ${pagado?'secondary':''}" onclick="togglePersonalPagado('${e.id}')">${pagado? 'Marcar sin pagar' : (e.tipo==='ingreso'?'Marcar cobrado':'Marcar pagado')}</button>
+        ${saldo>0? `<button class="btn small" onclick="openAbonoModal('${e.id}')">${esIngreso? 'Registrar cobro':'Registrar pago'}</button>`:''}
+        ${abonado>0? `<button class="btn small secondary" onclick="openAbonoModal('${e.id}')">Ver ${esIngreso?'cobros':'pagos'}</button>`:''}
         <button class="btn small secondary" onclick="editPersonal('${e.id}')">Editar</button>
         <button class="btn small danger" onclick="deletePersonal('${e.id}')">Eliminar</button>
       </td>
     </tr>`;
   };
-  const filaVar = (e)=>`<tr>
-    <td><b>${e.name}</b><br><span class="hint">${e.category||'Otro'}${e.notes? ' · '+e.notes:''}</span></td>
-    <td>${e.date||'—'}</td>
-    <td style="text-align:right">${fmtMoney(e.amount)}</td>
-    <td>
-      <button class="btn small secondary" onclick="editPersonal('${e.id}')">Editar</button>
-      <button class="btn small danger" onclick="deletePersonal('${e.id}')">Eliminar</button>
-    </td>
-  </tr>`;
+  // Un variable es un pago único: se paga una vez y se termina. Por eso lleva
+  // las mismas columnas que un fijo pero su fecha no se renueva.
+  const filaVar = (e)=>{
+    const est = estadoVencimiento(e, mes);
+    const pagado = pagadoEn(e, mes);
+    const abonado = pagadoDe(e, mes);
+    const saldo = saldoDe(e, mes);
+    const esIngreso = e.tipo==='ingreso';
+    return `<tr style="${pagado?'opacity:.7':''}">
+      <td><b>${e.name}</b><br><span class="hint">${e.category||'Otro'}${e.notes? ' · '+e.notes:''}</span></td>
+      <td style="white-space:nowrap">${e.date||'—'}</td>
+      <td><span class="chip ${est.clase}">${est.texto}</span></td>
+      <td style="text-align:right;white-space:nowrap">${fmtMoney(e.amount)}</td>
+      <td style="text-align:right;white-space:nowrap">${abonado>0? fmtMoney(abonado) : '—'}</td>
+      <td style="text-align:right;white-space:nowrap">${saldo>0? `<b style="color:var(--alert)">${fmtMoney(saldo)}</b>` : '<span class="chip ok">Al día</span>'}</td>
+      <td>
+        ${saldo>0? `<button class="btn small" onclick="openAbonoModal('${e.id}')">${esIngreso? 'Registrar cobro':'Registrar pago'}</button>`:''}
+        ${abonado>0? `<button class="btn small secondary" onclick="openAbonoModal('${e.id}')">Ver ${esIngreso?'cobros':'pagos'}</button>`:''}
+        <button class="btn small secondary" onclick="editPersonal('${e.id}')">Editar</button>
+        <button class="btn small danger" onclick="deletePersonal('${e.id}')">Eliminar</button>
+      </td>
+    </tr>`;
+  };
+  const cabeceraVar = (etiqueta, verbo)=>
+    `<tr><th>${etiqueta}</th><th>Fecha</th><th>Estado</th><th style="text-align:right">Monto</th><th style="text-align:right">${verbo}</th><th style="text-align:right">Falta</th><th></th></tr>`;
 
   const avisos = [...r.vencidos, ...r.porVencer];
   const bloqueAvisos = avisos.length? `
@@ -6925,13 +8414,14 @@ function viewPersonal(){
     <p class="hint" style="margin-bottom:14px">Tu dinero personal, separado del dinero del centro. Nada de lo que registres aquí entra en Finanzas ni en los reportes del centro.</p>
 
     ${bloqueAvisos}
+    ${bloqueAvisosPersonales()}
 
     <div class="kpi-grid">
       <div class="kpi ok"><div class="num">${fmtMoney(ingresos)}</div><div class="label">Ingresos del mes</div></div>
       <div class="kpi"><div class="num">${fmtMoney(r.totalGastoFijo)}</div><div class="label">Gastos fijos</div></div>
       <div class="kpi"><div class="num">${fmtMoney(r.totalGastoVar)}</div><div class="label">Gastos variables del mes</div></div>
       <div class="kpi ${saldo>=0?'ok':'alert'}"><div class="num">${fmtMoney(saldo)}</div><div class="label">Te queda este mes</div></div>
-      <div class="kpi ${r.porPagar>0?'alert':'ok'}"><div class="num">${fmtMoney(r.porPagar)}</div><div class="label">Aún por pagar</div></div>
+      <div class="kpi ${r.porPagar>0?'alert':'ok'}"><div class="num">${fmtMoney(r.porPagar)}</div><div class="label">Aún por pagar${r.pagadoGastoFijo>0? ` (ya diste ${fmtMoney(r.pagadoGastoFijo)})`:''}</div></div>
     </div>
 
     <div class="formpanel" id="personalForm">
@@ -6953,7 +8443,9 @@ function viewPersonal(){
         <div class="field" id="pn_paidWrap"><label id="pn_paidLabel">Fecha de pago</label><input type="date" id="pn_paidDate">
           <p class="hint" style="margin-top:3px" id="pn_paidHint"></p>
         </div>
-        <div class="field" id="pn_dateWrap" style="display:none"><label>Fecha</label><input type="date" id="pn_date" value="${todayISO()}"></div>
+        <div class="field" id="pn_dateWrap" style="display:none"><label id="pn_dateLabel">Fecha</label><input type="date" id="pn_date" value="${todayISO()}">
+          <p class="hint" style="margin-top:3px" id="pn_dateHint"></p>
+        </div>
         <div class="field" style="grid-column:1/-1"><label>Nota (opcional)</label><input id="pn_notes" placeholder="Detalle, número de cuenta, a quién se le paga…"></div>
       </div>
       <button class="btn" onclick="savePersonal()">Guardar</button>
@@ -6961,42 +8453,355 @@ function viewPersonal(){
     </div>
 
     <h3 style="margin-top:22px">Gastos fijos <span class="hint" style="font-weight:400">— ${fmtMoney(r.totalGastoFijo)} al mes</span></h3>
-    <p class="hint">Se repiten cada mes. Marca cada uno cuando lo pagues; el mes que viene vuelven a aparecer sin marcar.</p>
+    <p class="hint">Se repiten cada mes. Puedes pagarlos de una vez o ir dando adelantos: la columna <b>Falta</b> dice cuánto queda por pagar. El mes que viene vuelven a aparecer en cero.</p>
     <div class="tablewrap" style="margin-bottom:18px">
-      ${r.gastosFijos.length? `<table><tr><th>Gasto</th><th>Vence</th><th>Estado</th><th style="text-align:right">Monto</th><th></th></tr>${r.gastosFijos.map(filaFijo).join('')}</table>`
+      ${r.gastosFijos.length? `<table><tr><th>Gasto</th><th>Vence</th><th>Estado</th><th style="text-align:right">Monto</th><th style="text-align:right">Pagado</th><th style="text-align:right">Falta</th><th></th></tr>${r.gastosFijos.map(filaFijo).join('')}</table>`
       : '<div class="empty">Sin gastos fijos registrados.</div>'}
     </div>
 
     <h3 style="margin-top:22px">Gastos variables de ${mes} <span class="hint" style="font-weight:400">— ${fmtMoney(r.totalGastoVar)}</span></h3>
-    <p class="hint">Lo que gastas suelto este mes: mercado, transporte, una salida. Cada uno pesa solo en su mes.</p>
+    <p class="hint">Lo que gastas suelto este mes: mercado, transporte, una salida. Cada uno pesa solo en su mes y se paga <b>una sola vez</b>: no se renueva al mes siguiente como los fijos. Si pusiste la fecha en que toca pagarlo, te avisa cuando se acerca.</p>
     <div class="tablewrap" style="margin-bottom:18px">
-      ${r.gastosVar.length? `<table><tr><th>Gasto</th><th>Fecha</th><th style="text-align:right">Monto</th><th></th></tr>${r.gastosVar.map(filaVar).join('')}</table>`
+      ${r.gastosVar.length? `<table>${cabeceraVar('Gasto','Pagado')}${r.gastosVar.map(filaVar).join('')}</table>`
       : '<div class="empty">Sin gastos variables este mes.</div>'}
     </div>
 
+    ${r.arrastre.length? `
+    <h3 style="margin-top:22px">Sin pagar de meses anteriores <span class="hint" style="font-weight:400">— ${fmtMoney(r.arrastre.reduce((s,e)=>s+saldoDe(e,mes),0))}</span></h3>
+    <p class="hint">Gastos sueltos de meses pasados que todavía debes. Siguen aquí hasta que los pagues, pero <b>no</b> se suman al gasto de este mes: ya pesaron en el suyo.</p>
+    <div class="tablewrap" style="margin-bottom:18px">
+      <table>${cabeceraVar('Gasto','Pagado')}${r.arrastre.map(filaVar).join('')}</table>
+    </div>`:''}
+
     <h3 style="margin-top:22px">Ingresos <span class="hint" style="font-weight:400">— ${fmtMoney(ingresos)} este mes</span></h3>
     <div class="tablewrap" style="margin-bottom:8px">
-      ${r.ingFijos.length? `<table><tr><th>Ingreso fijo</th><th>Se cobra</th><th>Estado</th><th style="text-align:right">Monto</th><th></th></tr>${r.ingFijos.map(filaFijo).join('')}</table>`
+      ${r.ingFijos.length? `<table><tr><th>Ingreso fijo</th><th>Se cobra</th><th>Estado</th><th style="text-align:right">Monto</th><th style="text-align:right">Cobrado</th><th style="text-align:right">Falta</th><th></th></tr>${r.ingFijos.map(filaFijo).join('')}</table>`
       : '<div class="empty">Sin ingresos fijos registrados.</div>'}
     </div>
     <div class="tablewrap">
-      ${r.ingVar.length? `<table><tr><th>Ingreso variable</th><th>Fecha</th><th style="text-align:right">Monto</th><th></th></tr>${r.ingVar.map(filaVar).join('')}</table>`
+      ${r.ingVar.length? `<table>${cabeceraVar('Ingreso variable','Cobrado')}${r.ingVar.map(filaVar).join('')}</table>`
       : '<div class="empty">Sin ingresos variables este mes.</div>'}
     </div>
+    <p class="hint" style="margin-top:6px">Aquí van también los ingresos de tus otros trabajos: agrégalos con <b>+ Registrar</b> eligiendo el tipo <b>Ingreso</b>.</p>
+
+    ${bloquePrestamos()}
+    ${bloqueRecaudaciones()}
+    ${bloqueJuntas()}
   `;
+}
+
+/* ---------- Pantalla de préstamos ---------- */
+/* Formulario único, sirve para los dos sentidos. */
+function formularioPrestamo(){
+  return `
+  <div class="formpanel" id="prestamoForm">
+    <div class="formgrid">
+      <div class="field"><label>¿Qué préstamo es?</label>
+        <select id="pr_direccion" onchange="simularPrestamo()">
+          <option value="recibido">Me lo dieron a mí (deuda)</option>
+          <option value="otorgado">Yo lo di (me deben)</option>
+        </select>
+      </div>
+      <div class="field"><label id="pr_lblPrestamista">Quién te presta</label>
+        <input type="text" id="pr_prestamista" oninput="simularPrestamo()" placeholder="Nombre de quien da el dinero">
+      </div>
+      <div class="field"><label id="pr_lblReceptor">Quién lo recibe</label>
+        <input type="text" id="pr_receptor" oninput="simularPrestamo()" placeholder="Nombre de quien recibe el dinero">
+      </div>
+      <div class="field"><label>Monto prestado (S/)</label>
+        <input type="number" id="pr_capital" min="0" step="0.01" oninput="simularPrestamo()" placeholder="Ej: 4000">
+      </div>
+      <div class="field"><label>Interés mensual (%)</label>
+        <input type="number" id="pr_tasa" min="0" step="0.01" value="5" oninput="simularPrestamo()">
+        <p class="hint" style="margin-top:3px">Por mes, no por año. Ej: 9 para 9% mensual.</p>
+      </div>
+      <div class="field"><label>¿En cuántos meses paga?</label>
+        <input type="number" id="pr_ncuotas" min="1" value="12" oninput="simularPrestamo()">
+      </div>
+      <div class="field"><label>Forma de pago</label>
+        <select id="pr_tipo" onchange="simularPrestamo()">
+          <option value="cuotas">Cuotas fijas (la cuota baja la deuda)</option>
+          <option value="interes">Solo intereses (el capital al final)</option>
+          <option value="acumula">Interés acumulado (no paga y la deuda crece)</option>
+        </select>
+      </div>
+      <div class="field" id="pr_cuotaWrap"><label>Cuota mensual (S/)</label>
+        <select id="pr_cuotaModo" onchange="simularPrestamo()" style="margin-bottom:6px">
+          <option value="auto" id="pr_cuotaModoAuto">Redondear a soles enteros a mi favor</option>
+          <option value="exacta">Calcularla exacta (con céntimos)</option>
+          <option value="manual">La escribo yo</option>
+        </select>
+        <input type="number" id="pr_cuota" min="0" step="0.01" value="0" oninput="simularPrestamo()">
+        <p class="hint" style="margin-top:3px" id="pr_cuotaHint"></p>
+      </div>
+      <div class="field"><label>Fecha de la primera cuota</label>
+        <input type="date" id="pr_fecha" onchange="simularPrestamo()">
+      </div>
+      <div class="field" style="grid-column:1/-1"><label>Nota (opcional)</label>
+        <input type="text" id="pr_notas" placeholder="Ej: cuotas del 2 de cada mes">
+      </div>
+    </div>
+    <div id="pr_simulacion" style="margin:12px 0"></div>
+    <button class="btn" id="pr_saveBtn" onclick="guardarPrestamoForm()">Guardar préstamo</button>
+    <button class="btn secondary" onclick="cancelarPrestamoForm()">Cancelar</button>
+  </div>`;
+}
+
+function bloquePrestamos(){
+  return formularioPrestamo()
+       + tablaPrestamos('recibido')
+       + tablaPrestamos('otorgado');
+}
+
+function tablaPrestamos(dir){
+  const otorgado = dir === 'otorgado';
+  const lista = [...prestamosPorDireccion(dir)].sort((a,b)=>saldoDePrestamo(b)-saldoDePrestamo(a));
+  const totalDeuda = totalPorDireccion(dir);
+  const totalAbonado = redondear(lista.reduce((s,p)=>s+abonadoDePrestamo(p),0));
+
+  const filas = lista.map(p=>{
+    const cuotas  = cuotasDe(p);
+    const saldo   = saldoDePrestamo(p);
+    const pagadas = cuotasPagadasDe(p).length;
+    const pct     = cuotas.length? Math.round(pagadas/cuotas.length*100) : 0;
+    const prox    = proximaCuotaDe(p);
+    const dias    = prox? daysUntil(prox.fecha) : null;
+    const abierto = prestamoAbierto === p.id;
+
+    const cronograma = !abierto ? '' : `
+      <tr><td colspan="6" style="background:var(--bg-soft);padding:10px">
+        <p class="hint" style="margin:0 0 6px">Toca una cuota para marcarla pagada o quitarle la marca.
+          <b>Liquidación</b> es lo que costaría cancelar todo ese mes: el capital que falta más el interés.</p>
+        <div class="tablewrap"><table>
+          <tr><th>N°</th><th>Fecha</th><th style="text-align:right">Capital</th>
+              <th style="text-align:right">Amortiza</th><th style="text-align:right">Interés</th>
+              <th style="text-align:right">Cuota</th><th style="text-align:right">Liquidación</th><th></th></tr>
+          ${cuotas.map(c=>{
+            const venc = !c.pagada && c.fecha <= todayISO();
+            return `<tr style="${c.pagada?'background:#e8f5e9':(venc?'background:#fdecea':'')}">
+              <td>${c.n}</td>
+              <td>${c.fecha}${c.pagada && c.fechaPago? `<br><span class="hint">pagada ${c.fechaPago}</span>`:''}</td>
+              <td style="text-align:right">${fmtMoney(c.saldoInicial)}</td>
+              <td style="text-align:right">${fmtMoney(c.amortizacion)}</td>
+              <td style="text-align:right">${fmtMoney(c.intereses)}</td>
+              <td style="text-align:right"><b>${fmtMoney(c.cuota)}</b></td>
+              <td style="text-align:right">${c.pagada? '—' : fmtMoney(liquidacionEn(c))}</td>
+              <td><button class="btn small ${c.pagada?'secondary':''}" onclick="marcarCuota('${p.id}',${c.n})">
+                ${c.pagada? 'Quitar pago' : 'Pagar'}</button></td>
+            </tr>`;
+          }).join('')}
+        </table></div>
+      </td></tr>`;
+
+    const forma = {cuotas:'cuotas fijas', interes:'solo intereses', acumula:'interés acumulado'}[p.tipo] || 'cuotas fijas';
+    return `<tr style="${saldo<=0?'opacity:.6':''}">
+      <td><b>${otorgado? (p.receptor||'—') : p.prestamista}</b>
+        <br><span class="hint">${otorgado
+            ? `Se lo prestaste tú (${p.prestamista||receptorPorDefecto()})`
+            : `Te lo dio a ti (${p.receptor || receptorPorDefecto()})`}</span>
+        <br><span class="hint">${fmtMoney(p.capital)} al ${p.tasaMensual}% mensual · ${forma}</span>
+        ${p.notas? `<br><span class="hint">${p.notas}</span>`:''}</td>
+      <td style="text-align:center">${pagadas} / ${cuotas.length}<br><span class="hint">${pct}%</span></td>
+      <td style="text-align:right">${prox
+          ? `${fmtMoney(prox.cuota)}<br><span class="hint">${prox.fecha}${
+              dias!==null? (dias<0? ` · <b style="color:var(--alert)">${-dias} día(s) vencida</b>`
+                          : dias===0? ' · <b style="color:var(--alert)">HOY</b>'
+                          : ` · en ${dias} día(s)`) : ''}</span>`
+          : '<span class="chip ok">Terminado</span>'}</td>
+      <td style="text-align:right">${saldo>0? `<b style="color:var(--alert)">${fmtMoney(saldo)}</b>` : '<span class="chip ok">Cancelado</span>'}</td>
+      <td style="text-align:right">${prox? fmtMoney(liquidacionHoyDe(p)) : '—'}</td>
+      <td style="white-space:nowrap">
+        <button class="btn small ${abierto?'':'secondary'}" onclick="verCronograma('${p.id}')">${abierto?'Ocultar':'Cronograma'}</button>
+        ${prox? `<button class="btn small secondary" onclick="liquidarPrestamo('${p.id}')">Liquidar</button>`:''}
+        <button class="btn small secondary" onclick="editarPrestamo('${p.id}')">Editar</button>
+        <button class="btn small danger" onclick="borrarPrestamo('${p.id}')">Eliminar</button>
+      </td>
+    </tr>${cronograma}`;
+  }).join('');
+
+  const totalIntereses = lista.reduce((s,p)=>s+totalInteresesDe(p), 0);
+  const totalCapital   = lista.reduce((s,p)=>s+Number(p.capital||0), 0);
+
+  return `
+    <div class="sectiontitle" style="margin-top:30px">
+      <h2>${otorgado? 'Préstamos que diste (te deben)' : 'Préstamos que te dieron (debes)'}</h2>
+      <button class="btn" onclick="nuevoPrestamo('${dir}')">+ ${otorgado? 'Prestar a alguien' : 'Registrar préstamo que me dieron'}</button>
+    </div>
+    <p class="hint">${otorgado
+      ? 'Dinero que prestaste. Al crear uno, pones el monto, el interés que le vas a cobrar y en cuántos meses paga — el panel calcula la cuota y arma el cronograma.'
+      : 'Deudas tuyas, con quién te las dio, su tasa y el cronograma de cuotas. Marcas la cuota cuando la pagas y el saldo baja solo.'}</p>
+    <div class="kpi-grid" style="margin-bottom:12px">
+      <div class="kpi ${totalDeuda>0? (otorgado?'warn':'alert') : 'ok'}"><div class="num">${fmtMoney(totalDeuda)}</div>
+        <div class="label">${otorgado? 'Te deben' : 'Te falta pagar'}</div></div>
+      <div class="kpi"><div class="num">${fmtMoney(totalAbonado)}</div>
+        <div class="label">${otorgado? 'Ya te pagaron' : 'Ya pagado'}</div></div>
+      <div class="kpi"><div class="num">${fmtMoney(totalCapital)}</div>
+        <div class="label">${otorgado? 'Capital prestado' : 'Capital recibido'}</div></div>
+      <div class="kpi ${otorgado?'ok':'warn'}"><div class="num">${fmtMoney(totalIntereses)}</div>
+        <div class="label">${otorgado? 'Intereses a tu favor' : 'Intereses del total'}</div></div>
+    </div>
+    <div class="tablewrap">
+      ${filas? `<table><tr><th>${otorgado? 'A quién le prestaste':'Quién te presta'}</th><th style="text-align:center">Cuotas</th><th style="text-align:right">Próxima</th><th style="text-align:right">${otorgado?'Falta cobrar':'Falta pagar'}</th><th style="text-align:right">${otorgado?'Si cancela hoy':'Liquidar hoy'}</th><th></th></tr>${filas}</table>`
+      : `<div class="empty">${otorgado? 'Todavía no le has prestado a nadie.' : 'Sin préstamos registrados.'}</div>`}
+    </div>`;
+}
+
+/* ---------- Pantalla de recaudaciones ---------- */
+function bloqueRecaudaciones(){
+  const bloques = recaudacionesLista().map(rec=>{
+    const meses = MESES_CORTOS.map(m=>`${rec.anio}-${m}`);
+    const hoy = todayISO().slice(0,7);
+
+    const filas = (rec.participantes||[]).map((p,i)=>{
+      const celdas = meses.map(mes=>{
+        const monto = aporteDe(p, mes);
+        const vencido = mes <= hoy;
+        const fondo = monto>0 ? 'var(--ok)' : (vencido? '#f6d5d2' : 'transparent');
+        const color = monto>0 ? '#fff' : 'inherit';
+        return `<td style="text-align:center;padding:2px;cursor:pointer;background:${fondo};color:${color}"
+                    title="${MES_NOMBRE[mes.slice(5)]} ${rec.anio} — clic para marcar o quitar"
+                    onclick="marcarAporte('${rec.id}','${p.id}','${mes}')">${monto>0? monto : (vencido?'—':'')}</td>`;
+      }).join('');
+      const debe = mesesQueDebe(rec, p);
+      return `<tr>
+        <td style="white-space:nowrap">${i+1}. <b>${p.nombre}</b>${p.grado? `<br><span class="hint">${p.grado}</span>`:''}</td>
+        ${celdas}
+        <td style="text-align:right"><b>${fmtMoney(totalAportadoPor(p))}</b></td>
+        <td>${debe.length
+          ? `<span class="chip alert">Debe ${debe.length}</span><br><span class="hint">${debe.map(m=>MES_NOMBRE[m.slice(5)]).join(', ')}</span>`
+          : '<span class="chip ok">Al día</span>'}</td>
+        <td style="white-space:nowrap">
+          <button class="btn small secondary" onclick="editarParticipante('${rec.id}','${p.id}')">Editar</button>
+          <button class="btn small danger" onclick="quitarParticipante('${rec.id}','${p.id}')">Quitar</button>
+        </td>
+      </tr>`;
+    }).join('');
+
+    const totalesMes = meses.map(mes=>{
+      const t = (rec.participantes||[]).reduce((s,p)=>s+aporteDe(p,mes),0);
+      return `<td style="text-align:center"><b>${t||''}</b></td>`;
+    }).join('');
+
+    const liqRows = (rec.liquidaciones||[]).slice().reverse().map(l=>`<tr>
+      <td>${l.fecha}</td><td>${l.nota||'—'}</td>
+      <td style="text-align:right">${fmtMoney(l.monto)}</td>
+      <td><button class="btn small danger" onclick="quitarLiquidacion('${rec.id}','${l.id}')">Eliminar</button></td>
+    </tr>`).join('');
+
+    return `
+      <div style="border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:16px">
+        <div class="sectiontitle" style="margin-top:0">
+          <h3 style="margin:0">${rec.nombre} — ${rec.anio}</h3>
+          <div>
+            <button class="btn small" onclick="agregarParticipante('${rec.id}')">+ Participante</button>
+            <button class="btn small secondary" onclick="liquidarRecaudacion('${rec.id}')">Liquidar</button>
+            <button class="btn small secondary" onclick="editarRecaudacion('${rec.id}')">Editar</button>
+            <button class="btn small danger" onclick="borrarRecaudacion('${rec.id}')">Eliminar</button>
+          </div>
+        </div>
+        <div class="kpi-grid" style="margin:10px 0">
+          <div class="kpi"><div class="num">${fmtMoney(totalRecaudado(rec))}</div><div class="label">Reunido</div></div>
+          <div class="kpi"><div class="num">${fmtMoney(totalLiquidado(rec))}</div><div class="label">Liquidado</div></div>
+          <div class="kpi ok"><div class="num">${fmtMoney(saldoEnCaja(rec))}</div><div class="label">En caja</div></div>
+          <div class="kpi"><div class="num">${(rec.participantes||[]).length}</div><div class="label">Participantes · ${fmtMoney(rec.cuotaMensual)} c/u</div></div>
+        </div>
+        <p class="hint">Toca una casilla para marcar o quitar el aporte de ese mes. Verde = pagó. Rojo = mes vencido sin pagar.</p>
+        <div class="tablewrap">
+          ${filas? `<table>
+            <tr><th>Participante</th>${MESES_CORTOS.map(m=>`<th style="text-align:center">${MES_NOMBRE[m]}</th>`).join('')}<th style="text-align:right">Total</th><th>Estado</th><th></th></tr>
+            ${filas}
+            <tr style="background:var(--bg-soft)"><td><b>Total por mes</b></td>${totalesMes}<td style="text-align:right"><b>${fmtMoney(totalRecaudado(rec))}</b></td><td></td><td></td></tr>
+          </table>` : '<div class="empty">Todavía no hay participantes. Agrega el primero con "+ Participante".</div>'}
+        </div>
+        ${liqRows? `<h4 style="margin:14px 0 4px">Liquidaciones hechas</h4>
+        <div class="tablewrap"><table><tr><th>Fecha</th><th>Concepto</th><th style="text-align:right">Monto</th><th></th></tr>${liqRows}</table></div>`:''}
+      </div>`;
+  }).join('');
+
+  return `
+    <div class="sectiontitle" style="margin-top:30px">
+      <h2>Recaudaciones que organizas</h2>
+      <button class="btn" onclick="nuevaRecaudacion()">+ Nuevo fondo</button>
+    </div>
+    <p class="hint">Fondos colectivos donde cada persona aporta una cuota por mes. Puedes liquidar lo reunido cuando quieras y queda la constancia.</p>
+    ${bloques || '<div class="empty">Sin fondos registrados.</div>'}`;
+}
+
+/* ---------- Pantalla de juntas ---------- */
+function bloqueJuntas(){
+  const filas = juntasLista().map(j=>{
+    const pagado = totalPagadoJunta(j);
+    const comprometido = totalComprometidoJunta(j);
+    const falta = faltaJunta(j);
+    const cuotasPagadas = (j.pagos||[]).length;
+    const pagos = (j.pagos||[]).slice().reverse().map(p=>
+      `<div class="hint">${p.periodo} · ${fmtMoney(p.monto)} <button class="linkbtn" onclick="quitarPagoJunta('${j.id}','${p.id}')">quitar</button></div>`).join('');
+    const turno = mesDeMiTurno(j);
+    const prox  = proximoPagoJunta(j);
+    return `<tr>
+      <td><b>${j.organizadora}</b>
+          <br><span class="hint">${fmtMoney(j.cuota)} × ${j.totalCuotas} cuotas${j.diaPago? ` · día ${j.diaPago} de cada mes`:''}</span>
+          ${j.miNumero? `<br><span class="hint">Eres el número ${j.miNumero} de ${j.participantes||j.totalCuotas}</span>`:''}
+          ${turno? `<br><span class="chip ok">Cobras en ${turno}: ${fmtMoney(montoDeMiTurno(j))}</span>`:''}
+          ${prox? `<br><span class="hint">Próxima cuota: ${prox.fecha}</span>`:''}
+          ${pagos? `<div style="margin-top:6px">${pagos}</div>`:''}</td>
+      <td style="text-align:center">${cuotasPagadas} / ${j.totalCuotas}</td>
+      <td style="text-align:right">${fmtMoney(pagado)}</td>
+      <td style="text-align:right">${falta>0? `<b style="color:var(--alert)">${fmtMoney(falta)}</b>` : '<span class="chip ok">Completa</span>'}</td>
+      <td style="white-space:nowrap">
+        <button class="btn small" onclick="pagarCuotaJunta('${j.id}')">Registrar cuota</button>
+        <button class="btn small secondary" onclick="editarJunta('${j.id}')">Editar</button>
+        <button class="btn small danger" onclick="borrarJunta('${j.id}')">Eliminar</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  const totalPagado = juntasLista().reduce((s,j)=>s+totalPagadoJunta(j),0);
+  const totalFalta  = juntasLista().reduce((s,j)=>s+faltaJunta(j),0);
+
+  return `
+    <div class="sectiontitle" style="margin-top:30px">
+      <h2>Juntas en las que participas</h2>
+      <button class="btn" onclick="nuevaJunta()">+ Agregar junta</button>
+    </div>
+    <p class="hint">Juntas que organiza otra persona y en las que tú aportas. Aquí controlas qué cuotas ya pagaste y cuánto te falta.</p>
+    ${juntasLista().length? `<div class="kpi-grid" style="margin-bottom:12px">
+      <div class="kpi"><div class="num">${fmtMoney(totalPagado)}</div><div class="label">Ya aportado</div></div>
+      <div class="kpi ${totalFalta>0?'warn':'ok'}"><div class="num">${fmtMoney(totalFalta)}</div><div class="label">Te falta aportar</div></div>
+    </div>`:''}
+    <div class="tablewrap">
+      ${filas? `<table><tr><th>Organiza</th><th style="text-align:center">Cuotas</th><th style="text-align:right">Aportado</th><th style="text-align:right">Falta</th><th></th></tr>${filas}</table>`
+      : '<div class="empty">Sin juntas registradas.</div>'}
+    </div>`;
 }
 function togglePersonalCampos(){
   const tipo = document.getElementById('pn_tipo').value;
   const fijo = document.getElementById('pn_clase').value==='fijo';
-  document.getElementById('pn_paidWrap').style.display = fijo? '':'none';
+  // La fecha de pago también hace falta en un gasto suelto: sirve para decir
+  // si ya está pagado o sigue pendiente. Antes se ocultaba y todo variable se
+  // daba por pagado.
+  document.getElementById('pn_paidWrap').style.display = '';
   document.getElementById('pn_dateWrap').style.display = fijo? 'none':'';
   const lblPago = document.getElementById('pn_paidLabel');
   const hintPago = document.getElementById('pn_paidHint');
+  const lblFecha = document.getElementById('pn_dateLabel');
+  const hintFecha = document.getElementById('pn_dateHint');
   const esIngreso = tipo==='ingreso';
   if(lblPago) lblPago.textContent = esIngreso? 'Fecha de cobro' : 'Fecha de pago';
-  if(hintPago) hintPago.innerHTML = esIngreso
-    ? 'El <b>día</b> de esta fecha se toma como el día en que cobras cada mes. Déjalo vacío si aún no lo has cobrado.'
-    : 'El <b>día</b> de esta fecha se toma como vencimiento de cada mes; te avisamos 5 días antes. Déjalo vacío si aún no lo pagas.';
+  if(hintPago) hintPago.innerHTML = fijo
+    ? (esIngreso
+        ? 'El <b>día</b> de esta fecha se toma como el día en que cobras cada mes. Déjalo vacío si aún no lo has cobrado. Si te lo pagan por partes, regístralas después con "Registrar cobro".'
+        : 'El <b>día</b> de esta fecha se toma como vencimiento de cada mes; te avisamos 5 días antes. Déjalo vacío si aún no lo pagas. Si vas a pagarlo por partes, registra cada adelanto después con "Registrar pago".')
+    : (esIngreso
+        ? 'Cuándo te lo cobraron. <b>Déjalo vacío si todavía no te pagan</b>: queda pendiente y se te avisa según la fecha de arriba.'
+        : 'Cuándo lo pagaste. <b>Déjalo vacío si todavía no lo pagas</b>: queda pendiente y se te avisa según la fecha de arriba.');
+  if(lblFecha) lblFecha.textContent = esIngreso? '¿Para cuándo te lo deben?' : '¿Para cuándo hay que pagarlo?';
+  if(hintFecha) hintFecha.innerHTML = 'Es un pago único: no se repite el mes que viene. De esta fecha salen los días que faltan y el aviso si se pasa.';
+  // Lo normal al anotar un gasto suelto es que ya lo pagaste, así que la fecha
+  // viene puesta en hoy. Si es algo que todavía debes, se borra y queda
+  // pendiente. Al editar no se toca: mandaría lo que ya estaba guardado.
+  const campoPago = document.getElementById('pn_paidDate');
+  if(campoPago && !fijo && !editingPersonalId && !campoPago.value) campoPago.value = todayISO();
   const cats = tipo==='ingreso'? PERSONAL_CAT_INGRESO : PERSONAL_CAT_GASTO;
   const sel = document.getElementById('pn_category');
   const previo = sel.value;
@@ -7019,6 +8824,11 @@ function editPersonal(id){
 }
 function cancelPersonalEdit(){
   editingPersonalId = null;
+  // Se limpian las fechas: si no, el siguiente movimiento hereda la fecha de
+  // pago del anterior y nace marcado como pagado sin que nadie lo diga.
+  ['pn_name','pn_amount','pn_notes','pn_paidDate'].forEach(k=>{
+    const el = document.getElementById(k); if(el) el.value = '';
+  });
   const f = document.getElementById('personalForm');
   if(f) f.classList.remove('open');
 }
@@ -7039,27 +8849,41 @@ async function savePersonal(){
 
     date: document.getElementById('pn_date').value,
     notes: document.getElementById('pn_notes').value.trim(),
-    pagados: prev? [...(prev.pagados||[])] : [],   // los meses ya marcados no se pierden al editar
-    fechasPago: prev? {...(prev.fechasPago||{})} : {},
+    abonos: prev? [...abonosDe(prev)] : [],   // lo ya pagado no se pierde al editar la ficha
     createdAt: prev? (prev.createdAt||todayISO()) : todayISO(),
   };
   // En un fijo basta con la fecha de pago: de ella sale el día de vencimiento de cada mes
-  // (si pagas el 5, vence el 5), y además queda marcado como pagado ese día. Borrarla lo
-  // devuelve a pendiente. Así no hay que escribir la misma información dos veces.
+  // (si pagas el 5, vence el 5), y además queda registrado el pago de ese día. Borrarla
+  // devuelve el mes a pendiente. Así no hay que escribir lo mismo dos veces.
+  const mesActual = todayISO().slice(0,7);
+  const fechaPago = document.getElementById('pn_paidDate').value;
   if(data.clase==='fijo'){
-    const mesActual = todayISO().slice(0,7);
-    const fechaPago = document.getElementById('pn_paidDate').value;
     if(fechaPago){
       data.dueDay = Number(fechaPago.slice(8)) || 1;
-      if(!data.pagados.includes(mesActual)) data.pagados.push(mesActual);
-      data.fechasPago[mesActual] = fechaPago;
+      // Solo si el mes no tiene nada registrado: si ya se venían dando adelantos,
+      // esta casilla no debe pisarlos ni sumar un pago que no ocurrió.
+      if(pagadoDe(data, mesActual) === 0){
+        data.abonos.push({id: uid(), periodo: mesActual, fecha: fechaPago, monto});
+      }
     } else {
       // Sin fecha todavía: se conserva el vencimiento que ya tenía, o se asume el día de hoy.
       data.dueDay = (prev && prev.dueDay) || Number(todayISO().slice(8)) || 1;
-      if(prev && pagadoEn(prev, mesActual)){
-        data.pagados = data.pagados.filter(m=>m!==mesActual);
-        delete data.fechasPago[mesActual];
+      // Se borra solo el pago completo hecho desde esta misma casilla. Los
+      // adelantos registrados uno a uno se quitan desde su propia pantalla.
+      if(prev && abonosDeMes(prev, mesActual).length === 1 && pagadoEn(prev, mesActual)){
+        data.abonos = data.abonos.filter(a=>a.periodo!==mesActual);
       }
+    }
+  } else {
+    // Un gasto suelto se paga una sola vez: la fecha de pago dice si ya está
+    // saldado. Vacía, queda pendiente y avisa según su propia fecha.
+    const periodo = periodoDe(data, mesActual);
+    if(fechaPago){
+      if(pagadoDe(data, mesActual) === 0){
+        data.abonos.push({id: uid(), periodo, fecha: fechaPago, monto});
+      }
+    } else if(prev && abonosDe(prev).length === 1 && pagadoEn(prev, mesActual)){
+      data.abonos = [];
     }
   }
   DB.personalEntries = editingPersonalId
@@ -7071,21 +8895,106 @@ async function savePersonal(){
   renderTabs();
   renderPanel();
 }
-async function togglePersonalPagado(id){
-  const mes = todayISO().slice(0,7);
+/* ===== Abonos de un gasto o ingreso fijo =====
+   El pago completo y el adelanto son la misma operación con distinto monto,
+   así que hay un solo sitio donde registrarlos. La casilla viene con el saldo
+   pendiente puesto: pagar todo es un clic, y adelantar es cambiar el número. */
+let abonoMovimientoId = null;
+
+function openAbonoModal(id){
   const e = personalEntradas().find(x=>x.id===id); if(!e) return;
-  const yaEstaba = pagadoEn(e, mes);
-  const pagados = yaEstaba
-    ? (e.pagados||[]).filter(m=>m!==mes)
-    : [...(e.pagados||[]), mes];
-  const fechasPago = {...(e.fechasPago||{})};
-  if(yaEstaba) delete fechasPago[mes]; else fechasPago[mes] = todayISO();
-  DB.personalEntries = personalEntradas().map(x=>x.id===id? {...x, pagados, fechasPago} : x);
-  const ok = await setColl('personalEntries', DB.personalEntries);
-  showToast(ok? (yaEstaba? `${e.name}: marcado como pendiente.` : `${e.name}: marcado como ${e.tipo==='ingreso'?'cobrado':'pagado'} en ${mes}.`)
-              : 'No se pudo guardar, reintentando…', ok);
+  abonoMovimientoId = id;
+  document.getElementById('abonoModal').classList.add('open');
+  renderAbonoModal();
+  setTimeout(()=>{ const el = document.getElementById('ab_monto'); if(el){ el.focus(); el.select(); } }, 80);
+}
+function closeAbonoModal(){
+  document.getElementById('abonoModal').classList.remove('open');
+  abonoMovimientoId = null;
   renderTabs();
   renderPanel();
+}
+function renderAbonoModal(){
+  const e = personalEntradas().find(x=>x.id===abonoMovimientoId);
+  if(!e) return;
+  const mes = todayISO().slice(0,7);
+  const esIngreso = e.tipo==='ingreso';
+  const total = Number(e.amount||0);
+  const abonado = pagadoDe(e, mes);
+  const saldo = saldoDe(e, mes);
+  const lista = abonosDeMes(e, mes);
+
+  const limite = fechaLimiteDe(e, mes);
+  document.getElementById('abonoTitle').textContent =
+    `${esIngreso? 'Cobros' : 'Pagos'} de ${e.name}` + (esFijo(e)? ` — ${mes}` : '');
+  document.getElementById('abonoResumen').innerHTML =
+    `${esFijo(e)? 'Total del mes' : 'Total'}: <b>${fmtMoney(total)}</b> · ${esIngreso?'Cobrado':'Pagado'}: <b>${fmtMoney(abonado)}</b> · `
+    + (saldo>0
+        ? `Falta: <b style="color:var(--alert)">${fmtMoney(saldo)}</b>`
+        : `<span class="chip ok">${esIngreso?'Cobrado completo':'Pagado completo'}</span>`)
+    + `<br><span class="hint">`
+    + (limite
+        ? `Vence el ${tallerFechaLarga(limite)}.` + (esFijo(e)? '' : ' Es un pago único: no se repite el mes que viene.')
+        : 'Sin fecha de vencimiento.')
+    + `</span>`;
+
+  document.getElementById('abonoLabelMonto').textContent = esIngreso? 'Monto que cobraste (S/)' : 'Monto que pagaste (S/)';
+  document.getElementById('ab_monto').value = saldo>0? saldo.toFixed(2) : '';
+  document.getElementById('ab_fecha').value = todayISO();
+  document.getElementById('abonoSubmit').textContent = esIngreso? 'Registrar cobro' : 'Registrar pago';
+  document.getElementById('abonoAvisoTotal').textContent = saldo>0
+    ? `Déjalo así para ${esIngreso?'cobrar':'pagar'} todo lo que falta, o escribe menos si es un adelanto.`
+    : `Ya está cubierto${esFijo(e)? ' el mes':''}. Si registras más, quedará como un ${esIngreso?'cobro':'pago'} de más.`;
+
+  document.getElementById('abonoListaTitulo').textContent = esFijo(e)
+    ? 'Lo registrado este mes' : 'Lo registrado';
+  document.getElementById('abonoLista').innerHTML = lista.length
+    ? `<table><tr><th>Fecha</th><th style="text-align:right">Monto</th><th></th></tr>
+       ${lista.map(a=>`<tr>
+          <td>${a.fecha? tallerFechaLarga(a.fecha) : '—'}</td>
+          <td style="text-align:right">${fmtMoney(a.monto)}</td>
+          <td><button class="btn small danger" onclick="deleteAbono('${a.id}')">Quitar</button></td>
+        </tr>`).join('')}</table>`
+    : `<div class="empty">Todavía no registraste ${esIngreso?'ningún cobro':'ningún pago'} de este mes.</div>`;
+}
+async function saveAbono(){
+  const e = personalEntradas().find(x=>x.id===abonoMovimientoId); if(!e) return;
+  const mes = todayISO().slice(0,7);
+  const monto = Number(document.getElementById('ab_monto').value)||0;
+  const fecha = document.getElementById('ab_fecha').value || todayISO();
+  if(monto<=0){ alert('Escribe un monto mayor a cero.'); return; }
+  const saldo = saldoDe(e, mes);
+  const esIngreso = e.tipo==='ingreso';
+  if(monto > saldo + 0.005 && !confirm(
+      `Estás registrando ${fmtMoney(monto)} y solo faltaban ${fmtMoney(saldo)}.\n\n`
+      + `Quedará ${esIngreso?'cobrado':'pagado'} de más. ¿Continuar?`)) return;
+
+  const abono = {id: uid(), periodo: periodoDe(e, mes), fecha, monto};
+  DB.personalEntries = personalEntradas().map(x=>
+    x.id===e.id? {...x, abonos:[...abonosDe(x), abono]} : x);
+  const ok = await setColl('personalEntries', DB.personalEntries);
+  if(ok){
+    const actualizado = personalEntradas().find(x=>x.id===e.id);
+    const queda = saldoDe(actualizado, mes);
+    showToast(queda>0
+      ? `${e.name}: ${fmtMoney(monto)} registrado. Falta ${fmtMoney(queda)}.`
+      : `${e.name}: queda ${esIngreso?'cobrado':'pagado'} por completo.`, true);
+  } else {
+    showToast('No se pudo guardar, reintentando…', false);
+  }
+  renderAbonoModal();
+  renderTabs();
+}
+async function deleteAbono(abonoId){
+  const e = personalEntradas().find(x=>x.id===abonoMovimientoId); if(!e) return;
+  const a = abonosDe(e).find(x=>x.id===abonoId); if(!a) return;
+  if(!confirm(`¿Quitar el ${e.tipo==='ingreso'?'cobro':'pago'} de ${fmtMoney(a.monto)}${a.fecha? ' del '+tallerFechaLarga(a.fecha):''}?`)) return;
+  DB.personalEntries = personalEntradas().map(x=>
+    x.id===e.id? {...x, abonos: abonosDe(x).filter(y=>y.id!==abonoId)} : x);
+  const ok = await setColl('personalEntries', DB.personalEntries);
+  showToast(ok? 'Quitado.' : 'No se pudo guardar, reintentando…', ok);
+  renderAbonoModal();
+  renderTabs();
 }
 async function deletePersonal(id){
   const e = personalEntradas().find(x=>x.id===id); if(!e) return;
@@ -7099,11 +9008,20 @@ async function deletePersonal(id){
 }
 function exportPersonalCSV(){
   const mes = todayISO().slice(0,7);
-  const headers = ['Tipo','Fijo o variable','Nombre','Categoría','Monto','Día de vencimiento','Fecha','Pagado este mes','Fecha de pago de este mes','Meses pagados','Nota'];
+  const headers = ['Tipo','Fijo o variable','Nombre','Categoría','Monto','Día de vencimiento','Fecha',
+                   'Pagado este mes','Falta este mes','Saldado','Último pago del mes','Historial de pagos','Nota'];
+  // Los meses se listan con lo abonado en cada uno: "2026-09: 300 (05) + 200 (12)".
+  const historial = e => {
+    const meses = [...new Set(abonosDe(e).map(a=>a.periodo))].sort();
+    return meses.map(m=>`${m}: ${abonosDeMes(e,m).map(a=>`${Number(a.monto||0).toFixed(2)}${a.fecha? ' ('+a.fecha+')':''}`).join(' + ')}`).join(' | ');
+  };
+  // Un variable ya no se da por pagado: se lee su estado igual que el de un
+  // fijo, porque puede quedar pendiente hasta su fecha.
   const rows = personalEntradas().map(e=>[
     e.tipo==='ingreso'?'Ingreso':'Gasto', esFijo(e)?'Fijo':'Variable', e.name, e.category||'',
     Number(e.amount||0).toFixed(2), esFijo(e)? (e.dueDay||'') : '', esFijo(e)? '' : (e.date||''),
-    esFijo(e)? (pagadoEn(e,mes)?'Sí':'No') : 'Sí', esFijo(e)? fechaPagoDe(e,mes) : (e.date||''), (e.pagados||[]).map(m=>m+(fechaPagoDe(e,m)? '('+fechaPagoDe(e,m)+')':'')).join(' '), e.notes||''
+    pagadoDe(e,mes).toFixed(2), saldoDe(e,mes).toFixed(2),
+    pagadoEn(e,mes)?'Sí':'No', fechaPagoDe(e,mes), historial(e), e.notes||''
   ]);
   downloadCSV(`cuentas-personales-${mes}.csv`, toCSV(headers, rows));
 }
@@ -7296,6 +9214,20 @@ async function openHistoria(patientId){
   const loaded = await getColl('historia_'+patientId, null);
   const base = defaultHistoria(patientId);
   currentHistoriaData = loaded? {...base, ...loaded, examenMental:{...base.examenMental, ...(loaded.examenMental||{})}} : base;
+  // Lo que ya está en la ficha del paciente no se vuelve a pedir: la fecha de
+  // nacimiento se trae sola. Si el dato solo existe aquí, se devuelve a la
+  // ficha, para que las dos pestañas digan lo mismo.
+  const paciente = DB.patients.find(p=>p.id===patientId);
+  if(paciente){
+    if(!currentHistoriaData.fechaNacimiento && paciente.birthDate){
+      currentHistoriaData.fechaNacimiento = paciente.birthDate;
+    } else if(currentHistoriaData.fechaNacimiento && !paciente.birthDate){
+      paciente.birthDate = currentHistoriaData.fechaNacimiento;
+      paciente.birthday  = currentHistoriaData.fechaNacimiento.slice(5);
+      DB.patients = DB.patients.map(p=>p.id===patientId? paciente : p);
+      await setColl('patients', DB.patients);
+    }
+  }
   editingDiagnosticoId = null;
   currentTab = 'historia';
   renderTabs();
@@ -7380,8 +9312,22 @@ async function saveHistoriaMain(){
   captureHistoriaFields();
   currentHistoriaData.updatedAt = new Date().toISOString();
   await setColl('historia_'+currentHistoryPatientId, currentHistoriaData);
+  // La fecha de nacimiento se escribe en un solo lugar: si se corrigió aquí,
+  // la ficha del paciente queda igual (y con ella los cumpleaños del calendario).
+  await sincronizarNacimientoConFicha();
   alert('Historia clínica guardada.');
   renderPanel();
+}
+/* Deja la misma fecha de nacimiento en la ficha del paciente y en su historia. */
+async function sincronizarNacimientoConFicha(){
+  const fecha = currentHistoriaData && currentHistoriaData.fechaNacimiento;
+  if(!fecha) return;
+  const p = DB.patients.find(x=>x.id===currentHistoryPatientId);
+  if(!p || p.birthDate===fecha) return;
+  p.birthDate = fecha;
+  p.birthday  = fecha.slice(5);
+  DB.patients = DB.patients.map(x=>x.id===currentHistoryPatientId? p : x);
+  await setColl('patients', DB.patients);
 }
 async function addPrueba(){
   const nombre = document.getElementById('hc_pruebaNombre').value.trim();
@@ -7853,14 +9799,41 @@ async function confirmWipe(){
 
 /* ===================== INIT ===================== */
 document.getElementById('todayLabel').textContent = new Date().toLocaleDateString('es-PE',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
+/* Se sube a mano en cada cambio del panel. Si arriba no dice esta versión,
+   estás viendo una copia vieja: recarga con Ctrl+Shift+R. */
+const PANEL_VERSION = 'v2026-09-09 · pagos parciales';
+document.getElementById('versionLabel').textContent = PANEL_VERSION;
 document.getElementById('storageModeNote').innerHTML =
   STORAGE_MODE==='api'
     ? 'Conectado a la base de datos del centro (MySQL/MariaDB). Los datos son <b>permanentes y compartidos</b> por todo el equipo. <a href="api/index.php?accion=salud" target="_blank">Probar la conexión</a>.'
   : STORAGE_MODE==='claude'
     ? 'Los datos se guardan de forma permanente y son <b>compartidos</b> entre todas las personas que usen este panel <b>dentro de Claude</b>.'
     : '⚠ Este archivo se abrió como archivo local, así que los datos se guardarán <b>solo en este navegador y computadora</b>. Para el guardado compartido, abre el panel desde Laragon (http://localhost/prototipodepacientes/). Mientras tanto, usa "Descargar copia de seguridad" seguido para no perder información.';
+/* Aviso grande y arriba de todo cuando el panel NO está leyendo la base de
+   datos. Es fácil abrir el archivo con doble clic sin darse cuenta, y entonces
+   se trabaja sobre los datos del navegador: los pacientes, pagos y finanzas
+   que se ven son otros, y lo que se registre no llega a la base del centro. */
+function avisarSiNoEsBaseDeDatos(){
+  if(STORAGE_MODE === 'api') return;
+  if(document.getElementById('avisoModoLocal')) return;
+  const cont = document.getElementById('app') || document.body;
+  const aviso = document.createElement('div');
+  aviso.id = 'avisoModoLocal';
+  aviso.style.cssText = 'background:#fdecea;border:2px solid #c0392b;border-radius:10px;'
+    + 'padding:14px 18px;margin:12px;color:#7b241c;font-size:15px;line-height:1.5';
+  aviso.innerHTML = STORAGE_MODE==='local'
+    ? '<b>⚠ No estás conectado a la base de datos del centro.</b><br>'
+      + 'Abriste el panel como archivo suelto, así que estás viendo los datos guardados en '
+      + '<b>este navegador</b>, no los del centro. Lo que registres aquí <b>no llegará a la base de datos</b>.<br>'
+      + 'Ábrelo desde <a href="http://localhost/prototipodepacientes/" style="color:#7b241c"><b>http://localhost/prototipodepacientes/</b></a> '
+      + '(con Laragon encendido).'
+    : '<b>Modo Claude:</b> los datos se guardan en el almacenamiento de la conversación, no en la base de datos del centro.';
+  cont.insertBefore(aviso, cont.firstChild);
+}
+
 async function bootApp(){
   loadBackupMeta();
+  avisarSiNoEsBaseDeDatos();
   await loadAll();
   renderTabs();
   document.getElementById('headerLogo').src = CENTER_LOGO_DATA_URL;
@@ -7872,6 +9845,8 @@ async function bootApp(){
   document.getElementById('app').style.display = 'block';
   appReady = true; // desde aquí sí contamos los cambios que hace la persona
   renderBackupIndicator();
+  // Ya con la pantalla montada se avisa de los contadores que se cuadraron.
+  setTimeout(mostrarAvisoSesiones, 600);
 }
 async function attemptLogin(){
   const u = document.getElementById('login_user').value.trim();
@@ -7928,11 +9903,28 @@ async function logout(){
     let sesion = {loginRequerido:false, autenticado:true};
     try{
       const r = await fetch(`${API_URL}?accion=sesion`, {credentials:'same-origin'});
-      sesion = await r.json();
+      const texto = await r.text();
+      // Si el servidor no ejecuta PHP (Live Server de VS Code, por ejemplo),
+      // devuelve el CÓDIGO del archivo en vez de su resultado. Se detecta aquí
+      // para poder decir qué pasa de verdad, en vez de "no se pudo conectar".
+      if(texto.trim().startsWith('<?php')) throw new Error('php-sin-ejecutar');
+      sesion = JSON.parse(texto);
     }catch(e){
-      document.body.innerHTML = '<div style="padding:40px;font:16px system-ui">'
+      const laragon = 'http://localhost/prototipodepacientes/';
+      const otroPuerto = location.port && location.port !== '80';
+      const esPhpCrudo = e && e.message === 'php-sin-ejecutar';
+      document.body.innerHTML = '<div style="padding:40px;font:16px system-ui;max-width:640px;line-height:1.5">'
         + '<h2>No se pudo conectar con el servidor</h2>'
-        + '<p>Revisa que Laragon esté iniciado y que exista <code>config/config.php</code>.</p>'
+        + ((esPhpCrudo || otroPuerto)
+            ? '<p>Estás abriendo el panel desde <code>' + location.host + '</code>, que <b>no ejecuta PHP</b>'
+              + (location.port === '5500' || location.port === '5501' ? ' (eso es Live Server de VS Code)' : '')
+              + '. Sin PHP no hay base de datos.</p>'
+              + '<p><b>Ábrelo desde Laragon:</b> <a href="' + laragon + '">' + laragon + '</a></p>'
+              + '<p style="color:#a3341f"><b>Importante:</b> ese servidor también deja leer '
+              + '<code>config/config.php</code>, donde está la contraseña de la base de datos. '
+              + 'Ciérralo cuando termines: en VS Code, «Stop Live Server».</p>'
+            : '<p>Revisa que Laragon esté iniciado (Apache y MySQL en verde) y que exista '
+              + '<code>config/config.php</code>.</p>')
         + '<p><a href="api/index.php?accion=salud">Ver diagnóstico de la conexión</a></p></div>';
       return;
     }

@@ -77,18 +77,32 @@ CREATE OR REPLACE VIEW v_ingreso_centro AS
 SELECT
   origen, profesional_id, profesional, fecha, monto_centro
 FROM (
-  -- Comisión: el centro se queda un monto fijo de cada pago de paciente,
-  -- nunca más de lo efectivamente cobrado.
+  -- Comisión: al centro le corresponde su parte por CADA sesión que cubre el
+  -- pago, nunca más de lo efectivamente cobrado.
+  --
+  -- Un pago de paquete cubre varias sesiones: S/450 de un paquete a S/45 son
+  -- 10 sesiones, y al centro le tocan 10 x su parte. Contarlo como una sola
+  -- sesión (lo que hacía antes) subestimaba el ingreso del centro.
   SELECT
     'Comisión'                  AS origen,
     pr.persona_id               AS profesional_id,
     per.nombre_completo         AS profesional,
     pg.fecha                    AS fecha,
-    LEAST(pg.monto, pr.monto_centro_sesion) AS monto_centro
+    LEAST(
+      pg.monto,
+      GREATEST(1,
+        CASE WHEN pg.tipo_pago NOT IN ('Otro','Colegio')
+                  AND COALESCE(pq.precio_sesion, 0) > 0
+             THEN ROUND(pg.monto / pq.precio_sesion)
+             ELSE 1
+        END
+      ) * pr.monto_centro_sesion
+    )                           AS monto_centro
   FROM pagos pg
   JOIN pacientes pa     ON pa.persona_id = pg.paciente_id
   JOIN profesionales pr ON pr.persona_id = pa.profesional_id
   JOIN personas per     ON per.id = pr.persona_id
+  LEFT JOIN paciente_paquetes pq ON pq.id = pg.paquete_id
   WHERE pg.anulado_en IS NULL
     AND pr.modelo_pago = 'Comisión'
 
@@ -265,6 +279,10 @@ WHERE t.eliminado_en IS NULL;
 -- solo en el mes de su fecha. Mezclarlos era lo que hacía que una compra
 -- de marzo siguiera restando del margen en setiembre.
 --
+-- `pagado` es la suma de los abonos del mes y `saldo` lo que falta: un
+-- gasto se puede ir pagando por partes, así que no basta con saber si está
+-- pagado o no.
+--
 -- No se cruza con `pagos` ni con `gastos`: este dinero no es del centro y
 -- no debe aparecer en v_resultado_mensual.
 -- ---------------------------------------------------------------------
@@ -281,12 +299,21 @@ SELECT
   m.monto,
   m.dia_vencimiento,
   m.fecha,
-  pg.fecha_pago,
-  (pg.id IS NOT NULL) AS pagado
+  COALESCE(p.pagado, 0) AS pagado,
+  GREATEST(m.monto - COALESCE(p.pagado, 0), 0) AS saldo,
+  p.ultimo_pago AS fecha_pago,
+  (COALESCE(p.pagado, 0) >= m.monto) AS saldado,
+  COALESCE(p.abonos, 0) AS abonos
 FROM personal_movimientos m
-LEFT JOIN personal_pagos pg
-       ON pg.movimiento_id = m.id
-      AND pg.periodo = DATE_FORMAT(CURDATE(), '%Y-%m')
+LEFT JOIN (
+  SELECT movimiento_id, periodo,
+         SUM(monto)      AS pagado,
+         COUNT(*)        AS abonos,
+         MAX(fecha_pago) AS ultimo_pago
+    FROM personal_pagos
+   GROUP BY movimiento_id, periodo
+) p ON p.movimiento_id = m.id
+   AND p.periodo = DATE_FORMAT(CURDATE(), '%Y-%m')
 WHERE m.clase = 'fijo'
    OR DATE_FORMAT(m.fecha, '%Y-%m') = DATE_FORMAT(CURDATE(), '%Y-%m');
 

@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Rescatar datos del panel</title>
+<style>
+  :root{ --tinta:#22302c; --papel:#f2efe9; --linea:#d9d3c7; --verde:#2f5d50; --rojo:#a3341f; }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--papel);color:var(--tinta);
+       font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:32px}
+  .caja{max-width:760px;margin:0 auto;background:#fff;border:1px solid var(--linea);
+        border-radius:12px;padding:28px 30px}
+  h1{margin:0 0 4px;font-size:24px}
+  .sub{color:#6b6b63;margin:0 0 22px}
+  table{width:100%;border-collapse:collapse;margin:16px 0}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--linea);font-size:15px}
+  th{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#6b6b63}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  .btn{display:inline-block;background:var(--verde);color:#fff;border:0;border-radius:8px;
+       padding:12px 20px;font-size:16px;cursor:pointer;margin-top:8px}
+  .btn:disabled{opacity:.45;cursor:default}
+  .aviso{background:#fdf4f1;border-left:4px solid var(--rojo);padding:12px 14px;border-radius:6px;margin:18px 0}
+  .ok{background:#eef5f1;border-left:4px solid var(--verde);padding:12px 14px;border-radius:6px;margin:18px 0}
+  code{background:#f2efe9;padding:1px 5px;border-radius:4px;font-size:14px}
+  ol{padding-left:20px} li{margin:6px 0}
+</style>
+</head>
+<body>
+<div class="caja">
+  <h1>Rescatar los datos del panel</h1>
+  <p class="sub">Lee lo que el panel guardó en <b>este navegador y esta dirección</b>, y lo baja en un solo archivo.</p>
+
+  <p>Dirección actual: <code id="origen"></code></p>
+
+  <div id="resultado"></div>
+
+  <button class="btn" id="bajar" disabled>Descargar copia de seguridad</button>
+
+  <div id="pasos" style="display:none">
+    <div class="ok">
+      <b>Ya está descargado.</b> Ese archivo tiene todo. Guárdalo también fuera de la computadora
+      (Drive, USB): es la única copia hasta que entre a la base de datos.
+    </div>
+    <p>Después:</p>
+    <ol>
+      <li>Abre el panel bueno en <a href="http://localhost/prototipodepacientes/">http://localhost/prototipodepacientes/</a></li>
+      <li>Menú lateral → <b>Restaurar copia de seguridad</b> → elige el archivo.</li>
+      <li>Con eso los datos quedan en MySQL, permanentes y compartidos.</li>
+    </ol>
+  </div>
+</div>
+
+<script>
+/* El panel guarda cada colección en localStorage con el prefijo
+   centroPsicologico_. Aquí se leen todas y se arma el MISMO formato que
+   produce "Descargar copia de seguridad", para que el panel y migrar.php
+   lo entiendan sin cambios. */
+const PREFIJO = 'centroPsicologico_';
+const NOMBRES = {
+  patients:'Pacientes', appointments:'Citas', professionals:'Profesionales',
+  practicantes:'Practicantes', services:'Tarifas', payments:'Pagos',
+  expenses:'Gastos del centro', calendarEvents:'Fechas del calendario',
+  products:'Ideas / productos', centerInfo:'Datos del centro',
+  roomUsage:'Uso de consultorio', attendanceLog:'Asistencia',
+  talleres:'Talleres y charlas', personalEntries:'Cuentas personales',
+  personalConfig:'Clave de cuentas personales', authConfig:'Acceso',
+};
+
+function leerTodo(){
+  const datos = {}, historias = {};
+  let claves = [];
+  try{ claves = Object.keys(localStorage); }catch(e){ return null; }
+  for(const k of claves){
+    if(!k.startsWith(PREFIJO)) continue;
+    const nombre = k.slice(PREFIJO.length);
+    let valor;
+    try{ valor = JSON.parse(localStorage.getItem(k)); }catch(e){ continue; }
+    if(nombre.startsWith('historia_')) historias[nombre.slice('historia_'.length)] = valor;
+    else datos[nombre] = valor;
+  }
+  return {datos, historias};
+}
+
+function describir(v){
+  if(Array.isArray(v)) return v.length + (v.length===1? ' registro':' registros');
+  if(v && typeof v === 'object') return 'configuración';
+  return v === null || v === undefined ? 'vacío' : String(v).slice(0,40);
+}
+
+const origen = location.origin;
+document.getElementById('origen').textContent = origen;
+
+const todo = leerTodo();
+const caja = document.getElementById('resultado');
+const boton = document.getElementById('bajar');
+
+if(!todo){
+  caja.innerHTML = '<div class="aviso"><b>El navegador no deja leer sus datos guardados.</b> '
+    + 'Puede ser una ventana de incógnito o tener bloqueado el almacenamiento del sitio.</div>';
+} else {
+  const claves = Object.keys(todo.datos);
+  const conDatos = claves.filter(k=>{
+    const v = todo.datos[k];
+    return Array.isArray(v)? v.length>0 : !!v;
+  });
+  if(claves.length === 0){
+    caja.innerHTML = '<div class="aviso"><b>Aquí no hay nada guardado.</b><br>'
+      + 'Los datos del panel se guardan por dirección. Si los cargaste desde otra '
+      + '(por ejemplo <code>127.0.0.1:5500</code> y ahora estás en <code>localhost</code>, o al revés), '
+      + 'abre esta misma página desde <b>aquella</b> dirección.</div>';
+  } else {
+    const filas = claves.sort().map(k=>
+      '<tr><td>'+(NOMBRES[k]||k)+'</td><td class="num">'+describir(todo.datos[k])+'</td></tr>').join('');
+    const nh = Object.keys(todo.historias).length;
+    caja.innerHTML = '<div class="ok"><b>Encontrado.</b> Esto es lo que hay guardado aquí:</div>'
+      + '<table><tr><th>Qué</th><th style="text-align:right">Cuánto</th></tr>' + filas
+      + (nh? '<tr><td>Historias clínicas</td><td class="num">'+nh+' paciente'+(nh===1?'':'s')+'</td></tr>':'')
+      + '</table>';
+    if(conDatos.length === 0){
+      caja.innerHTML += '<div class="aviso">Están las colecciones pero todas vacías. '
+        + 'Prueba a abrir esta página desde la otra dirección.</div>';
+    }
+    boton.disabled = false;
+  }
+}
+
+boton.onclick = function(){
+  const t = leerTodo();
+  const hoy = new Date();
+  const iso = hoy.getFullYear() + '-' + String(hoy.getMonth()+1).padStart(2,'0')
+            + '-' + String(hoy.getDate()).padStart(2,'0');
+  const backup = Object.assign(
+    {_tipo:'backup-centro-psicologico', _fecha: hoy.toISOString(), _origen: origen},
+    t.datos, {historias: t.historias});
+  const blob = new Blob([JSON.stringify(backup, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'backup-centro-psicologico-' + iso + '.json';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  document.getElementById('pasos').style.display = 'block';
+};
+</script>
+</body>
+</html>

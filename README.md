@@ -9,9 +9,10 @@ PHP. Sustituye el almacenamiento en `localStorage` del prototipo.
    `db/01_schema.sql` → `db/02_vistas_triggers.sql` → `db/03_datos_base.sql` → `db/04_api.sql`
    (o por consola, ver [db/README.md](db/README.md)).
 
-   Si la base **ya estaba instalada** antes de que el panel tuviera talleres
-   y cuentas personales, importar además `db/05_actualizacion_talleres.sql`.
-   Es reejecutable y no toca los datos existentes.
+   Si la base **ya estaba instalada** antes, importar además, en orden,
+   `db/05_actualizacion_talleres.sql` (talleres y cuentas personales) y
+   `db/06_pagos_parciales.sql` (pagar por partes las cuentas personales).
+   Son reejecutables y no tocan los datos existentes.
 
 2. **Configurar el acceso.**
    ```
@@ -172,8 +173,14 @@ propias tablas, no un hueco en las que ya había:
   gastar consulta de apiperu.dev.
 - **Cuentas personales** (`personal_movimientos` + `personal_pagos`). Es
   dinero propio, no del centro: no entra en Finanzas ni en
-  `v_resultado_mensual`. Cada mes pagado es una fila con su fecha real, en
-  vez del array `pagados[]` con un objeto `fechasPago{}` en paralelo. Son
+  `v_resultado_mensual`. Cada pago es una fila con su fecha y su importe,
+  así que un gasto no es "pagado sí o no": se puede ir adelantando y el
+  panel dice cuánto falta, que es la pregunta real cuando el dinero no
+  alcanza para pagarlo todo de una vez. Un gasto **fijo** se renueva cada
+  mes; uno **suelto** se paga una sola vez y se termina, con su propia
+  fecha de vencimiento y su aviso si se pasa. Un suelto que quedó a medias
+  no desaparece al cambiar de mes: se sigue debiendo, aunque ya no pese en
+  el gasto del mes nuevo porque ya pesó en el suyo. Son
   **privadas por usuario**: cada quien ve solo las suyas. Si el centro no
   tiene activado el acceso con clave no hay a quién preguntarle, así que se
   guardan a nombre de la cuenta de administrador.

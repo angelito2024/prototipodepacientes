@@ -7,6 +7,7 @@ use Centro\Repos\Asistencia;
 use Centro\Repos\AuthConfig;
 use Centro\Repos\CentroInfo;
 use Centro\Repos\Citas;
+use Centro\Repos\Documento;
 use Centro\Repos\Eventos;
 use Centro\Repos\Gastos;
 use Centro\Repos\Historia;
@@ -35,6 +36,8 @@ final class Colecciones
         // Los talleres necesitan al profesional que los dicta. Las cuentas
         // personales no dependen de nada del centro: van al final.
         'talleres', 'personalConfig', 'personalEntries',
+        // Finanzas privadas: préstamos, fondos que organiza y juntas ajenas.
+        'prestamos', 'recaudaciones', 'juntas',
     ];
 
     public static function para(string $clave): ?Repositorio
@@ -42,6 +45,11 @@ final class Colecciones
         if (str_starts_with($clave, 'historia_')) {
             $uid = substr($clave, strlen('historia_'));
             return $uid === '' ? null : new Historia($uid);
+        }
+
+        // Colecciones privadas que se guardan como documento (ver Documento.php).
+        if (in_array($clave, ['prestamos', 'recaudaciones', 'juntas'], true)) {
+            return new Documento($clave);
         }
 
         return match ($clave) {

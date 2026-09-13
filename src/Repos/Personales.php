@@ -19,10 +19,9 @@ use Centro\Repositorio;
  *  · Es privado por usuario. En el panel era una colección global del
  *    navegador: cualquiera que abriera la pestaña la veía, y salía entera
  *    en el JSON de la copia de seguridad.
- *  · Los meses pagados son filas de `personal_pagos`, no un array
- *    `pagados[]` con un objeto `fechasPago{}` en paralelo. Con dos
- *    estructuras que hay que mantener en el mismo orden, basta con que una
- *    se actualice y la otra no para que un mes quede pagado sin fecha.
+ *  · Los pagos son filas de `personal_pagos`, cada una con su fecha y su
+ *    importe. Un mes deja de ser "pagado sí o no": se puede ir pagando por
+ *    partes, y lo que falta es el monto menos lo abonado.
  */
 final class Personales extends Repositorio
 {
@@ -63,32 +62,31 @@ final class Personales extends Repositorio
                 'dueDay'     => (int) ($f['dia_vencimiento'] ?? 1),
                 'date'       => (string) ($f['fecha'] ?? ''),
                 'notes'      => (string) ($f['notas'] ?? ''),
-                'pagados'    => $pagos[$id]['meses'] ?? [],
-                'fechasPago' => $pagos[$id]['fechas'] ?? new \stdClass(),
+                'abonos'     => $pagos[$id] ?? [],
                 'createdAt'  => substr((string) $f['creado_en'], 0, 10),
             ];
         }
         return $salida;
     }
 
-    /** @return array<int,array{meses:list<string>,fechas:array<string,string>}> */
+    /** @return array<int,list<array{id:string,periodo:string,fecha:string,monto:float}>> */
     private function leerPagos(int $usuarioId): array
     {
         $out = [];
         foreach (Database::todos(
-            'SELECT p.movimiento_id, p.periodo, p.fecha_pago
+            'SELECT p.id, p.uid, p.movimiento_id, p.periodo, p.fecha_pago, p.monto
                FROM personal_pagos p
                JOIN personal_movimientos m ON m.id = p.movimiento_id
               WHERE m.usuario_id = ?
-              ORDER BY p.periodo',
+              ORDER BY p.periodo, p.fecha_pago, p.id',
             [$usuarioId]
         ) as $f) {
-            $mid = (int) $f['movimiento_id'];
-            $out[$mid] ??= ['meses' => [], 'fechas' => []];
-            $out[$mid]['meses'][] = (string) $f['periodo'];
-            if ($f['fecha_pago'] !== null) {
-                $out[$mid]['fechas'][(string) $f['periodo']] = (string) $f['fecha_pago'];
-            }
+            $out[(int) $f['movimiento_id']][] = [
+                'id'      => (string) ($f['uid'] ?? ('pp' . $f['id'])),
+                'periodo' => (string) $f['periodo'],
+                'fecha'   => (string) ($f['fecha_pago'] ?? ''),
+                'monto'   => (float) $f['monto'],
+            ];
         }
         return $out;
     }
@@ -151,7 +149,7 @@ final class Personales extends Repositorio
                 'SELECT id FROM personal_movimientos WHERE uid = ? AND usuario_id = ?',
                 [$uid, $usuarioId]
             );
-            $this->guardarPagos($movimientoId, $item);
+            $this->guardarPagos($movimientoId, $item, $monto);
         }
 
         // Aquí sí se borra: son las cuentas de casa, no un dato clínico ni
@@ -166,32 +164,104 @@ final class Personales extends Repositorio
         $this->subirVersion();
     }
 
-    /** Los meses marcados como pagados, con la fecha real de cada pago. */
-    private function guardarPagos(int $movimientoId, array $item): void
+    /**
+     * Cada abono, con su fecha y su importe.
+     *
+     * Un mes puede llevar varios: se paga 300 el día 5 y 600 el día 20. Lo
+     * que falta sale de restar la suma al monto del movimiento, así que no
+     * hay ningún campo "pagado" que mantener al día por separado.
+     */
+    private function guardarPagos(int $movimientoId, array $item, float $montoMovimiento): void
     {
-        $fechas  = (array) ($item['fechasPago'] ?? []);
-        $meses   = [];
-
-        foreach ((array) ($item['pagados'] ?? []) as $periodo) {
-            $p = self::txt($periodo);
-            if (preg_match('/^\d{4}-\d{2}$/', $p) !== 1) {
-                continue;
-            }
-            $meses[] = $p;
+        $uids = [];
+        foreach (self::abonosDe($item, $montoMovimiento) as $a) {
+            $uids[] = $a['uid'];
             Database::query(
-                'INSERT INTO personal_pagos (movimiento_id, periodo, fecha_pago)
-                 VALUES (?,?,?)
-                 ON DUPLICATE KEY UPDATE fecha_pago = VALUES(fecha_pago)',
-                [$movimientoId, $p, self::fecha($fechas[$p] ?? null)]
+                'INSERT INTO personal_pagos (uid, movimiento_id, periodo, fecha_pago, monto)
+                 VALUES (?,?,?,?,?)
+                 ON DUPLICATE KEY UPDATE
+                    movimiento_id = VALUES(movimiento_id), periodo = VALUES(periodo),
+                    fecha_pago = VALUES(fecha_pago), monto = VALUES(monto)',
+                [$a['uid'], $movimientoId, $a['periodo'], $a['fecha'], $a['monto']]
             );
         }
 
         $sql = 'DELETE FROM personal_pagos WHERE movimiento_id = ?';
         $par = [$movimientoId];
-        if ($meses !== []) {
-            $sql .= ' AND periodo NOT IN (' . implode(',', array_fill(0, count($meses), '?')) . ')';
-            $par = [...$par, ...$meses];
+        if ($uids !== []) {
+            $sql .= ' AND (uid IS NULL OR uid NOT IN (' . implode(',', array_fill(0, count($uids), '?')) . '))';
+            $par = [...$par, ...$uids];
         }
         Database::query($sql, $par);
+    }
+
+    /**
+     * Los abonos que trae el elemento, normalizados.
+     *
+     * Acepta también la forma anterior —`pagados[]` con `fechasPago{}`—,
+     * que es la que traen los respaldos hechos antes de que se pudiera
+     * pagar por partes: cada mes marcado era un pago por el monto completo.
+     *
+     * @return list<array{uid:string,periodo:string,fecha:?string,monto:float}>
+     */
+    private static function abonosDe(array $item, float $montoMovimiento): array
+    {
+        $salida = [];
+
+        if (is_array($item['abonos'] ?? null)) {
+            foreach ($item['abonos'] as $a) {
+                if (!is_array($a)) {
+                    continue;
+                }
+                $periodo = self::txt($a['periodo'] ?? '');
+                $monto   = self::num($a['monto'] ?? 0);
+                if (preg_match('/^\d{4}-\d{2}$/', $periodo) !== 1 || $monto <= 0) {
+                    continue;                       // chk_ppago_monto
+                }
+                $salida[] = [
+                    'uid'     => self::txt($a['id'] ?? '') ?: self::nuevoUid(),
+                    'periodo' => $periodo,
+                    'fecha'   => self::fecha($a['fecha'] ?? null),
+                    'monto'   => $monto,
+                ];
+            }
+            return $salida;
+        }
+
+        $fechas = (array) ($item['fechasPago'] ?? []);
+        foreach ((array) ($item['pagados'] ?? []) as $periodo) {
+            $p = self::txt($periodo);
+            if (preg_match('/^\d{4}-\d{2}$/', $p) !== 1 || $montoMovimiento <= 0) {
+                continue;
+            }
+            $salida[] = [
+                'uid'     => self::nuevoUid(),
+                'periodo' => $p,
+                'fecha'   => self::fecha($fechas[$p] ?? null),
+                'monto'   => $montoMovimiento,
+            ];
+        }
+
+        // Un gasto suelto de un respaldo antiguo no tenía estado: el panel de
+        // entonces los sumaba a todos como ya gastados. Se decide por su fecha:
+        //
+        //  · fecha pasada  -> se da por pagado. Es el mercado, el transporte,
+        //    una salida: cosas anotadas después de hacerlas. Marcarlas
+        //    pendientes llenaría la pantalla de deudas falsas.
+        //  · fecha futura  -> se deja PENDIENTE. Nadie anota con fecha del mes
+        //    que viene algo que ya pagó; eso es una deuda con vencimiento,
+        //    justo lo que ahora se puede registrar.
+        $fecha = self::fecha($item['date'] ?? null);
+        $yaPasó = $fecha !== null && $fecha <= date('Y-m-d');
+        if ($salida === [] && self::txt($item['clase'] ?? '') !== 'fijo'
+            && $yaPasó && $montoMovimiento > 0) {
+            $salida[] = [
+                'uid'     => self::nuevoUid(),
+                'periodo' => substr($fecha, 0, 7),
+                'fecha'   => $fecha,
+                'monto'   => $montoMovimiento,
+            ];
+        }
+        return $salida;
     }
 }

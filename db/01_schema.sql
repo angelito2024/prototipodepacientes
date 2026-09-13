@@ -1161,19 +1161,28 @@ CREATE TABLE personal_movimientos (
   )
 ) ENGINE=InnoDB;
 
--- Un fijo pagado en marzo y en abril son dos filas, no un campo que se
--- pisa. Así el historial existe de verdad y marcar un pago tardío no
--- corre el vencimiento de los meses siguientes.
+-- Cada pago es una fila con su fecha y su importe, no un mes marcado.
+--
+-- Así el mes de un gasto fijo no es "pagado sí o no": se puede ir dando
+-- adelantos y saber cuánto falta, que es la pregunta real cuando el dinero
+-- no alcanza para pagarlo todo de una vez. Un fijo pagado en marzo y en
+-- abril son filas distintas, así que el historial existe de verdad y
+-- marcar un pago tardío no corre el vencimiento de los meses siguientes.
 CREATE TABLE personal_pagos (
   id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  uid           VARCHAR(32) NULL,
   movimiento_id BIGINT UNSIGNED NOT NULL,
-  periodo       CHAR(7) NOT NULL,          -- 'AAAA-MM'
+  periodo       CHAR(7) NOT NULL,          -- 'AAAA-MM' al que se imputa
   fecha_pago    DATE NULL,                 -- el día real en que se pagó
+  monto         DECIMAL(12,2) NOT NULL,
   creado_en     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
-  UNIQUE KEY uq_personal_pago (movimiento_id, periodo),
+  UNIQUE KEY uq_personal_pago_uid (uid),
+  -- No es único por mes: un mes puede tener varios abonos.
+  KEY idx_ppago_periodo (movimiento_id, periodo, fecha_pago),
   CONSTRAINT fk_ppago_movimiento FOREIGN KEY (movimiento_id)
-    REFERENCES personal_movimientos(id) ON DELETE CASCADE
+    REFERENCES personal_movimientos(id) ON DELETE CASCADE,
+  CONSTRAINT chk_ppago_monto CHECK (monto > 0)
 ) ENGINE=InnoDB;
 
 -- Clave de la pestaña. Se guarda el hash, nunca la clave: en el panel

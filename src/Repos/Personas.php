@@ -52,6 +52,10 @@ final class Personas
             'documento'      => $documento,
             'tipo_documento' => self::tipoDocumento($documento),
             'nombres'        => R::txt($item['name'] ?? '') ?: 'Sin nombre',
+            // La fecha completa cuando el panel la tiene; el mes-día siempre,
+            // porque es lo que usan las alertas de cumpleaños. El trigger
+            // trg_persona_cumple deriva el mes-día si llega la fecha completa.
+            'fecha_nacimiento' => R::fecha($item['birthDate'] ?? null),
             'dia_cumple'     => R::diaMes($item['birthday'] ?? null),
             'telefono'       => R::nz($item['phone'] ?? null),
             'email'          => R::nz($item['email'] ?? null),

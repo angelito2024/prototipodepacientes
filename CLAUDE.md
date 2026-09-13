@@ -40,6 +40,7 @@ Estas no se deducen del código; las definió Luis:
 - **Consultas de DNI.** Buscar primero en la base de datos propia y recién después llamar a apiperu.dev: los toques de la API son limitados y cuestan.
 - **Agenda.** Validar que no se crucen consultorio, profesional ni paciente en la misma fecha y hora.
 - **Gastos.** Fijos y variables van separados, y los variables se suman solo del mes que corresponde: una compra de marzo no debe seguir bajando el margen de setiembre.
+- **Cuentas personales.** Un gasto se puede pagar por partes: lo que importa ver es **cuánto falta**, no si está pagado o no. El **fijo** se renueva cada mes en su día de vencimiento; el **suelto** es un pago único con su propia fecha, y al pagarlo se terminó. Un suelto que quedó debiendo no puede desaparecer al cambiar de mes, pero tampoco vuelve a pesar en el gasto del mes nuevo.
 
 ## Fechas
 

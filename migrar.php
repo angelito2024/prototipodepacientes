@@ -276,6 +276,16 @@ if ((int) $sinAmbito > 0) {
     decir('    revísalo en Tarifas para que no aparezcan en la ficha del paciente.');
 }
 
+$sueltos = Database::valor(
+    "SELECT COUNT(*) FROM personal_movimientos WHERE clase = 'variable'"
+);
+if ((int) $sueltos > 0) {
+    decir("  · {$sueltos} gastos sueltos personales: los respaldos antiguos no decían si");
+    decir('    estaban pagados. Se dieron por pagados los de fecha ya pasada, y quedaron');
+    decir('    pendientes los de fecha futura (una deuda con vencimiento). Revísalo en');
+    decir('    Cuentas personales; cambiarlo es registrar o quitar un pago.');
+}
+
 $pinPlano = Database::valor('SELECT COUNT(*) FROM personal_config WHERE pin_hash IS NOT NULL');
 if ((int) $pinPlano > 0) {
     decir('  · La clave de cuentas personales se importó con hash. A partir de ahora no');

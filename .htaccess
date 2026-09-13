@@ -1,0 +1,15 @@
+# El panel no debe quedar guardado en el navegador.
+#
+# Sin esto, después de una mejora se sigue viendo la pantalla vieja y parece
+# que el arreglo no se aplicó: pasó con el cálculo de Finanzas, que ya estaba
+# corregido en el servidor pero el navegador seguía mostrando la copia
+# anterior. Los datos vienen de la base de datos, así que no hay nada que
+# ganar guardando la pantalla.
+<IfModule mod_headers.c>
+  <FilesMatch "\.(html|php)$">
+    Header set Cache-Control "no-store, no-cache, must-revalidate, max-age=0"
+    Header set Pragma "no-cache"
+    Header unset ETag
+  </FilesMatch>
+</IfModule>
+FileETag None

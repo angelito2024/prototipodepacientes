@@ -47,12 +47,19 @@ cuentas personales, hay que ponerla al día una vez:
 
 ```bash
 $MYSQL -uroot --default-character-set=utf8mb4 < 05_actualizacion_talleres.sql
+$MYSQL -uroot --default-character-set=utf8mb4 < 06_pagos_parciales.sql
 ```
 
-Agrega las seis tablas nuevas, el ámbito de las tarifas, los destinatarios
-de los recordatorios y la duración de la sesión. Es reejecutable y no toca
-los datos existentes: deja la base igual que una instalación desde cero
-(verificado comparando columnas e índices de ambas).
+- `05` agrega las seis tablas nuevas, el ámbito de las tarifas, los
+  destinatarios de los recordatorios y la duración de la sesión.
+- `06` permite pagar por partes un gasto o ingreso fijo de las cuentas
+  personales: cada pago pasa a ser una fila con su importe. Los meses que
+  ya estaban marcados se convierten en un pago por el monto completo, que
+  es lo que significaban.
+
+Ambas son reejecutables y no tocan los datos existentes: dejan la base
+igual que una instalación desde cero (verificado comparando columnas e
+índices de ambas).
 
 ### Después de instalar
 1. Cambiar la contraseña del usuario `admin` (temporal: `Magusa2026*`).
@@ -144,7 +151,8 @@ Verificadas contra MySQL 8.4.3:
 - Un movimiento personal fijo lleva día de vencimiento y no fecha suelta;
   uno variable, al revés. Mezclarlos era lo que hacía que una compra de
   marzo siguiera restando del margen en setiembre.
-- Un mes solo se puede marcar pagado una vez por movimiento personal.
+- Un pago de una cuenta personal tiene importe mayor que cero. Un mes puede
+  llevar varios: lo que falta es el monto menos la suma de sus pagos.
 - Una cita presencial exige consultorio.
 - El documento de identidad es único en todo el centro.
 - La mensualidad de alquiler de un mes no se puede registrar dos veces.

@@ -31,7 +31,7 @@ final class Pacientes extends Repositorio
     {
         $filas = Database::todos(
             "SELECT p.id, p.uid, p.nombre_completo, p.documento, p.telefono, p.email,
-                    p.dia_cumple, p.sexo, p.notas, p.activo,
+                    p.dia_cumple, p.fecha_nacimiento, p.sexo, p.notas, p.activo,
                     pa.tipo_atencion, pa.modalidad_default, pa.es_menor,
                     pa.enlace_default, pa.direccion_default, pa.referencia_default,
                     pa.estado_informe, pa.fecha_limite_informe, pa.estado_pago_manual,
@@ -53,7 +53,10 @@ final class Pacientes extends Repositorio
         $salida = [];
         foreach ($filas as $f) {
             $pid = (int) $f['id'];
-            $a   = $acomp[$pid] ?? ['apoderado' => null, 'lista' => []];
+            // Las claves tienen que coincidir con las que arma leerAcompanantes():
+            // con el nombre antiguo en singular, un paciente SIN apoderado ni
+            // acompañantes rompía la lectura de toda la pestaña Pacientes.
+            $a   = $acomp[$pid] ?? ['apoderados' => [], 'lista' => [], 'avisos' => []];
             $pk  = $paquetes[$pid] ?? ['activo' => null, 'historial' => []];
             $act = $pk['activo'];
 
@@ -77,6 +80,7 @@ final class Pacientes extends Repositorio
                 'reportStatus'       => (string) $f['estado_informe'],
                 'reportDueDate'      => (string) ($f['fecha_limite_informe'] ?? ''),
                 'birthday'           => (string) ($f['dia_cumple'] ?? ''),
+                'birthDate'          => (string) ($f['fecha_nacimiento'] ?? ''),
                 'isMinor'            => (int) $f['es_menor'] === 1,
                 'sex'                => Personas::sexoTexto($f['sexo'] ?? null),
                 'guardians'          => $a['apoderados'],
