@@ -41,6 +41,11 @@ CREATE TABLE centro_config (
   email                 VARCHAR(150)  NULL,
   lema                  VARCHAR(255)  NULL,
   medios_pago           TEXT          NULL,   -- texto libre mostrado en el recibo
+  -- Salas fijas de videollamada. Zoom y Meet no permiten crear una reunión
+  -- desde fuera; su sala personal sí es siempre la misma y siempre está
+  -- abierta, así que se guarda una vez y se reúsa en cada cita virtual.
+  sala_zoom             VARCHAR(255)  NULL,
+  sala_meet             VARCHAR(255)  NULL,
   logo_archivo_id       BIGINT UNSIGNED NULL, -- FK -> archivos (saca el base64 del HTML)
   qr_yape_archivo_id    BIGINT UNSIGNED NULL,
   minutos_recordatorio  SMALLINT UNSIGNED NOT NULL DEFAULT 10,
@@ -251,7 +256,7 @@ CREATE TABLE pacientes (
   tipo_atencion      ENUM('Individual','Pareja','Familia','Colegio',
                           'Organizacional','Evaluación','Taller','Charla')
                      NOT NULL DEFAULT 'Individual',
-  modalidad_default  ENUM('Presencial','Virtual','Domicilio') NOT NULL DEFAULT 'Presencial',
+  modalidad_default  ENUM('Presencial','Virtual','Domicilio','Colegio') NOT NULL DEFAULT 'Presencial',
   profesional_id     BIGINT UNSIGNED NULL,          -- profesional tratante actual
   es_menor           TINYINT(1)   NOT NULL DEFAULT 0,
   enlace_default     VARCHAR(500) NULL,             -- Meet/Zoom habitual
@@ -315,7 +320,17 @@ CREATE TABLE profesionales (
   -- vs Alquiler (el externo paga por usar el consultorio) vs Planilla.
   modelo_pago         ENUM('Comisión','Alquiler de espacio','Planilla','Honorarios')
                       NOT NULL DEFAULT 'Comisión',
+  -- Lo que se queda el centro por sesión. Se conserva para las fichas
+  -- antiguas; las nuevas fijan cuánto se le PAGA a él (ver más abajo).
   monto_centro_sesion DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  -- Lo que se le paga al profesional por sesión, según cómo atendió. El
+  -- resto de la tarifa del paciente queda para el centro. En cero significa
+  -- que esa ficha todavía se rige por monto_centro_sesion.
+  pago_virtual        DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  pago_presencial     DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  -- Turno en colegio: los dos montos se acuerdan, no salen de una tarifa.
+  pago_colegio        DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  centro_colegio      DECIMAL(12,2) NOT NULL DEFAULT 0.00,
   alquiler_modo       ENUM('Por paciente','Por dia','Mensual') NOT NULL DEFAULT 'Por paciente',
   alquiler_tarifa     DECIMAL(12,2) NOT NULL DEFAULT 0.00,
   fecha_ingreso       DATE NULL,
@@ -326,6 +341,9 @@ CREATE TABLE profesionales (
   saldo_por_pagar     DECIMAL(12,2) NOT NULL DEFAULT 0.00,
   al_dia              TINYINT(1) NOT NULL DEFAULT 1,
   ultima_liquidacion  DATE NULL,
+  -- Los pagos ya hechos, cada uno con QUÉ atenciones cubrió. Con solo una
+  -- fecha de corte, una atención registrada el mismo día del pago se perdía.
+  liquidaciones_json  JSON NULL,
   PRIMARY KEY (persona_id),
   KEY idx_prof_modelo (modelo_pago),
   CONSTRAINT fk_prof_persona FOREIGN KEY (persona_id) REFERENCES personas(id)
@@ -499,7 +517,7 @@ CREATE TABLE citas (
   inicio          DATETIME NOT NULL,
   duracion_min    SMALLINT UNSIGNED NOT NULL DEFAULT 60,
   fin             DATETIME AS (inicio + INTERVAL duracion_min MINUTE) STORED,
-  modalidad       ENUM('Presencial','Virtual','Domicilio') NOT NULL DEFAULT 'Presencial',
+  modalidad       ENUM('Presencial','Virtual','Domicilio','Colegio') NOT NULL DEFAULT 'Presencial',
   consultorio_id  BIGINT UNSIGNED NULL,   -- obligatorio si es Presencial
   enlace          VARCHAR(500) NULL,      -- obligatorio si es Virtual
   direccion       VARCHAR(255) NULL,

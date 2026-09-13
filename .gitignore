@@ -9,3 +9,6 @@ centro-psicologico.backup.html
 
 # Respaldos exportados desde el panel
 backup-centro-psicologico-*.json
+
+# Diagnóstico financiero: son cifras privadas de Luis, no del programa
+diagnostico-*.md

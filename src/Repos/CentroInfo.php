@@ -31,6 +31,10 @@ final class CentroInfo extends Repositorio
             'ruc'                 => (string) ($c['ruc'] ?? ''),
             'slogan'              => (string) ($c['lema'] ?? ''),
             'paymentMethods'      => (string) ($c['medios_pago'] ?? ''),
+            // Salas fijas de videollamada: se guardan una vez y se reúsan en
+            // cada cita virtual, sin tener que crearlas de nuevo cada vez.
+            'zoomSala'            => (string) ($c['sala_zoom'] ?? ''),
+            'meetSala'            => (string) ($c['sala_meet'] ?? ''),
             'reminderMinutes'     => (int) ($c['minutos_recordatorio'] ?? 10),
             'sessionMinutes'      => (int) ($c['minutos_sesion'] ?? 60),
             'rescheduleHours'     => (int) ($c['horas_reprogramacion'] ?? 24),
@@ -53,13 +57,15 @@ final class CentroInfo extends Repositorio
         Database::query(
             'INSERT INTO centro_config
                 (id, razon_social, direccion, telefono, ruc, lema, medios_pago,
+                 sala_zoom, sala_meet,
                  minutos_recordatorio, minutos_sesion, horas_reprogramacion,
                  porcentaje_penalidad, incluir_politica)
-             VALUES (1,?,?,?,?,?,?,?,?,?,?,?)
+             VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?)
              ON DUPLICATE KEY UPDATE
                 razon_social=VALUES(razon_social), direccion=VALUES(direccion),
                 telefono=VALUES(telefono), ruc=VALUES(ruc), lema=VALUES(lema),
                 medios_pago=VALUES(medios_pago),
+                sala_zoom=VALUES(sala_zoom), sala_meet=VALUES(sala_meet),
                 minutos_recordatorio=VALUES(minutos_recordatorio),
                 minutos_sesion=VALUES(minutos_sesion),
                 horas_reprogramacion=VALUES(horas_reprogramacion),
@@ -72,6 +78,8 @@ final class CentroInfo extends Repositorio
                 self::nz($valor['ruc'] ?? null),
                 self::nz($valor['slogan'] ?? null),
                 self::nz($valor['paymentMethods'] ?? null),
+                self::nz($valor['zoomSala'] ?? null),
+                self::nz($valor['meetSala'] ?? null),
                 self::ent($valor['reminderMinutes'] ?? 10) ?: 10,
                 // Duración de la sesión: es el rango con el que se comparan
                 // los cruces de agenda.

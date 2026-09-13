@@ -27,9 +27,10 @@ final class Profesionales extends Repositorio
                     p.dia_cumple, p.activo,
                     pr.titulo, pr.carrera, pr.especialidad, pr.colegiatura,
                     pr.colegiatura_habil, pr.colegiatura_esp, pr.colegiatura_esp_habil,
-                    pr.modelo_pago, pr.monto_centro_sesion, pr.alquiler_modo,
+                    pr.modelo_pago, pr.monto_centro_sesion, pr.pago_virtual, pr.pago_presencial, pr.pago_colegio, pr.centro_colegio,
+                    pr.alquiler_modo,
                     pr.alquiler_tarifa, pr.horario_texto, pr.saldo_por_pagar,
-                    pr.al_dia, pr.ultima_liquidacion
+                    pr.al_dia, pr.ultima_liquidacion, pr.liquidaciones_json
                FROM profesionales pr
                JOIN personas p ON p.id = pr.persona_id
               WHERE p.eliminado_en IS NULL
@@ -57,12 +58,24 @@ final class Profesionales extends Repositorio
                 'schedule'                    => (string) ($f['horario_texto'] ?? ''),
                 'paymentModel'                => (string) $f['modelo_pago'],
                 'centerShareAmount'           => (float) $f['monto_centro_sesion'],
+                // Lo que se le paga a él por sesión, según cómo atendió. En
+                // cero significa que esa ficha se sigue rigiendo por lo que
+                // se queda el centro (centerShareAmount).
+                'pagoVirtual'                 => (float) ($f['pago_virtual'] ?? 0),
+                'pagoPresencial'              => (float) ($f['pago_presencial'] ?? 0),
+                // El turno en colegio no reparte una tarifa: son dos montos
+                // acordados, uno para él y otro para el centro.
+                'pagoColegio'                 => (float) ($f['pago_colegio'] ?? 0),
+                'centroColegio'               => (float) ($f['centro_colegio'] ?? 0),
                 'roomRentalMode'              => (string) $f['alquiler_modo'],
                 'roomRentalRate'              => (float) $f['alquiler_tarifa'],
                 'birthday'                    => (string) ($f['dia_cumple'] ?? ''),
                 'paid'                        => (int) $f['al_dia'] === 1,
                 'amountToPay'                 => (float) $f['saldo_por_pagar'],
                 'lastSettledDate'             => (string) ($f['ultima_liquidacion'] ?? ''),
+                // Cada pago guarda qué atenciones cubrió: con una sola fecha
+                // de corte, lo atendido el mismo día del pago se perdía.
+                'liquidaciones'               => json_decode((string) ($f['liquidaciones_json'] ?? '[]'), true) ?: [],
                 'weeklySchedule'              => $horarios[$uid] ?? null,
                 'scheduleExceptions'          => $excep[(int) $f['id']] ?? [],
                 'active'                      => (int) $f['activo'] === 1,
@@ -111,9 +124,10 @@ final class Profesionales extends Repositorio
                 'INSERT INTO profesionales
                     (persona_id, titulo, carrera, especialidad, colegiatura, colegiatura_habil,
                      colegiatura_esp, colegiatura_esp_habil, modelo_pago, monto_centro_sesion,
+                     pago_virtual, pago_presencial, pago_colegio, centro_colegio,
                      alquiler_modo, alquiler_tarifa, horario_texto, saldo_por_pagar,
-                     al_dia, ultima_liquidacion)
-                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     al_dia, ultima_liquidacion, liquidaciones_json)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                  ON DUPLICATE KEY UPDATE
                     titulo=VALUES(titulo), carrera=VALUES(carrera),
                     especialidad=VALUES(especialidad), colegiatura=VALUES(colegiatura),
@@ -122,6 +136,11 @@ final class Profesionales extends Repositorio
                     colegiatura_esp_habil=VALUES(colegiatura_esp_habil),
                     modelo_pago=VALUES(modelo_pago),
                     monto_centro_sesion=VALUES(monto_centro_sesion),
+                    pago_virtual=VALUES(pago_virtual),
+                    pago_presencial=VALUES(pago_presencial),
+                    pago_colegio=VALUES(pago_colegio),
+                    centro_colegio=VALUES(centro_colegio),
+                    liquidaciones_json=VALUES(liquidaciones_json),
                     alquiler_modo=VALUES(alquiler_modo),
                     alquiler_tarifa=VALUES(alquiler_tarifa),
                     horario_texto=VALUES(horario_texto),
@@ -139,12 +158,20 @@ final class Profesionales extends Repositorio
                     $espHabil === null ? null : self::bool($espHabil),
                     self::enum($item['paymentModel'] ?? null, self::MODELOS, 'Comisión'),
                     self::num($item['centerShareAmount'] ?? 0),
+                    self::num($item['pagoVirtual'] ?? 0),
+                    self::num($item['pagoPresencial'] ?? 0),
+                    self::num($item['pagoColegio'] ?? 0),
+                    self::num($item['centroColegio'] ?? 0),
                     self::enum($item['roomRentalMode'] ?? null, self::MODOS, 'Por paciente'),
                     self::num($item['roomRentalRate'] ?? 0),
                     self::nz($item['schedule'] ?? null),
                     self::num($item['amountToPay'] ?? 0),
                     self::bool($item['paid'] ?? true),
                     self::fecha($item['lastSettledDate'] ?? null),
+                    json_encode(
+                        is_array($item['liquidaciones'] ?? null) ? $item['liquidaciones'] : [],
+                        JSON_UNESCAPED_UNICODE
+                    ),
                 ]
             );
 

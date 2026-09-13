@@ -337,6 +337,23 @@
   /* Tablas de resumen (sin scroll horizontal): los importes no deben partirse en dos líneas. */
   .card > table td:last-child{white-space:nowrap;}
 
+  /* ===== Presentación uniforme de todos los registros =====
+     Pacientes, profesionales, practicantes y talleres tenían el mismo
+     problema: los botones de acción se apilaban uno por línea y los nombres
+     largos partían la celda en cinco. Se arregla aquí para todas a la vez. */
+  .tablewrap table td:last-child:has(.btn){white-space:nowrap;}
+  /* Un nombre largo se recorta con puntos suspensivos; el completo aparece al
+     pasar el mouse, porque va en el title. */
+  .nom{
+    display:inline-block;max-width:200px;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    vertical-align:bottom;
+  }
+  .nom.corto{max-width:140px;}
+  /* La línea de abajo de una celda: DNI, teléfono, parentesco, especialidad. */
+  .sub{display:block;font-size:11.5px;color:var(--ink-soft);line-height:1.35;margin-top:2px;}
+  .sub + .sub{margin-top:0;}
+
   /* ===== Botones ===== */
   .btn{
     display:inline-flex;align-items:center;justify-content:center;gap:6px;
@@ -758,6 +775,33 @@
       <div class="field"><label>Eslogan / frase (opcional)</label><input id="ci_slogan" placeholder="Ej: Tu bienestar es nuestra prioridad"></div>
       <div class="field"><label>Medios de pago (para incluir en recordatorios de pago)</label>
         <textarea id="ci_paymentMethods" rows="5" placeholder="Ej: Yape/Plin: 987654321 - Nombre&#10;Cuenta BCP: 1934-xxxxxxx"></textarea></div>
+      <div class="field"><label>Tu sala fija de Zoom</label>
+        <input type="text" id="ci_zoomSala" placeholder="Pega el enlace o solo el número: 123 4567 8901">
+        <p class="hint" style="margin-top:3px">
+          <b>Dónde encontrarla.</b> Es tu <b>sala personal</b> (PMI), la que no cambia nunca.
+          <a href="https://zoom.us/profile" target="_blank" rel="noopener">Ábrela aquí</a> e inicia sesión:
+          abajo dice <b>"ID personal de reunión"</b>, un número de 10 u 11 cifras. Cópialo y pégalo acá tal cual
+          — el panel arma el enlace solo. En la aplicación de Zoom es
+          <b>Reuniones → Sala personal</b>; en el celular, <b>Reuniones</b> arriba.
+          <br><span style="color:var(--alert)"><b>Ojo con el Zoom gratuito:</b> corta la llamada a los 40 minutos,
+          también entre dos personas. Para una sesión de 45 o 60 minutos, usa Meet o la sala que genera el panel.</span>
+        </p>
+      </div>
+      <div class="field"><label>Tu sala fija de Google Meet</label>
+        <input type="text" id="ci_meetSala" placeholder="Pega el enlace o solo el código: abc-defg-hij">
+        <p class="hint" style="margin-top:3px">
+          <b>Cómo sacarla.</b> En Meet no hay una "sala personal" fija como en Zoom: se crea una y se reúsa.
+          Entra a <a href="https://meet.google.com/" target="_blank" rel="noopener">meet.google.com</a>
+          con tu cuenta de Gmail y dale a <b>Nueva reunión</b>. Elige
+          <b>"Crear una reunión para más tarde"</b> — <span style="color:var(--alert)">no</span>
+          "Iniciar una reunión instantánea", esa se pierde al cerrarla.
+          Te muestra un enlace tipo <b>meet.google.com/abc-defg-hij</b>: cópialo y pégalo acá.
+          También puedes pegar solo las tres palabritas.
+          <br>Esa sala sirve para todas tus citas y no caduca mientras la uses al menos una vez al año.
+          Entre dos personas <b>no tiene límite de tiempo</b>.
+          <br><b>Al empezar la sesión:</b> el paciente no necesita cuenta, pero le va a salir
+          <b>"pedir unirse"</b> y tú tienes que aceptarlo. Entra tú primero.</p>
+      </div>
       <div class="field">
         <label>Tu QR de Plin (para mostrar o descargar y enviar)</label>
         <div style="text-align:center;background:var(--paper);border:1px solid var(--border);border-radius:8px;padding:12px">
@@ -807,16 +851,17 @@
         <div class="field"><label>Nueva fecha</label><input type="date" id="rf_date"></div>
         <div class="field"><label>Nueva hora</label><input type="time" id="rf_time"></div>
         <div class="field"><label>Modalidad</label>
-          <select id="rf_modality" onchange="toggleRescheduleMeetingField()"><option>Presencial</option><option>Virtual</option><option>Domicilio</option></select>
+          <select id="rf_modality" onchange="toggleRescheduleMeetingField()"><option>Presencial</option><option>Virtual</option><option>Domicilio</option><option>Colegio</option></select>
         </div>
       </div>
       <div class="field" id="rf_meetingWrap" style="display:none;margin-top:8px">
         <label>Enlace de la reunión (Zoom, Google Meet, etc.)</label>
-        <input type="text" id="rf_meetingLink" placeholder="Pega aquí el enlace">
-        <p class="hint" style="margin-top:4px">
-          <a href="https://zoom.us/start/videomeeting" target="_blank" rel="noopener">Crear en Zoom</a> ·
-          <a href="https://meet.google.com/new" target="_blank" rel="noopener">Crear en Google Meet</a>
-        </p>
+        <input type="text" id="rf_meetingLink" placeholder="Genéralo aquí o pega uno de Zoom / Meet">
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:5px">
+          <button type="button" class="btn small" onclick="ponerEnlaceGenerado('rf_meetingLink','reprogramada')">🎥 Generar enlace</button>
+          <button type="button" class="btn small secondary" onclick="abrirGoogleMeet()">Usar Google Meet</button>
+          <a class="btn small secondary" href="https://zoom.us/start/videomeeting" target="_blank" rel="noopener">Usar Zoom</a>
+        </div>
       </div>
       <div class="formgrid" id="rf_addressWrap" style="display:none;margin-top:8px">
         <div class="field"><label>Dirección de la visita</label><input type="text" id="rf_address" placeholder="Av. Ejemplo 123, distrito"></div>
@@ -875,6 +920,32 @@
   </div>
 </div>
 
+<div class="modalOverlay" id="pagoProfModal">
+  <div class="receiptCard" style="max-width:680px">
+    <div style="padding:24px 26px">
+      <h2 style="margin-top:0" id="pagoProfTitulo">Pago al profesional</h2>
+      <p class="hint" id="pagoProfSub" style="margin:0 0 16px"></p>
+      <div id="pagoProfContenido"></div>
+    </div>
+    <div class="receiptActions">
+      <button class="btn secondary" onclick="cerrarPagoProf()">Cerrar</button>
+    </div>
+  </div>
+</div>
+
+<div class="modalOverlay" id="recordatorioModal">
+  <div class="receiptCard" style="max-width:580px">
+    <div style="padding:24px 26px">
+      <h2 style="margin-top:0" id="recTitulo">Avisar de la cita</h2>
+      <p class="hint" id="recSub" style="margin:0 0 16px"></p>
+      <div id="recContenido"></div>
+    </div>
+    <div class="receiptActions">
+      <button class="btn secondary" onclick="cerrarRecordatorio()">Cerrar</button>
+    </div>
+  </div>
+</div>
+
 <div class="modalOverlay" id="abonoModal">
   <div class="receiptCard" style="max-width:560px">
     <div style="padding:24px 26px">
@@ -889,6 +960,7 @@
       </div>
       <p class="hint" id="abonoAvisoTotal" style="margin-top:4px"></p>
       <button class="btn" style="margin-top:8px" id="abonoSubmit" onclick="saveAbono()">Registrar pago</button>
+      <button class="btn secondary" style="margin-top:8px;display:none" id="abonoCancelEdit" onclick="cancelAbonoEdit()">Cancelar corrección</button>
 
       <h3 style="margin:20px 0 6px;font-size:14px" id="abonoListaTitulo">Lo registrado este mes</h3>
       <div class="tablewrap" id="abonoLista"></div>
@@ -958,6 +1030,9 @@
     <div id="receiptContent"></div>
     <div class="receiptActions" style="flex-wrap:wrap">
       <button class="btn" onclick="downloadReceiptPDF(this)">Descargar PDF</button>
+      <button class="btn secondary" id="reciboPdfWhatsApp" style="display:none"
+              onclick="pdfYLuegoWhatsApp(this)">PDF + abrir WhatsApp</button>
+      <a class="btn secondary" id="reciboWhatsApp" style="display:none" target="_blank" rel="noopener">Solo el texto por WhatsApp</a>
       <button class="btn secondary" onclick="window.print()">Imprimir</button>
       <button class="btn secondary" onclick="closeReceipt()">Cerrar</button>
     </div>
@@ -1350,7 +1425,7 @@ function defaultHistoria(patientId){
 /* Las cuentas de cobro (Yape, banco, CCI) NO van escritas aquí: este archivo
    está en GitHub y son datos bancarios. Se escriben una sola vez en
    "Datos del centro" y viven en la base, junto con el token de apiperu. */
-const DEFAULT_CENTER_INFO = {name:'Centro Psicológico MAGUSA ARCOIRIS DE ESPERANZA S.A.C.', address:'', phone:'', ruc:'', slogan:'', paymentMethods:'', reminderMinutes:10, rescheduleHours:24, latePenaltyPercent:10, includePolicy:true, sessionMinutes:60, apiPeruToken:''};
+const DEFAULT_CENTER_INFO = {name:'Centro Psicológico MAGUSA ARCOIRIS DE ESPERANZA S.A.C.', address:'', phone:'', ruc:'', slogan:'', paymentMethods:'', zoomSala:'', meetSala:'', reminderMinutes:10, rescheduleHours:24, latePenaltyPercent:10, includePolicy:true, sessionMinutes:60, apiPeruToken:''};
 const DEFAULT_AUTH_CONFIG = {enabled:false, username:'', password:''};
 
 /* ===== Horario semanal de profesionales ===== */
@@ -1810,6 +1885,10 @@ function renderPanel(){
     case 'historia': p.innerHTML = viewHistoria(); break;
   }
   markScrollableTables();
+  // Si hay una ventana de recordatorios abierta, se redibuja con lo recién
+  // guardado: si no, al quitar un contacto la ventana se quedaba con lo viejo.
+  if(typeof recordatorioCitaId !== 'undefined' && recordatorioCitaId) renderRecordatorioModal();
+  if(typeof pagoProfId !== 'undefined' && pagoProfId) renderPagoProfModal();
 }
 // Marca las tablas que se desbordan para anclar su columna de acciones.
 function markScrollableTables(){
@@ -2465,9 +2544,12 @@ function centerIncomeByProfessional(fromDate, toDate){
     // centro se quedaba con S/20 en vez de S/200.
     const sesionesCubiertas = sesionesQueCubreElPago(pm, patient);
     byProf[pr.id].sessions += sesionesCubiertas;
+    // Al cobrar todavía no se sabe cómo se va a atender cada sesión del
+    // paquete, así que se usa la modalidad habitual del paciente. Lo que se
+    // le paga de verdad al profesional sale de las citas, una por una.
     byProf[pr.id].income += Math.min(
       Number(pm.amount||0),
-      sesionesCubiertas * Number(pr.centerShareAmount||0)
+      sesionesCubiertas * parteDelCentro(pr, patient, patient.modality)
     );
   });
   // Alquiler de espacio: se calcula del registro de uso de consultorio, SIN necesidad de crear
@@ -2585,19 +2667,23 @@ function viewPacientes(){
     const gs = p.isMinor? guardiansFromPatient(p) : [];
     const g0 = gs[0];
     const contacto = p.isMinor
-      ? `${g0? g0.name : '—'} <span class="hint">(${g0? (g0.relationship||'apoderado') : 'apoderado'})</span>${gs.length>1? ` <span class="chip neutral">+${gs.length-1}</span>`:''}<br><span class="hint">${(g0&&g0.phone)||''}</span>`
+      ? `<span class="nom corto" title="${g0? g0.name : ''}">${g0? g0.name : '—'}</span>${gs.length>1? ` <span class="chip neutral">+${gs.length-1}</span>`:''}
+         <span class="sub">${g0? (g0.relationship||'apoderado') : 'apoderado'}${(g0&&g0.phone)? ' · '+g0.phone : ''}</span>`
       : `${p.phone||'—'}`;
     return `<tr style="${p.active===false?'opacity:0.55':''}">
-      <td><b>${p.name}</b>${p.isMinor?' <span class="chip warn">Menor</span>':''}${p.active===false?' <span class="chip neutral">Inhabilitado</span>':''}<br><span class="hint">DNI: ${p.dni||'—'}</span></td>
+      <td><span class="nom" title="${p.name}"><b>${p.name}</b></span>
+        ${p.isMinor?' <span class="chip warn">Menor</span>':''}${p.active===false?' <span class="chip neutral">Inhabilitado</span>':''}
+        <span class="sub">${tipoPacienteChip(p)} · DNI ${p.dni||'—'}</span></td>
       <td>${contacto}</td>
-      <td>${p.type||'—'}${companions.length? `<br><span class="hint">+ ${companions.length} persona(s)</span>`:''}</td>
-      <td>${p.modality||'—'}${p.modality==='Domicilio'&&p.defaultAddress?`<br><span class="hint">📍 ${p.defaultAddress}</span>`:''}${p.modality==='Virtual'&&p.defaultMeetingLink?`<br><a href="${p.defaultMeetingLink}" target="_blank" rel="noopener" class="hint">🔗 Enlace habitual</a>`:''}</td>
-      <td>${findName(DB.professionals,p.professionalId)}</td>
-      <td>${p.billingType==='Individual'? `<span class="chip neutral">Individual</span><br><span class="hint">${p.sessionsUsed||0} sesión(es) atendidas</span>` : `${p.sessionsUsed||0}/${p.packageTotal||0}${paqueteCompleto?' <span class="chip ok">Completo</span>':''}
-        <div class="barwrap"><div class="bar ${pct<100?'':'alertbar'}" style="width:${pct}%"></div></div>${(p.paquetesHistorial||[]).length? `<br><span class="hint">Paquetes anteriores: ${p.paquetesHistorial.length}</span>`:''}`}
+      <td style="white-space:nowrap">${p.type||'—'} · ${p.modality||'—'}
+        ${companions.length? `<span class="sub">+ ${companions.length} persona(s)</span>`:''}
+        ${p.modality==='Domicilio'&&p.defaultAddress?`<span class="sub">📍 ${p.defaultAddress}</span>`:''}
+        ${p.modality==='Virtual'&&p.defaultMeetingLink?`<span class="sub"><a href="${p.defaultMeetingLink}" target="_blank" rel="noopener">🔗 Enlace habitual</a></span>`:''}</td>
+      <td><span class="nom corto" title="${findName(DB.professionals,p.professionalId)}">${findName(DB.professionals,p.professionalId)}</span></td>
+      <td>${p.billingType==='Individual'? `<span class="chip neutral">Individual</span><span class="sub">${p.sessionsUsed||0} sesión(es) atendidas</span>` : `${p.sessionsUsed||0}/${p.packageTotal||0}${paqueteCompleto?' <span class="chip ok">Completo</span>':''}
+        <div class="barwrap"><div class="bar ${pct<100?'':'alertbar'}" style="width:${pct}%"></div></div>${(p.paquetesHistorial||[]).length? `<span class="sub">Paquetes anteriores: ${p.paquetesHistorial.length}</span>`:''}`}
       </td>
-      <td>${tipoPacienteChip(p)}</td>
-      <td><span class="chip ${payChip}">${payStatus}</span>${bal.totalPrice>0?`<br><span class="hint">Saldo: ${fmtMoney(bal.saldo)}</span>`:''}</td>
+      <td style="white-space:nowrap"><span class="chip ${payChip}">${payStatus}</span>${bal.totalPrice>0?`<span class="sub">Saldo: ${fmtMoney(bal.saldo)}</span>`:''}</td>
       <td>${p.reportStatus==='Pendiente'? '<span class="chip alert">Pendiente</span>' : (p.reportStatus==='Entregado'? '<span class="chip ok">Entregado</span>' : '<span class="chip neutral">No aplica</span>')}</td>
       <td>${p.birthday? fmtBirthday(p.birthday):'—'}</td>
       <td>
@@ -2649,7 +2735,7 @@ function viewPacientes(){
           <p class="hint" style="margin-top:3px">Charlas, talleres, programas con colegios o empresas se registran en la pestaña <b>Talleres y charlas</b>, no aquí.</p>
         </div>
         <div class="field"><label>Modalidad</label>
-          <select id="pf_modality" onchange="toggleModalityDefaultFields()"><option>Presencial</option><option>Virtual</option><option>Domicilio</option></select>
+          <select id="pf_modality" onchange="toggleModalityDefaultFields()"><option>Presencial</option><option>Virtual</option><option>Domicilio</option><option>Colegio</option></select>
         </div>
         <div class="field"><label>Profesional asignado</label>
           <select id="pf_prof"><option value="">— sin asignar —</option>${DB.professionals.filter(pr=>pr.active!==false || (editingPatientId && (DB.patients.find(p=>p.id===editingPatientId)||{}).professionalId===pr.id)).map(pr=>`<option value="${pr.id}">${pr.name}</option>`).join('')}</select>
@@ -2673,7 +2759,8 @@ function viewPacientes(){
                 </select>
               </div>
               <div class="field" id="pf_consultaEnlaceWrap" style="display:none"><label>Enlace de la reunión</label>
-                <input type="text" id="pf_consultaEnlace" placeholder="Zoom o Google Meet usado en la consulta">
+                <input type="text" id="pf_consultaEnlace" placeholder="Genéralo aquí o pega uno de Zoom / Meet">
+                ${botonesDeEnlace('pf_consultaEnlace', "()=>(document.getElementById('pf_name')||{}).value")}
               </div>
               <div class="field"><label>Monto de la consulta (S/)</label>
                 <input type="number" id="pf_consultaMonto" value="50" min="0">
@@ -2728,7 +2815,8 @@ function viewPacientes(){
       </div>
       <div id="pf_meetingDefaultWrap" class="field" style="margin-top:8px;display:none">
         <label>Enlace de reunión habitual (opcional)</label>
-        <input type="text" id="pf_defaultMeetingLink" placeholder="Si siempre usa el mismo Zoom/Meet, pégalo aquí">
+        <input type="text" id="pf_defaultMeetingLink" placeholder="Si siempre usa el mismo enlace, genéralo o pégalo aquí">
+        ${botonesDeEnlace("pf_defaultMeetingLink", "()=>(document.getElementById('pf_name')||{}).value")}
         <p class="hint">Se sugerirá automáticamente al crear sus citas virtuales — puedes cambiarlo en cada cita si hace falta.<br>
           <a href="https://zoom.us/start/videomeeting" target="_blank" rel="noopener">Crear reunión ahora en Zoom</a> ·
           <a href="https://meet.google.com/new" target="_blank" rel="noopener">Crear reunión ahora en Google Meet</a>
@@ -2778,7 +2866,7 @@ function viewPacientes(){
       <button class="btn secondary" onclick="toggleForm('patientForm')">Cancelar</button>
     </div>
     <div class="tablewrap">
-      ${DB.patients.length? `<table><tr><th>Paciente</th><th>Contacto</th><th>Servicio</th><th>Modalidad</th><th>Profesional</th><th>Paquete</th><th>Tipo</th><th>Pago</th><th>Informe</th><th>Cumple</th><th></th></tr>${rows}</table>`
+      ${DB.patients.length? `<table><tr><th>Paciente</th><th>Contacto</th><th>Atención</th><th>Profesional</th><th>Paquete</th><th>Pago</th><th>Informe</th><th>Cumple</th><th></th></tr>${rows}</table>`
       : `<div class="empty">Aún no hay pacientes registrados. Agrega el primero con el botón de arriba.</div>`}
     </div>
   `;
@@ -2860,6 +2948,116 @@ function toggleConsultaLugar(){
   if(room) room.style.display = mod==='Presencial' ? 'block' : 'none';
   if(link) link.style.display = mod==='Virtual' ? 'block' : 'none';
 }
+/* ===== Generar el enlace de una reunión virtual =====
+   Ni Zoom ni Google Meet dejan crear una sala desde otra página sin tener la
+   cuenta conectada: hay que abrirlos, crearla y copiar el enlace. Jitsi sí:
+   la sala existe apenas se entra a la dirección, sin cuenta ni instalación.
+   Por eso el botón de generar usa Jitsi, y al lado queda el atajo a Meet.
+
+   El nombre de la sala lleva un pedazo al azar a propósito: en Jitsi quien
+   sepa la dirección entra, y una sala llamada "magusa-rodrigo" la adivina
+   cualquiera. Esto es una sesión de terapia. */
+function nombreDeSala(pista){
+  const limpio = String(pista||'')
+    .normalize('NFD').replace(/[̀-ͯ]/g,'')
+    .toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,28);
+  const azar = Math.random().toString(36).slice(2,8) + Math.random().toString(36).slice(2,6);
+  return `magusa-${limpio || 'sesion'}-${azar}`;
+}
+function generarEnlaceReunion(pista){
+  return 'https://meet.jit.si/' + nombreDeSala(pista);
+}
+/* Rellena el campo indicado. Si ya había un enlace, pregunta antes de pisarlo. */
+function ponerEnlaceGenerado(campoId, pista){
+  const el = document.getElementById(campoId);
+  if(!el) return;
+  if(el.value.trim() && !confirm('Ya hay un enlace escrito.\n\n¿Reemplazarlo por uno nuevo?')) return;
+  el.value = generarEnlaceReunion(typeof pista === 'function' ? pista() : pista);
+  el.dispatchEvent(new Event('input', {bubbles:true}));
+  showToast('Enlace creado. La sala se abre sola cuando alguien entra.');
+}
+/* ===== Las salas fijas de Zoom y de Meet =====
+   Zoom y Google Meet no dejan crear una sala desde fuera sin conectar la
+   cuenta. Pero los dos dan una sala PERSONAL que es siempre la misma y está
+   siempre abierta: el "Personal Meeting Room" de Zoom y el enlace del espacio
+   de Meet. Se guarda una vez en Datos del centro y desde entonces ponerla es
+   un clic, igual que generar la de Jitsi. */
+/* Zoom muestra el ID de la sala personal como "123 4567 8901", no como una
+   dirección. Pegando ese número basta: aquí se convierte en el enlace. */
+function normalizarSalaZoom(texto){
+  const t = String(texto||'').trim();
+  if(!t) return '';
+  if(/^https?:\/\//i.test(t)) return t;
+  const soloNumero = t.replace(/[\s-]/g, '');
+  if(/^\d{9,12}$/.test(soloNumero)) return 'https://zoom.us/j/' + soloNumero;
+  return t;   // cualquier otra cosa se guarda tal cual, sin inventar nada
+}
+
+/* Meet identifica la sala con tres palabritas: "abc-defg-hij". Pegando eso
+   basta, igual que con el número de Zoom. */
+function normalizarSalaMeet(texto){
+  const t = String(texto||'').trim();
+  if(!t) return '';
+  if(/^https?:\/\//i.test(t)) return t;
+  const codigo = t.toLowerCase().replace(/\s/g, '');
+  if(/^[a-z]{3}-[a-z]{4}-[a-z]{3}$/.test(codigo)) return 'https://meet.google.com/' + codigo;
+  return t;
+}
+
+function salaFijaDe(cual){
+  const ci = DB.centerInfo || {};
+  return String((cual === 'zoom' ? ci.zoomSala : ci.meetSala) || '').trim();
+}
+function ponerSalaFija(campoId, cual){
+  const url = salaFijaDe(cual);
+  const nombre = cual === 'zoom' ? 'Zoom' : 'Google Meet';
+  if(!url){
+    if(confirm(`Todavía no has guardado tu sala fija de ${nombre}.\n\n`
+      + `Se guarda una sola vez en "Datos del centro" y después se pone con un clic.\n\n`
+      + `¿Abrir Datos del centro para guardarla?`)) openCenterInfoModal();
+    return;
+  }
+  const el = document.getElementById(campoId);
+  if(!el) return;
+  if(el.value.trim() && !confirm('Ya hay un enlace escrito.\n\n¿Reemplazarlo por tu sala de ' + nombre + '?')) return;
+  el.value = url;
+  el.dispatchEvent(new Event('input', {bubbles:true}));
+  showToast(`Puesta tu sala de ${nombre}.`);
+}
+
+/* El paciente elegido en el formulario de citas, para nombrar su sala. */
+function nombreDelPacienteElegido(){
+  const id = (document.getElementById('af_patient')||{}).value;
+  const p = DB.patients.find(x=>x.id===id);
+  return p? p.name : '';
+}
+function abrirGoogleMeet(){
+  showToast('Crea la reunión en Google Meet y pega aquí el enlace que te dé.');
+  window.open('https://meet.google.com/new', '_blank', 'noopener');
+}
+/* Los botones que acompañan a un campo de enlace: uno por cada plataforma,
+   para poder darle a cada quien la que pida. */
+function botonesDeEnlace(campoId, pista){
+  const tieneZoom = !!salaFijaDe('zoom');
+  const tieneMeet = !!salaFijaDe('meet');
+  return `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:5px">
+      <button type="button" class="btn small" onclick="ponerEnlaceGenerado('${campoId}', ${pista})">🎥 Generar sala</button>
+      <button type="button" class="btn small ${tieneZoom?'secondary':''}" style="${tieneZoom?'':'opacity:.7'}"
+              onclick="ponerSalaFija('${campoId}','zoom')">Mi Zoom${tieneZoom?'':' (configurar)'}</button>
+      <button type="button" class="btn small ${tieneMeet?'secondary':''}" style="${tieneMeet?'':'opacity:.7'}"
+              onclick="ponerSalaFija('${campoId}','meet')">Mi Meet${tieneMeet?'':' (configurar)'}</button>
+    </div>
+    <p class="hint" style="margin-top:3px">
+      <b>Generar sala</b> crea una nueva al instante, distinta para cada cita, y no hace falta instalar
+      nada ni tener cuenta — ni tú ni el paciente.
+      <b>Mi Zoom</b> y <b>Mi Meet</b> ponen tu sala de siempre, la que guardaste en Datos del centro.
+      Las tres quedan abiertas: el profesional y el paciente entran a la hora de la cita, cada uno desde su enlace.
+      <br>¿Prefieres una reunión suelta? Créala en
+      <a href="https://zoom.us/start/videomeeting" target="_blank" rel="noopener">Zoom</a> o en
+      <a href="https://meet.google.com/new" target="_blank" rel="noopener">Google Meet</a> y pégala aquí.
+    </p>`;
+}
+
 function toggleReportDue(){
   const aplica = document.getElementById('pf_report').value !== 'No aplica';
   const campo = document.getElementById('pf_reportDue');
@@ -3415,39 +3613,170 @@ function exportPatientsCSV(){
 
 
 /* ===================== CITAS ===================== */
+/* ===== En qué grupo cae una cita =====
+   Una lista ordenada solo por fecha pone arriba lo más viejo, que es
+   justamente lo que ya no hay que tocar. Arriba va lo que pide atención hoy
+   y abajo lo que ya se cerró. */
+const GRUPOS_CITA = [
+  {clave:'curso',     titulo:'En curso ahora',                     orden:'asc',  color:'var(--ok)'},
+  {clave:'sincerrar', titulo:'Ya pasaron y siguen sin cerrar',     orden:'desc', color:'var(--alert)'},
+  {clave:'proximas',  titulo:'Próximas',                            orden:'asc',  color:'var(--primary)'},
+  {clave:'hechas',    titulo:'Ya atendidas',                        orden:'desc', color:'var(--muted)'},
+  {clave:'canceladas',titulo:'Canceladas',                          orden:'desc', color:'var(--muted)'},
+];
+function grupoDeCita(a, ahora){
+  const st = a.status || 'Programada';
+  if(st === 'Cancelada')  return 4;
+  if(st === 'Completada') return 3;
+  const inicio = new Date(`${a.date}T${(a.time||'00:00')}:00`);
+  if(isNaN(inicio.getTime())) return 2;
+  const dura = Number((DB.centerInfo||{}).sessionMinutes || 60);
+  const fin  = new Date(inicio.getTime() + dura*60000);
+  if(ahora >= inicio && ahora < fin) return 0;   // está pasando ahora mismo
+  if(ahora >= fin)                   return 1;   // ya pasó y nadie la cerró
+  return 2;                                       // todavía por venir
+}
+
 function viewCitas(){
-  const sorted = [...DB.appointments].sort((a,b)=> (a.date+a.time).localeCompare(b.date+b.time));
-  const rows = sorted.map(a=>{
-    const patient = DB.patients.find(p=>p.id===a.patientId);
-    const professional = DB.professionals.find(p=>p.id===a.professionalId);
-    const contactPhone = patient? (patient.isMinor? patient.guardianPhone : patient.phone) : '';
-    const contactEmail = patient? (patient.isMinor? patient.guardianEmail : patient.email) : '';
-    const {greetName, mentionName} = greetingFor(patient);
-    const linkLine = (a.modality==='Virtual' && a.meetingLink)? ` Únete por este enlace: ${a.meetingLink}` : '';
-    const addressLine = (a.modality==='Domicilio' && a.address)? ` Dirección: ${a.address}.${a.reference? ` Referencia: ${a.reference}.`:''}` : '';
-    const withProf = professional? ` con ${professionalDisplayName(professional)}${professionalTitleLine(professional)}` : '';
-    const msg = patient? `Hola ${greetName}, le recordamos${mentionName?` la cita de ${mentionName}`:' su cita'}${withProf} el ${a.date} a las ${a.time} en el Centro Psicológico (${a.modality}).${linkLine}${addressLine}${buildPolicyText()}` : '';
-    const profMsg = professional? `Hola ${nombreDePila(professional.name)}, te recordamos que tienes cita con ${patient?patient.name:''} el ${fechaEnPalabras(a.date)} a las ${horaEnPalabras(a.time)} (${a.modality}).${linkLine}${addressLine}` : '';
-    return `<tr>
-    <td>${a.date}<br><span class="hint">${a.time}</span></td>
-    <td>${findName(DB.patients,a.patientId)}${patient&&patient.isMinor?` <span class="hint">(apoderado: ${patient.guardianName||'—'})</span>`:''}</td>
-    <td>${findName(DB.professionals,a.professionalId)}</td>
-    <td>${a.modality}${a.modality==='Presencial'&&a.room? `<br><span class="hint">🏠 ${a.room}</span>`:''}${a.modality==='Virtual'? (a.meetingLink? `<br><a href="${a.meetingLink}" target="_blank" rel="noopener" class="hint">🔗 Enlace</a>` : `<br><button class="btn small secondary" onclick="editMeetingLink('${a.id}')">+ Enlace</button>`):''}${a.modality==='Domicilio'? (a.address? `<br><span class="hint">📍 ${a.address}${a.reference?` (${a.reference})`:''}</span>` : `<br><button class="btn small secondary" onclick="editAppt('${a.id}')">+ Dirección</button>`):''}</td>
+  const ahora = new Date();
+  const clave = a => (a.date||'') + (a.time||'');
+  const sorted = [...DB.appointments]
+    .map(a=>({a, g: grupoDeCita(a, ahora)}))
+    .sort((x,y)=>{
+      if(x.g !== y.g) return x.g - y.g;
+      const cmp = clave(x.a).localeCompare(clave(y.a));
+      return GRUPOS_CITA[x.g].orden === 'desc' ? -cmp : cmp;
+    });
+
+  // Cuántas hay en cada grupo, para el título de cada tramo.
+  const cuantas = {};
+  sorted.forEach(({g})=> cuantas[g] = (cuantas[g]||0)+1);
+
+  let grupoActual = -1;
+  const rows = sorted.map(({a, g})=>{
+    let cabecera = '';
+    if(g !== grupoActual){
+      grupoActual = g;
+      const info = GRUPOS_CITA[g];
+      cabecera = `<tr><td colspan="7" style="background:var(--bg-soft);padding:9px 12px;
+        border-left:4px solid ${info.color};font-weight:700;font-size:13px;letter-spacing:.02em">
+        ${info.titulo} <span class="hint" style="font-weight:400">· ${cuantas[g]}</span></td></tr>`;
+    }
+    return cabecera + filaDeCita(a, g);
+  }).join('');
+
+  return viewCitasHtml(rows);
+}
+
+/* ===== Los mensajes de recordatorio de una cita =====
+   Los arma una sola función porque los usan la fila, la ventana de avisos y
+   la pestaña de recordatorios: si se escriben tres veces, terminan diciendo
+   cosas distintas. */
+function mensajesDeCita(a){
+  const patient = DB.patients.find(p=>p.id===a.patientId);
+  const professional = DB.professionals.find(p=>p.id===a.professionalId);
+  const {greetName, mentionName} = greetingFor(patient);
+  const linkLine = (a.modality==='Virtual' && a.meetingLink)? ` Únete por este enlace: ${a.meetingLink}` : '';
+  const addressLine = (a.modality==='Domicilio' && a.address)? ` Dirección: ${a.address}.${a.reference? ` Referencia: ${a.reference}.`:''}` : '';
+  const withProf = professional? ` con ${professionalDisplayName(professional)}${professionalTitleLine(professional)}` : '';
+  return {
+    patient, professional,
+    msg: patient? `Hola ${greetName}, le recordamos${mentionName?` la cita de ${mentionName}`:' su cita'}${withProf} el ${a.date} a las ${a.time} en el Centro Psicológico (${a.modality}).${linkLine}${addressLine}${buildPolicyText()}` : '',
+    profMsg: professional? `Hola ${nombreDePila(professional.name)}, te recordamos que tienes cita con ${patient?patient.name:''} el ${fechaEnPalabras(a.date)} a las ${horaEnPalabras(a.time)} (${a.modality}).${linkLine}${addressLine}` : '',
+  };
+}
+
+/* A cuánta gente hay que avisarle de esta cita, para decirlo en el botón. */
+function aQuienesAvisar(a){
+  const patient = DB.patients.find(p=>p.id===a.patientId);
+  if(!patient) return [];
+  return reminderRecipients(patient).filter(r=>r.notify);
+}
+
+/* Nombre corto del profesional: uno de cinco palabras ocupaba tres líneas en
+   cada fila de la tabla. El completo queda en el título, al pasar el mouse. */
+function nombreCortoProfesional(pr){
+  if(!pr) return '—';
+  const partes = String(pr.name||'').trim().split(/\s+/);
+  const corto = partes.length>2? partes.slice(0,2).join(' ') : pr.name;
+  return `<span title="${pr.name}">${corto}${partes.length>2? '…':''}</span>`;
+}
+
+/* La fila de una cita. Se separó de la vista para poder agruparlas. */
+function filaDeCita(a, grupo){
+    const {patient, professional} = mensajesDeCita(a);
+    const avisar = aQuienesAvisar(a);
+    // La de ahora se resalta; las cerradas se apagan para que no compitan.
+    const realce = grupo===0? 'background:#e8f5e9;'
+                 : grupo===1? 'background:#fdf4f1;'
+                 : grupo>=3 ? 'opacity:.62;' : '';
+    return `<tr style="${realce}">
+    <td style="white-space:nowrap"><b>${a.time||'--:--'}</b><br><span class="hint">${a.date}</span>
+      ${grupo===0? '<br><span class="chip ok">Ahora</span>'
+       : grupo===1? '<br><span class="chip alert">Sin cerrar</span>' : ''}</td>
+    <td>${findName(DB.patients,a.patientId)}${patient&&patient.isMinor?`<br><span class="hint">apoderado: ${patient.guardianName||'—'}</span>`:''}</td>
+    <td>${nombreCortoProfesional(professional)}</td>
+    <td>${a.modality}${a.modality==='Presencial'&&a.room? `<br><span class="hint">🏠 ${a.room}</span>`:''}${a.modality==='Virtual'&&a.room? `<br><span class="sub" style="color:var(--alert)">Dice virtual pero tiene ${a.room}. Al profesional se le paga distinto según cuál sea.</span>`:''}${a.modality==='Virtual'? (a.meetingLink? `<br><a href="${a.meetingLink}" target="_blank" rel="noopener" class="hint">🔗 Enlace</a>` : `<br><button class="btn small secondary" onclick="editMeetingLink('${a.id}')">+ Enlace</button>`):''}${a.modality==='Domicilio'? (a.address? `<br><span class="hint">📍 ${a.address}${a.reference?` (${a.reference})`:''}</span>` : `<br><button class="btn small secondary" onclick="editAppt('${a.id}')">+ Dirección</button>`):''}</td>
     <td>${statusChip(a.status)}</td>
-    <td>
-      ${a.reminderSent? '<span class="chip ok">Enviado</span>' : `<button class="btn small secondary" onclick="markReminder('${a.id}')">Marcar enviado</button>`}
-      <div style="margin-top:6px">${reminderRecipientsHTML(patient, a, professional)}</div>
-      <span class="hint">Al profesional:</span> ${professional? contactButtons(professional.phone, professional.email, profMsg, 'Recordatorio de cita'):'<span class="hint">—</span>'}
+    <td style="white-space:nowrap">
+      <button class="btn small ${a.reminderSent?'secondary':''}" onclick="abrirRecordatorio('${a.id}')">
+        ${a.reminderSent? '✓ Avisado' : '💬 Avisar'}</button>
+      <br><span class="hint">${!patient? '—'
+        : avisar.length? `a ${avisar.length} ${avisar.length===1?'persona':'personas'}`
+        : 'nadie recibirá aviso'}</span>
     </td>
-    <td>
+    <td style="white-space:nowrap">
       <select onchange="handleStatusChange('${a.id}',this.value)" style="width:auto">
         ${['Programada','Confirmada','Reprogramada','Completada','Cancelada'].map(s=>`<option ${a.status===s?'selected':''}>${s}</option>`).join('')}
       </select>
+      <br><button class="btn small secondary" onclick="editAppt('${a.id}')">Editar</button>
       <button class="btn small danger" onclick="deleteAppt('${a.id}')">Eliminar</button>
-      <button class="btn small secondary" onclick="editAppt('${a.id}')">Editar</button>
     </td>
-  </tr>`;}).join('');
+  </tr>`;
+}
 
+/* ===== Ventana de avisos de una cita =====
+   Antes cada fila desplegaba los teléfonos, los botones de WhatsApp y los de
+   copiar de todos los contactos: una sola cita ocupaba la pantalla entera.
+   Ahora la fila lleva un botón y todo eso vive acá dentro. */
+let recordatorioCitaId = null;
+
+function abrirRecordatorio(id){
+  recordatorioCitaId = id;
+  document.getElementById('recordatorioModal').classList.add('open');
+  renderRecordatorioModal();
+}
+function cerrarRecordatorio(){
+  document.getElementById('recordatorioModal').classList.remove('open');
+  recordatorioCitaId = null;
+}
+function renderRecordatorioModal(){
+  const a = DB.appointments.find(x=>x.id===recordatorioCitaId);
+  const caja = document.getElementById('recContenido');
+  if(!a || !caja){ return; }
+  const {patient, professional, profMsg} = mensajesDeCita(a);
+
+  document.getElementById('recTitulo').textContent =
+    `Avisar de la cita${patient? ' de '+patient.name : ''}`;
+  document.getElementById('recSub').textContent =
+    `${fechaEnPalabras(a.date)} a las ${horaEnPalabras(a.time)} · ${a.modality}`
+    + (a.room? ` · ${a.room}` : '');
+
+  caja.innerHTML = `
+    <h3 style="margin:0 0 8px;font-size:14px">A quién se le avisa</h3>
+    ${reminderRecipientsHTML(patient, a, professional)}
+    <h3 style="margin:18px 0 8px;font-size:14px">Al profesional</h3>
+    ${professional? contactButtons(professional.phone, professional.email, profMsg, 'Recordatorio de cita')
+                  : '<span class="hint">Esta cita no tiene profesional asignado.</span>'}
+    <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--line)">
+      ${a.reminderSent
+        ? '<span class="chip ok">Ya marcaste este recordatorio como enviado</span>'
+        : `<button class="btn" onclick="markReminder('${a.id}')">Marcar como enviado</button>
+           <p class="hint" style="margin-top:6px">Márcalo después de mandar los mensajes, para saber cuáles te faltan.</p>`}
+    </div>`;
+}
+
+function viewCitasHtml(rows){
   return `
     <div class="sectiontitle"><h2>Citas (${DB.appointments.length})</h2>
       <div>
@@ -3469,7 +3798,7 @@ function viewCitas(){
         <div class="field"><label>Fecha</label><input type="date" id="af_date" value="${todayISO()}" onchange="checkProfAvailabilityHint()"></div>
         <div class="field"><label>Hora</label><input type="time" id="af_time" value="09:00" onchange="checkProfAvailabilityHint()"></div>
         <div class="field"><label>Modalidad</label>
-          <select id="af_modality" onchange="toggleMeetingLinkField(); toggleRoomField(); checkProfAvailabilityHint()"><option>Presencial</option><option>Virtual</option><option>Domicilio</option></select>
+          <select id="af_modality" onchange="toggleMeetingLinkField(); toggleRoomField(); checkProfAvailabilityHint()"><option>Presencial</option><option>Virtual</option><option>Domicilio</option><option>Colegio</option></select>
         </div>
         <div class="field" id="af_roomWrap"><label>Consultorio</label>
           <select id="af_room" onchange="checkProfAvailabilityHint()">
@@ -3486,15 +3815,8 @@ function viewCitas(){
       </div>
       <div class="field" id="af_meetingWrap" style="display:none;margin-top:8px">
         <label>Enlace de la reunión (Zoom, Google Meet, etc.)</label>
-        <input type="text" id="af_meetingLink" placeholder="Pega aquí el enlace de Zoom o Meet">
-        <p class="hint" style="margin-top:4px">
-          No se genera solo — crea la reunión en tu cuenta y pega el enlace aquí.<br>
-          <b>Importante:</b> estos atajos abren una reunión que empieza <b>al instante</b>, no programada para más tarde.
-          Úsalos solo si la sesión es casi enseguida. Si la sesión es horas después, mejor usa la opción
-          "Programar reunión" dentro de Zoom o de Google Calendar y pega ese enlace aquí — es más confiable.
-          <br><a href="https://zoom.us/start/videomeeting" target="_blank" rel="noopener">Crear reunión ahora en Zoom</a> ·
-          <a href="https://meet.google.com/new" target="_blank" rel="noopener">Crear reunión ahora en Google Meet</a>
-        </p>
+        <input type="text" id="af_meetingLink" placeholder="Genéralo aquí o pega uno de Zoom / Meet">
+        ${botonesDeEnlace("af_meetingLink", "()=>nombreDelPacienteElegido()")}
       </div>
       <div class="formgrid" id="af_addressWrap" style="display:none;margin-top:8px">
         <div class="field"><label>Dirección de la visita</label><input type="text" id="af_address" placeholder="Av. Ejemplo 123, distrito"></div>
@@ -3658,7 +3980,17 @@ async function markReminder(id){
 async function editMeetingLink(id){
   const appt = DB.appointments.find(a=>a.id===id);
   if(!appt) return;
-  const link = prompt('Pega aquí el enlace de Zoom / Google Meet para esta cita:', appt.meetingLink||'');
+  const paciente = DB.patients.find(p=>p.id===appt.patientId);
+  // Si no hay ninguno todavía, se ofrece uno hecho: así no hay que salir a
+  // crear la sala en otra página solo para volver a pegarla acá.
+  const sugerido = appt.meetingLink || generarEnlaceReunion(paciente? paciente.name : appt.date);
+  const link = prompt(
+      'Enlace de la reunión para esta cita.\n\n'
+    + (appt.meetingLink
+        ? 'Cámbialo si hace falta.'
+        : 'Te dejamos uno listo para usar: la sala se abre sola cuando alguien entra,\n'
+          + 'sin instalar nada ni crear cuenta. Si prefieres Zoom o Meet, pega el tuyo.'),
+    sugerido);
   if(link===null) return;
   DB.appointments = DB.appointments.map(a=>a.id===id? {...a, meetingLink:link.trim()} : a);
   const ok = await setColl('appointments', DB.appointments);
@@ -3896,11 +4228,24 @@ function professionalEarningsSince(profId){
     if(!patient) return;
     sessions++;
     if(pr.paymentModel==='Comisión'){
-      total += Math.max(0, Number(patient.pricePerSession||0) - Number(pr.centerShareAmount||0));
+      total += valorDeAtencion(a, pr);
     }
   });
   return {sessions, total};
 }
+/* "Lun, Mar, Mié, Jue, Vie, Sáb, Dom" ocupaba siete líneas en la tabla.
+   Si los días van seguidos se dice "Lun a Dom", que es como se habla. */
+function diasDeAtencionResumidos(pr){
+  const activos = WEEK_DAYS_META
+    .map((d,i)=>({i, corto:d.label.slice(0,3), activo: !!(pr.weeklySchedule && pr.weeklySchedule[d.key] && pr.weeklySchedule[d.key].active)}))
+    .filter(d=>d.activo);
+  if(activos.length === 0) return 'Sin días activos';
+  if(activos.length === 7) return 'Todos los días';
+  const seguidos = activos.every((d,k)=> k===0 || d.i === activos[k-1].i+1);
+  if(seguidos && activos.length > 2) return `${activos[0].corto} a ${activos[activos.length-1].corto}`;
+  return activos.map(d=>d.corto).join(', ');
+}
+
 function viewProfesionales(){
   const today = new Date(); today.setHours(0,0,0,0);
   const in7 = new Date(today.getTime()+7*86400000);
@@ -3912,25 +4257,33 @@ function viewProfesionales(){
     const rentalModeLabel = {'Por paciente':'por paciente', 'Por dia':'por día', 'Mensual':'mensual'}[pr.roomRentalMode||'Por paciente'];
     const rentalRate = Number(pr.roomRentalRate ?? 10);
     const modelChip = pr.paymentModel==='Comisión'
-      ? `<span class="chip warn">Comisión: S/${pr.centerShareAmount||0} al centro/sesión</span>`
+      ? (tieneTarifaPropia(pr)
+          ? `<span class="chip warn">Se le paga ${fmtMoney(pr.pagoVirtual||0)} virtual · ${fmtMoney(pr.pagoPresencial||0)} presencial${Number(pr.pagoColegio||0)>0? ` · ${fmtMoney(pr.pagoColegio)} colegio` : ''}</span>`
+          : `<span class="chip warn">Comisión: S/${pr.centerShareAmount||0} al centro/sesión</span>`)
       : `<span class="chip neutral">Alquiler de espacio: ${fmtMoney(rentalRate)} ${rentalModeLabel}</span>`;
     const earnings = professionalEarningsSince(pr.id);
+    const pendientesProf = atencionesPendientesDe(pr.id);
+    const deudaProf = deudaConProfesional(pr);
     const usosMesRegistros = DB.roomUsage.filter(u=>u.professionalId===pr.id && u.date.slice(0,7)===mesActual);
     const usosMesMonto = usosMesRegistros.reduce((s,u)=>s+Number(u.amount ?? 10),0);
     const colegChip = pr.colegiaturaHabilitada===false? '<span class="chip alert">Colegiatura no habilitada</span>' : (pr.colegiatura? '<span class="chip ok">Colegiatura habilitada</span>' : '<span class="chip neutral">Sin colegiatura registrada</span>');
     const specColegChip = pr.specColegiaturaHabilitada===false? '<span class="chip alert">Especialidad no habilitada</span>' : (pr.specColegiaturaHabilitada===true? '<span class="chip ok">Especialidad habilitada</span>' : '');
     return `<tr style="${pr.active===false?'opacity:0.55':''}">
-      <td><b>${professionalDisplayName(pr)}</b>${pr.active===false?' <span class="chip neutral">Inhabilitado</span>':''}<br><span class="hint">DNI: ${pr.dni||'—'} · ${pr.phone||''}</span></td>
+      <td><span class="nom" title="${professionalDisplayName(pr)}"><b>${professionalDisplayName(pr)}</b></span>${pr.active===false?' <span class="chip neutral">Inhabilitado</span>':''}
+        <span class="sub">DNI ${pr.dni||'—'}${pr.phone? ' · '+pr.phone : ''}</span></td>
       <td>
-        <b>${pr.carrera||'—'}</b> ${colegChip}${pr.colegiatura?`<br><span class="hint">N° ${pr.colegiatura}</span>`:''}
-        ${pr.specialty? `<br><br><b>Esp: ${pr.specialty}</b> ${specColegChip}${pr.specColegiatura?`<br><span class="hint">N° ${pr.specColegiatura}</span>`:''}` : ''}
+        <b>${pr.carrera||'—'}</b> ${colegChip}${pr.colegiatura?`<span class="sub">N° ${pr.colegiatura}</span>`:''}
+        ${pr.specialty? `<span class="sub" style="margin-top:6px"><b>Esp: ${pr.specialty}</b> ${specColegChip}${pr.specColegiatura?` · N° ${pr.specColegiatura}`:''}</span>` : ''}
       </td>
-      <td>${modelChip}${pr.paymentModel==='Alquiler de espacio'?`<br><span class="hint">Este mes: ${usosMesRegistros.length} registro(s) — ${fmtMoney(usosMesMonto)}</span>`:''}</td>
-      <td>${pr.schedule||'—'}${pr.weeklySchedule? `<br><span class="hint">${WEEK_DAYS_META.filter(d=>pr.weeklySchedule[d.key]&&pr.weeklySchedule[d.key].active).map(d=>d.label.slice(0,3)).join(', ')||'Sin días activos'}</span>`:''}</td>
-      <td>${proxCitas.length} citas ${carga}</td>
-      <td>
-        ${pr.paid===false? `<span class="chip alert">Debe: ${fmtMoney(pr.amountToPay)}</span>` : '<span class="chip ok">Al día</span>'}
-        ${pr.paymentModel==='Comisión' && earnings.sessions>0? `<br><span class="hint">Sugerido según ${earnings.sessions} atención(es): ${fmtMoney(earnings.total)}</span>`:''}
+      <td>${modelChip}${pr.paymentModel==='Alquiler de espacio'?`<span class="sub">Este mes: ${usosMesRegistros.length} registro(s) — ${fmtMoney(usosMesMonto)}</span>`:''}</td>
+      <td>${pr.schedule||'—'}${pr.weeklySchedule? `<span class="sub">${diasDeAtencionResumidos(pr)}</span>`:''}</td>
+      <td style="white-space:nowrap">${proxCitas.length} citas<span class="sub">${carga}</span></td>
+      <td style="white-space:nowrap">
+        ${deudaProf>0? `<b style="color:var(--alert)">Le debes ${fmtMoney(deudaProf)}</b>` : '<span class="chip ok">Al día</span>'}
+        ${pr.paymentModel==='Comisión'
+          ? `<span class="sub">${pendientesProf.length} atención(es) sin pagar</span>
+             <button class="btn small ${deudaProf>0?'':'secondary'}" style="margin-top:4px" onclick="abrirPagoProf('${pr.id}')">Ver y pagar</button>`
+          : ''}
       </td>
       <td>${pr.birthday? fmtBirthday(pr.birthday):'—'}</td>
       <td>
@@ -4007,8 +4360,20 @@ function viewProfesionales(){
             <option value="Comisión">Comisión (contratado, se reparte el pago del paciente)</option>
           </select>
         </div>
-        <div class="field" id="prf_share_wrap"><label>Monto que le corresponde AL CENTRO por sesión (S/)</label>
-          <input type="number" id="prf_share" value="20" placeholder="Ej: si cobra 50 y 20 son para el centro, pon 20">
+        <div class="field" id="prf_share_wrap"><label>Lo que SE LE PAGA por sesión virtual (S/)</label>
+          <input type="number" id="prf_pagoVirtual" value="20" placeholder="Ej: 20">
+          <p class="hint" style="margin-top:3px">De la tarifa del paciente, esto es suyo; el resto queda para el centro.</p>
+        </div>
+        <div class="field" id="prf_presencial_wrap"><label>Lo que SE LE PAGA por sesión presencial (S/)</label>
+          <input type="number" id="prf_pagoPresencial" value="20" placeholder="Ej: 20">
+          <p class="hint" style="margin-top:3px">Las atenciones a domicilio se pagan igual que las presenciales.</p>
+        </div>
+        <div class="field" id="prf_colegio_wrap"><label>Turno en colegio: lo que SE LE PAGA (S/)</label>
+          <input type="number" id="prf_pagoColegio" value="0" placeholder="Lo acordado con el profesional">
+          <p class="hint" style="margin-top:3px">En el colegio no hay tarifa de paciente que repartir: los dos montos se acuerdan.</p>
+        </div>
+        <div class="field" id="prf_centroColegio_wrap"><label>Turno en colegio: lo que queda AL CENTRO (S/)</label>
+          <input type="number" id="prf_centroColegio" value="0" placeholder="Lo que le queda al centro por ese turno">
         </div>
         <div class="field" id="prf_rentalModeWrap"><label>Cómo se le cobra el consultorio</label>
           <select id="prf_rentalMode" onchange="toggleRentalRateLabel()">
@@ -4238,6 +4603,9 @@ function toggleShareField(){
   const model = document.getElementById('prf_model').value;
   const isRental = model==='Alquiler de espacio';
   document.getElementById('prf_share_wrap').style.display = model==='Comisión' ? 'block' : 'none';
+  document.getElementById('prf_presencial_wrap').style.display = model==='Comisión' ? 'block' : 'none';
+  document.getElementById('prf_colegio_wrap').style.display = model==='Comisión' ? 'block' : 'none';
+  document.getElementById('prf_centroColegio_wrap').style.display = model==='Comisión' ? 'block' : 'none';
   document.getElementById('prf_rentalModeWrap').style.display = isRental ? 'block' : 'none';
   document.getElementById('prf_rentalRateWrap').style.display = isRental ? 'block' : 'none';
   document.getElementById('prf_scheduleSection').style.display = isRental ? 'none' : 'block';
@@ -4311,7 +4679,10 @@ function editProf(id){
   toggleSpecialtyFields();
   document.getElementById('prf_sched').value = pr.schedule||'';
   document.getElementById('prf_model').value = pr.paymentModel||'Alquiler de espacio';
-  document.getElementById('prf_share').value = pr.centerShareAmount||0;
+  document.getElementById('prf_pagoVirtual').value = pr.pagoVirtual ?? 20;
+  document.getElementById('prf_pagoPresencial').value = pr.pagoPresencial ?? 20;
+  document.getElementById('prf_pagoColegio').value = pr.pagoColegio ?? 0;
+  document.getElementById('prf_centroColegio').value = pr.centroColegio ?? 0;
   document.getElementById('prf_rentalMode').value = pr.roomRentalMode||'Por paciente';
   document.getElementById('prf_rentalRate').value = pr.roomRentalRate ?? 10;
   document.getElementById('prf_rentalRate').dataset.touched = pr.roomRentalRate!==undefined? '1':'';
@@ -4354,7 +4725,11 @@ async function saveProf(){
     specColegiaturaHabilitada: document.getElementById('prf_specColegHab').value===''? null : document.getElementById('prf_specColegHab').value==='true',
     schedule: document.getElementById('prf_sched').value.trim(),
     paymentModel: document.getElementById('prf_model').value,
-    centerShareAmount: Number(document.getElementById('prf_share').value)||0,
+    pagoVirtual: Number(document.getElementById('prf_pagoVirtual').value)||0,
+    pagoPresencial: Number(document.getElementById('prf_pagoPresencial').value)||0,
+    pagoColegio: Number(document.getElementById('prf_pagoColegio').value)||0,
+    centroColegio: Number(document.getElementById('prf_centroColegio').value)||0,
+    centerShareAmount: (existing? Number(existing.centerShareAmount||0) : 0),
     roomRentalMode: document.getElementById('prf_rentalMode').value,
     roomRentalRate: Number(document.getElementById('prf_rentalRate').value)||0,
     birthday: bdayRaw? bdayRaw.slice(5):'',
@@ -4373,8 +4748,316 @@ async function saveProf(){
 /* Lo que realmente se le debe a un profesional. El estado "al día" se decide
    por el monto, no por una marca aparte: antes una ficha marcada como pagada
    podía seguir arrastrando un saldo y mostrarse igual como "Al día". */
+/* ===== Lo que se le debe a un profesional por comisión =====
+   Antes era un número escrito a mano ("Debe: S/ 80") que había que mantener
+   al día apretando "Sumar sugerido". Se desfasaba solo: decía 80 cuando las
+   atenciones sumaban 193. Ahora el monto SALE de las atenciones completadas
+   que todavía no se han pagado, y cada pago guarda cuáles cubrió. */
+
+function liquidacionesDe(pr){
+  return Array.isArray(pr && pr.liquidaciones) ? pr.liquidaciones : [];
+}
+/* ===== Cuánto se le paga al profesional por una sesión =====
+   Regla de Luis: se le paga un monto fijo según cómo se atendió — S/20 si fue
+   virtual y S/25 si fue presencial — y el resto de la tarifa queda para el
+   centro. Antes se guardaba al revés (lo que se quedaba el centro), que daba
+   otro número cuando las tarifas de los pacientes eran distintas. */
+function tieneTarifaPropia(pr){
+  return !!pr && (Number(pr.pagoVirtual||0) > 0 || Number(pr.pagoPresencial||0) > 0
+               || Number(pr.pagoColegio||0) > 0);
+}
+function esColegio(modalidad){ return String(modalidad||'') === 'Colegio'; }
+
+function pagoAlProfesional(pr, modalidad){
+  if(esColegio(modalidad)) return redondear(Number(pr.pagoColegio||0));
+  // Domicilio se paga como presencial: también sale de su casa.
+  const virtual = String(modalidad||'') === 'Virtual';
+  return redondear(virtual ? Number(pr.pagoVirtual||0) : Number(pr.pagoPresencial||0));
+}
+/* Lo que le queda al CENTRO de una sesión de ese paciente.
+   En el colegio no se reparte una tarifa: los dos montos son acordados. */
+function parteDelCentro(pr, paciente, modalidad){
+  if(!pr) return 0;
+  if(esColegio(modalidad)) return redondear(Number(pr.centroColegio||0));
+  const tarifa = Number((paciente && paciente.pricePerSession) || 0);
+  if(tieneTarifaPropia(pr)){
+    return Math.max(0, redondear(tarifa - pagoAlProfesional(pr, modalidad)));
+  }
+  return redondear(Number(pr.centerShareAmount||0));   // fichas antiguas
+}
+
+function valorDeAtencion(a, pr){
+  const paciente = DB.patients.find(p=>p.id===a.patientId);
+  if(!paciente) return 0;
+  if((pr.paymentModel||'') !== 'Comisión') return 0;
+  if(esColegio(a.modality)) return redondear(Number(pr.pagoColegio||0));
+  if(tieneTarifaPropia(pr)){
+    // Nunca se le paga más de lo que costó la sesión.
+    return Math.min(Number(paciente.pricePerSession||0), pagoAlProfesional(pr, a.modality));
+  }
+  return Math.max(0, redondear(Number(paciente.pricePerSession||0) - Number(pr.centerShareAmount||0)));
+}
+/* Todas sus atenciones completadas, marcando cuáles ya se pagaron.
+   Las anteriores a una liquidación vieja (cuando solo se guardaba la fecha)
+   se dan por pagadas, para no volver a cobrárselas al centro. */
+function atencionesDe(prId){
+  const pr = DB.professionals.find(p=>p.id===prId);
+  if(!pr) return [];
+  const yaPagadas = new Set();
+  liquidacionesDe(pr).forEach(l => (l.citas||[]).forEach(id => yaPagadas.add(id)));
+  const corte = pr.lastSettledDate || '';
+  return DB.appointments
+    .filter(a=>a.professionalId===prId && a.status==='Completada')
+    .sort((a,b)=>(a.date+(a.time||'')).localeCompare(b.date+(b.time||'')))
+    .map(a=>({
+      cita: a,
+      paciente: DB.patients.find(p=>p.id===a.patientId) || null,
+      valor: valorDeAtencion(a, pr),
+      pagada: yaPagadas.has(a.id) || (corte && a.date <= corte),
+    }));
+}
+function atencionesPendientesDe(prId){
+  return atencionesDe(prId).filter(x=>!x.pagada && x.paciente);
+}
+/* Si en algún pago se le dio de más, ese excedente NO queda a favor de nadie:
+   se descuenta del saldo que se le debe. Con los pagos atención por atención
+   ya no se produce, pero los registros viejos pueden traerlo. */
+function pagadoDeMasA(pr){
+  const pagado = liquidacionesDe(pr).reduce((s,l)=>s+Number(l.monto||0), 0);
+  const cubierto = atencionesDe(pr.id).filter(x=>x.pagada).reduce((s,x)=>s+x.valor, 0);
+  return Math.max(0, redondear(pagado - cubierto));
+}
+function deudaConProfesional(pr){
+  if(!pr) return 0;
+  if((pr.paymentModel||'') !== 'Comisión'){
+    // El alquiler de espacio se sigue llevando por su propio circuito.
+    return redondear(Number(pr.amountToPay||0));
+  }
+  const pendiente = atencionesPendientesDe(pr.id).reduce((s,x)=>s+x.valor, 0);
+  return Math.max(0, redondear(pendiente - pagadoDeMasA(pr)));
+}
+
 function saldoProf(pr){
-  return Math.round((Number(pr && pr.amountToPay || 0))*100)/100;
+  return deudaConProfesional(pr);
+}
+
+/* ===== Ventana de pago a un profesional =====
+   Muestra atención por atención de dónde sale el monto, para que se pueda
+   revisar antes de pagar y para poder mostrárselo a quien cobra. */
+let pagoProfId = null;
+
+function abrirPagoProf(id){
+  pagoProfId = id;
+  document.getElementById('pagoProfModal').classList.add('open');
+  renderPagoProfModal();
+}
+function cerrarPagoProf(){
+  document.getElementById('pagoProfModal').classList.remove('open');
+  pagoProfId = null;
+}
+function renderPagoProfModal(){
+  const pr = DB.professionals.find(p=>p.id===pagoProfId);
+  const caja = document.getElementById('pagoProfContenido');
+  if(!pr || !caja) return;
+
+  const pendientes = atencionesPendientesDe(pr.id);
+  const debe = deudaConProfesional(pr);
+  const adelanto = pagadoDeMasA(pr);
+  const pagos = liquidacionesDe(pr);
+  const sinPaciente = atencionesDe(pr.id).filter(x=>!x.pagada && !x.paciente).length;
+
+  document.getElementById('pagoProfTitulo').textContent = `Pago a ${professionalDisplayName(pr)}`;
+  document.getElementById('pagoProfSub').textContent =
+    tieneTarifaPropia(pr)
+      ? `Se le paga ${fmtMoney(pr.pagoVirtual||0)} por sesión virtual y ${fmtMoney(pr.pagoPresencial||0)} por presencial; el resto de la tarifa queda para el centro.`
+        + (Number(pr.pagoColegio||0)>0 || Number(pr.centroColegio||0)>0
+            ? ` En colegio son montos acordados: ${fmtMoney(pr.pagoColegio||0)} para ella y ${fmtMoney(pr.centroColegio||0)} para el centro.`
+            : '')
+      : `De cada sesión, el centro se queda ${fmtMoney(pr.centerShareAmount||0)} y el resto es suyo.`;
+
+  const filas = pendientes.map(x=>{
+    const tarifa = Number(x.paciente.pricePerSession||0);
+    const mod = x.cita.modality || 'Presencial';
+    return `<tr>
+    <td style="white-space:nowrap">${x.cita.date}<span class="sub">${x.cita.time||''}</span></td>
+    <td><span class="nom corto" title="${x.paciente.name}">${x.paciente.name}</span></td>
+    <td><span class="chip ${mod==='Virtual'?'neutral':'warn'}">${mod}</span></td>
+    <td style="text-align:right">${fmtMoney(tarifa)}</td>
+    <td style="text-align:right;color:var(--muted)">${fmtMoney(Math.max(0, redondear(tarifa - x.valor)))}</td>
+    <td style="text-align:right"><b>${fmtMoney(x.valor)}</b></td>
+  </tr>`;}).join('');
+
+  const historial = pagos.length? `
+    <h3 style="margin:20px 0 6px;font-size:14px">Pagos que ya le hiciste</h3>
+    <div class="tablewrap"><table>
+      <tr><th>Fecha</th><th>Atenciones</th><th style="text-align:right">Monto</th><th></th></tr>
+      ${[...pagos].reverse().map(l=>`<tr>
+        <td style="white-space:nowrap">${l.fecha}</td>
+        <td>${(l.citas||[]).length} atención(es)</td>
+        <td style="text-align:right"><b>${fmtMoney(l.monto)}</b></td>
+        <td style="white-space:nowrap">
+          <button class="btn small secondary" onclick="reciboPagoProf('${pr.id}','${l.id}')">Recibo</button>
+          <button class="btn small danger" onclick="deshacerPagoProf('${l.id}')">Deshacer</button></td>
+      </tr>`).join('')}
+    </table></div>`
+    : '<p class="hint" style="margin-top:18px">Todavía no le has hecho ningún pago.</p>';
+
+  caja.innerHTML = `
+    <div class="kpi-grid" style="margin-bottom:14px">
+      <div class="kpi ${debe>0?'alert':'ok'}"><div class="num">${fmtMoney(debe)}</div>
+        <div class="label">${debe>0? 'Le debes ahora' : 'Está al día'}</div></div>
+      <div class="kpi"><div class="num">${pendientes.length}</div>
+        <div class="label">Atenciones sin pagar</div></div>
+      ${adelanto>0? `<div class="kpi"><div class="num">−${fmtMoney(adelanto)}</div>
+        <div class="label">Pagado de más en un registro anterior: ya está descontado del saldo</div></div>`:''}
+    </div>
+
+    ${sinPaciente>0? `<p class="hint" style="color:var(--alert)">Hay ${sinPaciente} atención(es) completadas cuyo paciente ya no existe en el sistema: no se pueden valorizar y no están contadas acá.</p>`:''}
+
+    ${pendientes.length? `
+      <h3 style="margin:0 0 6px;font-size:14px">De dónde sale ese monto</h3>
+      <div class="tablewrap"><table>
+        <tr><th>Fecha</th><th>Paciente</th><th>Modalidad</th><th style="text-align:right">Tarifa</th>
+            <th style="text-align:right">Queda al centro</th><th style="text-align:right">Para ella</th></tr>
+        ${filas}
+        <tr style="background:var(--bg-soft)"><td colspan="5"><b>Total de ${pendientes.length} atención(es)</b></td>
+          <td style="text-align:right"><b>${fmtMoney(pendientes.reduce((s,x)=>s+x.valor,0))}</b></td></tr>
+      </table></div>`
+      : '<p class="hint">No hay atenciones completadas pendientes de pago.</p>'}
+
+    ${debe>0? `
+    <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--line)">
+      <h3 style="margin:0 0 4px;font-size:14px">¿Qué atenciones le vas a pagar?</h3>
+      <p class="hint" style="margin:0 0 8px">Marca las que le estás pagando. El monto sale de ellas, exacto:
+        ni se le queda debiendo un sol ni se le paga de más. Si es un adelanto, desmarca las que dejas para después.
+        <button type="button" class="linkbtn" onclick="marcarTodasAtenciones(true)">Marcar todas</button> ·
+        <button type="button" class="linkbtn" onclick="marcarTodasAtenciones(false)">Ninguna</button></p>
+      <div class="tablewrap" style="max-height:190px;overflow-y:auto"><table>
+        ${pendientes.map(x=>`<tr>
+          <td style="width:26px"><input type="checkbox" class="pp_at" value="${x.cita.id}"
+              data-valor="${x.valor}" checked onchange="actualizarMontoProf()"></td>
+          <td style="white-space:nowrap">${x.cita.date}</td>
+          <td><span class="nom corto" title="${x.paciente.name}">${x.paciente.name}</span></td>
+          <td>${x.cita.modality||'Presencial'}</td>
+          <td style="text-align:right"><b>${fmtMoney(x.valor)}</b></td>
+        </tr>`).join('')}
+      </table></div>
+      <div class="formgrid" style="max-width:360px;margin-top:12px">
+        <div class="field"><label>Le vas a pagar (S/)</label>
+          <input type="number" id="pp_monto" value="${debe.toFixed(2)}" readonly
+                 style="background:#eee;font-weight:700;font-size:17px">
+          <p class="hint" style="margin-top:3px" id="pp_resumen"></p>
+        </div>
+        <div class="field"><label>Fecha del pago</label>
+          <input type="date" id="pp_fecha" value="${todayISO()}"></div>
+      </div>
+      <button class="btn" onclick="registrarPagoProf()">Registrar el pago</button>
+      <p class="hint" style="margin-top:6px">Se anota como gasto del centro en Finanzas, por ese mismo monto.</p>
+    </div>`:''}
+
+    ${historial}`;
+
+  actualizarMontoProf();
+}
+
+/* Las atenciones marcadas en la ventana, y lo que suman. */
+function atencionesMarcadas(){
+  return [...document.querySelectorAll('.pp_at:checked')]
+    .map(c=>({id: c.value, valor: Number(c.dataset.valor||0)}));
+}
+/* Lo que hay que entregarle por las atenciones marcadas. Si en algún pago
+   anterior se le dio de más, ese excedente no queda a favor de nadie: se
+   descuenta aquí, de lo que toca entregar ahora. */
+function montoAEntregarProf(){
+  const pr = DB.professionals.find(p=>p.id===pagoProfId);
+  const sel = atencionesMarcadas();
+  const valen = redondear(sel.reduce((s,x)=>s+x.valor, 0));
+  const descuento = pr ? Math.min(valen, pagadoDeMasA(pr)) : 0;
+  return {sel, valen, descuento, entregar: Math.max(0, redondear(valen - descuento))};
+}
+function actualizarMontoProf(){
+  const {sel, valen, descuento, entregar} = montoAEntregarProf();
+  const campo = document.getElementById('pp_monto');
+  const resumen = document.getElementById('pp_resumen');
+  if(campo) campo.value = entregar.toFixed(2);
+  if(resumen){
+    const pr = DB.professionals.find(p=>p.id===pagoProfId);
+    const quedan = pr? Math.max(0, atencionesPendientesDe(pr.id).length - sel.length) : 0;
+    resumen.textContent = sel.length === 0
+      ? 'No has marcado ninguna atención.'
+      : `Por ${sel.length} atención(es) que valen ${fmtMoney(valen)}.`
+        + (descuento>0? ` Se le descuentan ${fmtMoney(descuento)} que ya se le habían pagado de más.` : '')
+        + (quedan? ` Quedarían ${quedan} sin pagar para más adelante.` : ' Con esto queda al día.');
+  }
+}
+function marcarTodasAtenciones(valor){
+  document.querySelectorAll('.pp_at').forEach(c=>{ c.checked = !!valor; });
+  actualizarMontoProf();
+}
+
+/* Registra el pago y deja constancia de QUÉ atenciones cubrió.
+   El monto es exactamente la suma de esas atenciones: no quedan saldos a
+   favor de nadie ni diferencias que después nadie sabe explicar. */
+async function registrarPagoProf(){
+  const pr = DB.professionals.find(p=>p.id===pagoProfId);
+  if(!pr) return;
+  const {sel, valen, descuento, entregar} = montoAEntregarProf();
+  if(sel.length === 0){ alert('Marca al menos una atención para poder pagarla.'); return; }
+  const monto = entregar;
+  const fecha = (document.getElementById('pp_fecha')||{}).value || todayISO();
+  if(valen <= 0){ alert('Las atenciones marcadas no suman nada que pagar.'); return; }
+  if(monto <= 0 && !confirm(
+      `Esas ${sel.length} atención(es) valen ${fmtMoney(valen)}, pero ya se le habían pagado de más.\n\n`
+    + `No hay que entregarle nada: solo quedarían marcadas como pagadas. ¿Continuar?`)) return;
+  if(descuento > 0 && monto > 0 && !confirm(
+      `Esas ${sel.length} atención(es) valen ${fmtMoney(valen)}.\n`
+    + `Se le descuentan ${fmtMoney(descuento)} que ya se le habían pagado de más.\n\n`
+    + `A entregar ahora: ${fmtMoney(monto)}. ¿Continuar?`)) return;
+
+  const cubiertas = sel.map(x=>x.id);
+  const liqId = uid();
+  DB.professionals = DB.professionals.map(p=> p.id!==pr.id ? p : {
+    ...p,
+    liquidaciones: [...liquidacionesDe(p), {id: liqId, fecha, monto, citas: cubiertas}],
+    // El campo viejo se deja en cero: el monto ahora sale de las atenciones.
+    amountToPay: 0,
+    paid: true,
+  });
+  await setColl('professionals', DB.professionals);
+
+  // Si no salió plata del centro no hay gasto que anotar.
+  if(monto > 0){
+    DB.expenses.push({id: uid(),
+      name: 'Pago a profesional: ' + pr.name,
+      amount: monto, recurring: false,
+      category: 'Pago a profesionales', paymentDate: fecha});
+    await setColl('expenses', DB.expenses);
+  }
+
+  const queda = deudaConProfesional(DB.professionals.find(p=>p.id===pr.id));
+  showToast(queda>0
+    ? `Pagado ${fmtMoney(monto)} por ${cubiertas.length} atención(es). Le queda debiendo ${fmtMoney(queda)}.`
+    : `${nombreDePila(pr.name)} queda al día. Gasto anotado en Finanzas.`);
+  renderPanel();
+  renderPagoProfModal();
+  // El recibo sale solo: es lo que hay que mandarle apenas se le paga.
+  reciboPagoProf(pr.id, liqId);
+}
+
+async function deshacerPagoProf(liqId){
+  const pr = DB.professionals.find(p=>p.id===pagoProfId);
+  if(!pr) return;
+  const l = liquidacionesDe(pr).find(x=>x.id===liqId);
+  if(!l) return;
+  if(!confirm(`Se deshace el pago de ${fmtMoney(l.monto)} del ${l.fecha}.\n\n`
+    + `Sus ${(l.citas||[]).length} atención(es) vuelven a quedar pendientes.\n`
+    + `El gasto anotado en Finanzas NO se borra: revísalo si hace falta. ¿Continuar?`)) return;
+  DB.professionals = DB.professionals.map(p=> p.id!==pr.id ? p
+    : {...p, liquidaciones: liquidacionesDe(p).filter(x=>x.id!==liqId)});
+  const ok = await setColl('professionals', DB.professionals);
+  showToast(ok? 'Pago deshecho.' : 'No se pudo guardar, reintentando…', ok);
+  renderPanel();
+  renderPagoProfModal();
 }
 
 async function applySuggestedPay(id){
@@ -4674,9 +5357,10 @@ function viewPracticantes(){
     const prodChip = acts.length? `<span class="chip ${completadas===acts.length?'ok':'warn'}">${completadas}/${acts.length} completadas</span>` : '<span class="hint">Sin actividades</span>';
     const weeklyHours = practicanteWeeklyHours(pt);
     return `<tr style="${pt.active===false?'opacity:0.55':''}">
-    <td><b>${pt.name}</b>${pt.active===false?' <span class="chip neutral">Inhabilitado</span>':''}<br><span class="hint">DNI: ${pt.dni||'—'}</span></td>
-    <td>${pt.weeklySchedule? `<span class="hint">${WEEK_DAYS_META.filter(d=>pt.weeklySchedule[d.key]&&pt.weeklySchedule[d.key].active).map(d=>d.label.slice(0,3)).join(', ')||'Sin días activos'} — ${weeklyHours.toFixed(1)} h/semana</span>` : (pt.scheduleDays||pt.scheduleHours? `${pt.scheduleDays||''} <span class="hint">${pt.scheduleHours||''}</span>` : '<span class="hint">Sin cronograma configurado</span>')}</td>
-    <td>${pt.phone||'—'}<br><span class="hint">${pt.email||''}</span></td>
+    <td><span class="nom" title="${pt.name}"><b>${pt.name}</b></span>${pt.active===false?' <span class="chip neutral">Inhabilitado</span>':''}
+      <span class="sub">DNI ${pt.dni||'—'}</span></td>
+    <td>${pt.weeklySchedule? `${diasDeAtencionResumidos(pt)}<span class="sub">${weeklyHours.toFixed(1)} h por semana</span>` : (pt.scheduleDays||pt.scheduleHours? `${pt.scheduleDays||''} <span class="sub">${pt.scheduleHours||''}</span>` : '<span class="hint">Sin cronograma configurado</span>')}</td>
+    <td style="white-space:nowrap">${pt.phone||'—'}${pt.email? `<span class="sub">${pt.email}</span>`:''}</td>
     <td>${prodChip}</td>
     <td>${pt.birthday? fmtBirthday(pt.birthday):'—'}</td>
     <td>
@@ -5237,19 +5921,21 @@ function viewPagos(){
 
   // Pagos a profesionales (Comisión): lo que se le debe según sus atenciones desde el último pago.
   const profComisionRows = DB.professionals.filter(pr=>pr.paymentModel==='Comisión' && pr.active!==false).map(pr=>{
-    const earnings = professionalEarningsSince(pr.id);
+    const pendientes = atencionesPendientesDe(pr.id);
+    const debe = deudaConProfesional(pr);
+    const pagado = liquidacionesDe(pr).reduce((s,l)=>s+Number(l.monto||0), 0);
+    const primera = pendientes[0], ultima = pendientes[pendientes.length-1];
     return `<tr>
-      <td>${professionalDisplayName(pr)}</td>
-      <td>${earnings.sessions}</td>
-      <td>${fmtMoney(earnings.total)}</td>
-      <td>${saldoProf(pr)>0
-            ? `<b style="color:var(--alert)">Debe: ${fmtMoney(saldoProf(pr))}</b>`
+      <td><span class="nom" title="${professionalDisplayName(pr)}">${professionalDisplayName(pr)}</span>
+        <span class="sub">${tieneTarifaPropia(pr)
+          ? `${fmtMoney(pr.pagoVirtual||0)} virtual · ${fmtMoney(pr.pagoPresencial||0)} presencial${Number(pr.pagoColegio||0)>0? ` · ${fmtMoney(pr.pagoColegio)} colegio` : ''}`
+          : `el centro se queda ${fmtMoney(pr.centerShareAmount||0)} por sesión`}</span></td>
+      <td>${pendientes.length}${pendientes.length? `<span class="sub">${primera.cita.date} al ${ultima.cita.date}</span>`:''}</td>
+      <td style="white-space:nowrap">${fmtMoney(pendientes.reduce((s,x)=>s+x.valor,0))}${pagado>0? `<span class="sub">ya pagado: ${fmtMoney(pagado)}</span>`:'<span class="sub">nunca se le ha pagado</span>'}</td>
+      <td style="white-space:nowrap">${debe>0
+            ? `<b style="color:var(--alert)">${fmtMoney(debe)}</b>`
             : '<span class="chip ok">Al día</span>'}</td>
-      <td>
-        ${earnings.sessions>0? `<button class="btn small secondary" onclick="applySuggestedPay('${pr.id}')">+ Sumar sugerido</button>`:''}
-        <button class="btn small secondary" onclick="editProfAmount('${pr.id}')">Editar monto</button>
-        ${saldoProf(pr)>0? `<button class="btn small secondary" onclick="markProfPaid('${pr.id}')">Registrar pago</button>`:''}
-      </td>
+      <td><button class="btn small ${debe>0?'':'secondary'}" onclick="abrirPagoProf('${pr.id}')">Ver detalle y pagar</button></td>
     </tr>`;
   }).join('');
 
@@ -5304,7 +5990,7 @@ function viewPagos(){
       lo que debe es el saldo acumulado. Con <b>"+ Sumar sugerido"</b> pasas el sugerido al saldo, con <b>"Editar monto"</b> lo corriges a mano,
       y con <b>"Registrar pago"</b> le pagas todo o una parte.</p>
     <div class="tablewrap" style="margin-bottom:20px">
-      ${profComisionRows? `<table><tr><th>Profesional</th><th>Atenciones desde el último pago</th><th>Monto sugerido</th><th>Estado</th><th></th></tr>${profComisionRows}</table>`
+      ${profComisionRows? `<table><tr><th>Profesional</th><th>Atenciones sin pagar</th><th>Suman</th><th>Le debes</th><th></th></tr>${profComisionRows}</table>`
       : `<div class="empty">No hay profesionales con modelo de Comisión registrados.</div>`}
     </div>
 
@@ -5791,6 +6477,8 @@ function openCenterInfoModal(){
   document.getElementById('ci_ruc').value = DB.centerInfo.ruc||'';
   document.getElementById('ci_slogan').value = DB.centerInfo.slogan||'';
   document.getElementById('ci_paymentMethods').value = DB.centerInfo.paymentMethods||'';
+  document.getElementById('ci_zoomSala').value = DB.centerInfo.zoomSala||'';
+  document.getElementById('ci_meetSala').value = DB.centerInfo.meetSala||'';
   document.getElementById('ci_reminderMinutes').value = DB.centerInfo.reminderMinutes ?? 10;
   document.getElementById('ci_rescheduleHours').value = DB.centerInfo.rescheduleHours ?? 24;
   document.getElementById('ci_sessionMinutes').value = DB.centerInfo.sessionMinutes ?? 60;
@@ -5870,6 +6558,8 @@ async function saveCenterInfo(){
     ruc: document.getElementById('ci_ruc').value.trim(),
     slogan: document.getElementById('ci_slogan').value.trim(),
     paymentMethods: document.getElementById('ci_paymentMethods').value.trim(),
+    zoomSala: normalizarSalaZoom(document.getElementById('ci_zoomSala').value),
+    meetSala: normalizarSalaMeet(document.getElementById('ci_meetSala').value),
     reminderMinutes: Number(document.getElementById('ci_reminderMinutes').value)||10,
     rescheduleHours: Number(document.getElementById('ci_rescheduleHours').value)||24,
     sessionMinutes: Number(document.getElementById('ci_sessionMinutes').value)||60,
@@ -5902,11 +6592,46 @@ async function downloadReceiptPDF(btn){
       throw new Error('Librerías de PDF no disponibles (sin conexión a internet).');
     }
     const el = document.getElementById('receiptContent');
-    const canvas = await html2canvas(el, {scale:2, backgroundColor:'#ffffff', useCORS:true});
-    const imgData = canvas.toDataURL('image/png');
+    // El recibo vive dentro de un recuadro con scroll: capturarlo tal cual
+    // dejaba fuera lo que no se veía en pantalla — por eso el PDF salía sin
+    // el logo y empezando a media tabla. Se copia a un lienzo aparte, con
+    // ancho de hoja y sin límite de alto, y se captura esa copia.
+    const copia = el.cloneNode(true);
+    const lienzo = document.createElement('div');
+    lienzo.style.cssText = 'position:fixed;left:-10000px;top:0;width:620px;'
+      + 'background:#ffffff;z-index:-1;';
+    copia.style.maxHeight = 'none';
+    copia.style.overflow = 'visible';
+    lienzo.appendChild(copia);
+    document.body.appendChild(lienzo);
+
+    let canvas;
+    try{
+      canvas = await html2canvas(copia, {scale:2, backgroundColor:'#ffffff',
+                                         useCORS:true, windowWidth:620});
+    } finally {
+      lienzo.remove();
+    }
+
+    // Hoja A4, con más de una página si el detalle es largo.
     const { jsPDF } = window.jspdf;
-    const pdf = new jsPDF({unit:'pt', format:[canvas.width/2, canvas.height/2]});
-    pdf.addImage(imgData, 'PNG', 0, 0, canvas.width/2, canvas.height/2);
+    const pdf = new jsPDF({unit:'pt', format:'a4'});
+    const anchoHoja = pdf.internal.pageSize.getWidth();
+    const altoHoja  = pdf.internal.pageSize.getHeight();
+    const margen = 28;
+    const ancho = anchoHoja - margen*2;
+    const alto  = canvas.height * (ancho / canvas.width);
+    const imgData = canvas.toDataURL('image/png');
+
+    let restante = alto, y = margen;
+    pdf.addImage(imgData, 'PNG', margen, y, ancho, alto);
+    restante -= (altoHoja - margen*2);
+    while(restante > 0){
+      pdf.addPage();
+      y -= (altoHoja - margen*2);
+      pdf.addImage(imgData, 'PNG', margen, y + margen, ancho, alto);
+      restante -= (altoHoja - margen*2);
+    }
     pdf.save('recibo-centro-psicologico-'+todayISO()+'.pdf');
   }catch(e){
     console.error(e);
@@ -5915,7 +6640,213 @@ async function downloadReceiptPDF(btn){
     if(btn){ btn.disabled=false; btn.textContent = original; }
   }
 }
+/* WhatsApp no permite adjuntar un archivo desde un enlace: lo único que se
+   puede mandar así es texto. Lo práctico es bajar el PDF primero y abrir el
+   chat enseguida, para arrastrarlo ahí mismo. */
+async function pdfYLuegoWhatsApp(btn){
+  await downloadReceiptPDF(btn);
+  const wa = window._reciboWaLink;
+  if(!wa){ showToast('Esa persona no tiene un teléfono válido en su ficha.'); return; }
+  showToast('PDF descargado. Adjúntalo en el chat que se acaba de abrir.');
+  window.open(wa, '_blank', 'noopener');
+}
+
+/* El monto escrito con palabras, como en cualquier recibo formal:
+   "CIENTO VEINTIOCHO CON 00/100 SOLES". */
+function numeroALetras(n){
+  const u = ['','UNO','DOS','TRES','CUATRO','CINCO','SEIS','SIETE','OCHO','NUEVE','DIEZ',
+             'ONCE','DOCE','TRECE','CATORCE','QUINCE','DIECISÉIS','DIECISIETE','DIECIOCHO','DIECINUEVE',
+             'VEINTE','VEINTIUNO','VEINTIDÓS','VEINTITRÉS','VEINTICUATRO','VEINTICINCO',
+             'VEINTISÉIS','VEINTISIETE','VEINTIOCHO','VEINTINUEVE'];
+  const d = ['','','','TREINTA','CUARENTA','CINCUENTA','SESENTA','SETENTA','OCHENTA','NOVENTA'];
+  const cc = ['','CIENTO','DOSCIENTOS','TRESCIENTOS','CUATROCIENTOS','QUINIENTOS',
+              'SEISCIENTOS','SETECIENTOS','OCHOCIENTOS','NOVECIENTOS'];
+  const hasta999 = x => {
+    if(x === 0) return '';
+    if(x === 100) return 'CIEN';
+    let t = '';
+    if(x >= 100){ t += cc[Math.floor(x/100)] + ' '; x %= 100; }
+    if(x < 30) t += u[x];
+    else { t += d[Math.floor(x/10)]; if(x%10) t += ' Y ' + u[x%10]; }
+    return t.trim();
+  };
+  const entero = Math.floor(Math.abs(Number(n)||0));
+  const cent = Math.round((Math.abs(Number(n)||0) - entero) * 100);
+  let texto;
+  if(entero === 0) texto = 'CERO';
+  else if(entero < 1000) texto = hasta999(entero);
+  else {
+    const miles = Math.floor(entero/1000), resto = entero%1000;
+    texto = (miles === 1 ? 'MIL' : hasta999(miles) + ' MIL') + (resto? ' ' + hasta999(resto) : '');
+  }
+  return `${texto} CON ${String(cent).padStart(2,'0')}/100 SOLES`;
+}
+
+/* ===== Recibo del pago a un profesional =====
+   Lo que necesita ver quien cobra: qué atenciones se le están pagando, una
+   por una, cuánto suma y si con eso queda al día o le sigue faltando. Se
+   envía por WhatsApp o se descarga en PDF. */
+function reciboPagoProf(profId, liqId){
+  const pr = DB.professionals.find(p=>p.id===profId);
+  if(!pr) return;
+  const l = liquidacionesDe(pr).find(x=>x.id===liqId);
+  if(!l) return;
+  const ci = DB.centerInfo || DEFAULT_CENTER_INFO;
+
+  // Las atenciones que cubrió ESTE pago, en el orden en que se atendieron.
+  const ids = new Set(l.citas||[]);
+  const cubiertas = atencionesDe(profId).filter(x=>ids.has(x.cita.id));
+  const valorCubierto = redondear(cubiertas.reduce((s,x)=>s+x.valor, 0));
+
+  // Cómo quedó la cuenta JUSTO DESPUÉS de este pago, no cómo está hoy.
+  // Reimprimir un adelanto viejo no puede decir "pago completo" solo porque
+  // más tarde se le terminó de pagar: el papel tiene que seguir diciendo lo
+  // que decía el día que se firmó.
+  const historial = liquidacionesDe(pr);
+  const hasta = historial.findIndex(x=>x.id===liqId);
+  const cerradasEntonces = new Set();
+  historial.slice(0, hasta+1).forEach(x=>(x.citas||[]).forEach(id=>cerradasEntonces.add(id)));
+  const pagadoEntonces = historial.slice(0, hasta+1).reduce((s,x)=>s+Number(x.monto||0), 0);
+  const existianYa = atencionesDe(profId).filter(x=>String(x.cita.date||'') <= String(l.fecha||''));
+  const pendientes = existianYa.filter(x=>!cerradasEntonces.has(x.cita.id));
+  const cubiertoEntonces = existianYa
+    .filter(x=>cerradasEntonces.has(x.cita.id)).reduce((s,x)=>s+x.valor, 0);
+  const saldo = Math.max(0, redondear(
+    pendientes.reduce((s,x)=>s+x.valor, 0) - Math.max(0, redondear(pagadoEntonces - cubiertoEntonces))));
+  const alDia = saldo <= 0;
+  // Si en ese pago se dio más de lo que cubrían esas atenciones, la diferencia
+  // no queda a favor de nadie: ya está descontada del saldo de abajo.
+  const deMas = Math.max(0, redondear(Number(l.monto||0) - valorCubierto));
+  // Y al revés: si se entregó menos que lo que valen, es porque se descontó
+  // lo que se le había pagado de más en un registro anterior.
+  const descontado = Math.max(0, redondear(valorCubierto - Number(l.monto||0)));
+
+  const filas = cubiertas.map(x=>`<tr>
+    <td>${x.cita.date}${x.cita.time? ' · '+x.cita.time : ''} — ${x.paciente? x.paciente.name : 'paciente'}
+      <span style="color:#5B685F;font-weight:400"> (${x.cita.modality||'Presencial'})</span></td>
+    <td>${fmtMoney(x.valor)}</td></tr>`).join('');
+
+  const now = new Date();
+  document.getElementById('receiptContent').innerHTML = `
+    <div style="text-align:center;border-bottom:2px dashed var(--border);padding-bottom:14px;margin-bottom:14px">
+      <img src="${CENTER_LOGO_DATA_URL}" alt="Logo" style="width:90px;height:auto;margin-bottom:8px">
+      <h2 style="margin-bottom:2px">${ci.name||'Centro Psicológico'}</h2>
+      ${ci.address? `<div class="sub">${ci.address}</div>`:''}
+      ${ci.phone? `<div class="sub">Tel: ${ci.phone}</div>`:''}
+      ${ci.ruc? `<div class="sub">RUC: ${ci.ruc}</div>`:''}
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+      <b>Constancia de pago a profesional</b>
+      <span class="hint">N° P-${String(l.id).slice(-6).toUpperCase()}</span>
+    </div>
+    <table>
+      <tr><td>Profesional</td><td>${professionalDisplayName(pr)}</td></tr>
+      ${pr.dni? `<tr><td>DNI</td><td>${pr.dni}</td></tr>`:''}
+      ${pr.colegiatura? `<tr><td>Colegiatura</td><td>N° ${pr.colegiatura}</td></tr>`:''}
+      <tr><td>Fecha del pago</td><td>${tallerFechaLarga(l.fecha)}</td></tr>
+      <tr><td>Concepto</td><td>${cubiertas.length} atención(es) realizadas</td></tr>
+    </table>
+
+    ${cubiertas.length? `
+      <div style="font-weight:700;font-size:12.5px;margin:16px 0 2px;letter-spacing:.03em">
+        ATENCIONES QUE CUBRE ESTE PAGO</div>
+      <table>${filas}
+        <tr class="totalRow"><td>Suman</td><td>${fmtMoney(valorCubierto)}</td></tr>
+      </table>`
+    : `<p class="hint" style="margin:14px 0">Este pago se registró a cuenta: todavía no alcanzaba para cerrar ninguna atención completa.</p>`}
+
+    <table>
+      ${descontado>0? `
+        <tr><td>Valor de las atenciones</td><td>${fmtMoney(valorCubierto)}</td></tr>
+        <tr><td>Menos lo ya pagado de más antes</td><td>−${fmtMoney(descontado)}</td></tr>`:''}
+      <tr class="totalRow"><td>Monto entregado</td><td>${fmtMoney(l.monto)}</td></tr>
+    </table>
+    <div style="font-size:11.5px;color:#5B685F;margin-top:2px;text-transform:uppercase;letter-spacing:.02em">
+      Son: ${numeroALetras(l.monto)}</div>
+    ${descontado>0? `<p style="margin:8px 0;font-size:12.5px">
+      Estas atenciones valen ${fmtMoney(valorCubierto)}. Se descontaron ${fmtMoney(descontado)} que ya
+      se habían entregado de más en un pago anterior, así que <b>quedan canceladas por completo</b>.</p>`:''}
+
+    ${deMas>0? `<p style="margin:10px 0;font-size:12.5px">
+      En este pago se entregaron ${fmtMoney(deMas)} por encima de las atenciones listadas.
+      <b>Ese monto no queda a favor de nadie: ya está descontado del saldo pendiente</b> que figura abajo.</p>`:''}
+
+    <div style="margin-top:14px;padding:12px 14px;border-radius:8px;text-align:center;
+                background:${alDia? '#EAF3EC' : '#FDF0EC'};
+                border:1px solid ${alDia? 'var(--ok)' : 'var(--alert)'}">
+      ${alDia
+        ? `<div style="font-weight:700;font-size:15px;color:var(--ok)">PAGO COMPLETO</div>
+           <div style="font-size:12.5px;margin-top:3px">Con este pago no queda ninguna atención pendiente.</div>`
+        : `<div style="font-weight:700;font-size:15px;color:var(--alert)">PAGO PARCIAL</div>
+           <div style="font-size:12.5px;margin-top:3px">A la fecha de este recibo quedan <b>${fmtMoney(saldo)}</b>
+             pendientes, por ${pendientes.length} atención(es) que no entran en este pago.</div>`}
+    </div>
+
+    ${!alDia && pendientes.length? `
+      <div style="font-weight:700;font-size:12.5px;margin:16px 0 2px;letter-spacing:.03em">
+        ATENCIONES QUE QUEDAN PENDIENTES</div>
+      <table>
+        ${pendientes.map(x=>`<tr>
+          <td>${x.cita.date} — ${x.paciente? x.paciente.name : 'paciente'}
+            <span style="color:#5B685F;font-weight:400"> (${x.cita.modality||'Presencial'})</span></td>
+          <td>${fmtMoney(x.valor)}</td></tr>`).join('')}
+        <tr class="totalRow"><td>Saldo a la fecha</td><td>${fmtMoney(saldo)}</td></tr>
+      </table>`:''}
+
+    <div style="display:flex;gap:22px;margin-top:30px;text-align:center;font-size:11.5px;color:#5B685F">
+      <div style="flex:1;border-top:1px solid #22302A;padding-top:5px">
+        Entregado por<br><b style="color:#22302A">${(ci.titular || ci.name || 'El centro')}</b></div>
+      <div style="flex:1;border-top:1px solid #22302A;padding-top:5px">
+        Recibí conforme<br><b style="color:#22302A">${professionalDisplayName(pr)}</b>
+        ${pr.dni? `<br>DNI ${pr.dni}`:''}</div>
+    </div>
+
+    <div class="receiptFooter">Constancia interna de control del centro — no reemplaza el recibo por honorarios
+      que corresponda emitir.<br>
+      Generada el ${now.toLocaleDateString('es-PE')} a las ${now.toLocaleTimeString('es-PE',{hour:'2-digit',minute:'2-digit'})}</div>
+  `;
+
+  // El mismo detalle, en texto, para mandarlo por WhatsApp.
+  const lineas = cubiertas.map(x=>
+    `• ${x.cita.date} ${x.paciente? x.paciente.name : ''} (${x.cita.modality||'Presencial'}) — ${fmtMoney(x.valor)}`).join('\n');
+  const lineasPend = pendientes.map(x=>
+    `• ${x.cita.date} ${x.paciente? x.paciente.name : ''} (${x.cita.modality||'Presencial'}) — ${fmtMoney(x.valor)}`).join('\n');
+  const texto = `Hola ${nombreDePila(pr.name)}, le envío el detalle de su pago del ${tallerFechaLarga(l.fecha)}`
+    + ` en el ${nombreDelCentro()}.\n\n`
+    + (cubiertas.length? `Atenciones pagadas (${cubiertas.length}):\n${lineas}\n\n` : '')
+    + (descontado>0
+        ? `Valor de las atenciones: ${fmtMoney(valorCubierto)}\n`
+          + `Menos lo ya entregado de más antes: -${fmtMoney(descontado)}\n`
+        : '')
+    + `Monto entregado: ${fmtMoney(l.monto)}\n`
+    + `Son: ${numeroALetras(l.monto)}\n`
+    + (deMas>0? `(${fmtMoney(deMas)} se entregaron por encima de esas atenciones y ya están descontados del saldo)\n` : '')
+    + `\n`
+    + (alDia
+        ? `PAGO COMPLETO: no queda ninguna atención pendiente.`
+        : `PAGO PARCIAL: quedan ${fmtMoney(saldo)} pendientes por ${pendientes.length} atención(es):\n${lineasPend}`);
+  const btn = document.getElementById('reciboWhatsApp');
+  const btnPdf = document.getElementById('reciboPdfWhatsApp');
+  const wa = waLink(pr.phone, texto);
+  if(btn){
+    btn.style.display = wa? '' : 'none';
+    if(wa) btn.href = wa;
+  }
+  if(btnPdf) btnPdf.style.display = wa? '' : 'none';
+  // WhatsApp no deja adjuntar un archivo desde un enlace: primero se baja el
+  // PDF y después se abre el chat para arrastrarlo. Se guarda el enlace aquí
+  // para que el botón combinado sepa a quién escribirle.
+  window._reciboWaLink = wa || '';
+
+  document.getElementById('receiptModal').classList.add('open');
+}
+
 function showReceipt(paymentId){
+  // El recibo del paciente no manda por WhatsApp: se descarga o se imprime.
+  const btnWa = document.getElementById('reciboWhatsApp');
+  if(btnWa) btnWa.style.display = 'none';
+  const btnWaPdf = document.getElementById('reciboPdfWhatsApp');
+  if(btnWaPdf) btnWaPdf.style.display = 'none';
   const pm = DB.payments.find(p=>p.id===paymentId);
   if(!pm) return;
   const patient = DB.patients.find(p=>p.id===pm.patientId) || {};
@@ -5967,6 +6898,10 @@ function showReceipt(paymentId){
 function showConsolidatedReceipt(patientId){
   const patient = DB.patients.find(p=>p.id===patientId);
   if(!patient) return;
+  const btnWa = document.getElementById('reciboWhatsApp');
+  if(btnWa) btnWa.style.display = 'none';
+  const btnWaPdf = document.getElementById('reciboPdfWhatsApp');
+  if(btnWaPdf) btnWaPdf.style.display = 'none';
   const payments = DB.payments.filter(p=>p.patientId===patientId).sort((a,b)=>(a.date+(a.time||'')).localeCompare(b.date+(b.time||'')));
   if(payments.length===0){ alert('Este paciente todavía no tiene pagos registrados.'); return; }
   const ci = DB.centerInfo || DEFAULT_CENTER_INFO;
@@ -6057,6 +6992,8 @@ function viewFinanzas(){
     <div class="sectiontitle"><h2>Finanzas — ${mesActual}</h2>
       <button class="btn secondary" onclick="exportExpensesCSV()">Exportar gastos CSV</button>
     </div>
+    ${(!personalConfig().pinEnabled || personalDesbloqueado)? bloqueDuplicadosInternos()+bloqueDuplicados(mesActual) : ""}
+    ${bloqueCascada(mesActual, !personalConfig().pinEnabled || personalDesbloqueado)}
     <div class="row">
       <div class="col card">
         <h3 style="margin-top:0">Ingresos vs. gastos del mes</h3>
@@ -6280,23 +7217,20 @@ function viewAlertas(){
   const citasRows = proximasCitas.map(a=>{
     const pat = DB.patients.find(p=>p.id===a.patientId) || {};
     const prof = DB.professionals.find(p=>p.id===a.professionalId) || {};
-    const phone = pat.isMinor? pat.guardianPhone : pat.phone;
-    const email = pat.isMinor? pat.guardianEmail : pat.email;
-    const {greetName, mentionName} = greetingFor(pat.id? pat : null);
-    const linkLine = (a.modality==='Virtual' && a.meetingLink)? ` Únete por este enlace: ${a.meetingLink}` : '';
-    const addressLine = (a.modality==='Domicilio' && a.address)? ` Dirección: ${a.address}.${a.reference? ` Referencia: ${a.reference}.`:''}` : '';
-    const withProf = prof.name? ` con ${professionalDisplayName(prof)}${professionalTitleLine(prof)}` : '';
-    const msg = `Hola ${greetName||'estimado(a)'}, le recordamos${mentionName?` la cita de ${mentionName}`:' su cita'}${withProf} el ${a.date} a las ${a.time} en el Centro Psicológico (${a.modality}). ¡Le esperamos!${linkLine}${addressLine}${buildPolicyText()}`;
-    const profMsg = `Hola ${nombreDePila(prof.name)||''}, te recordamos que tienes cita con ${pat.name||'un paciente'} el ${fechaEnPalabras(a.date)} a las ${horaEnPalabras(a.time)} (${a.modality}).${linkLine}${addressLine}`;
+    const gs = pat.isMinor? guardiansFromPatient(pat) : [];
+    const avisar = aQuienesAvisar(a);
     return `<tr>
-      <td>${a.date}<br><span class="hint">${a.time}</span>${statusChip(a.status)}</td>
-      <td>${pat.name||'—'}${pat.isMinor?` <span class="hint">(apoderado: ${pat.guardianName||'—'})</span>`:''}${a.modality==='Virtual'?(a.meetingLink?`<br><a href="${a.meetingLink}" target="_blank" rel="noopener" class="hint">🔗 Enlace</a>`:`<br><span class="hint">Sin enlace — agrégalo en Citas</span>`):''}${a.modality==='Domicilio'?(a.address?`<br><span class="hint">📍 ${a.address}${a.reference?` (${a.reference})`:''}</span>`:`<br><span class="hint">Sin dirección — agrégala en Citas</span>`):''}</td>
-      <td>${prof.name? professionalDisplayName(prof) : '—'}</td>
+      <td style="white-space:nowrap"><b>${a.time}</b><span class="sub">${a.date}</span>${statusChip(a.status)}</td>
+      <td><span class="nom" title="${pat.name||''}">${pat.name||'—'}</span>
+        ${pat.isMinor? `<span class="sub">apoderado: ${(gs[0]&&gs[0].name) || pat.guardianName || '—'}</span>`:''}
+        ${a.modality==='Virtual'?(a.meetingLink?`<span class="sub"><a href="${a.meetingLink}" target="_blank" rel="noopener">🔗 Enlace</a></span>`:`<span class="sub" style="color:var(--alert)">Sin enlace — agrégalo en Citas</span>`):''}
+        ${a.modality==='Domicilio'?(a.address?`<span class="sub">📍 ${a.address}${a.reference?` (${a.reference})`:''}</span>`:`<span class="sub" style="color:var(--alert)">Sin dirección — agrégala en Citas</span>`):''}</td>
+      <td><span class="nom corto" title="${prof.name? professionalDisplayName(prof) : ''}">${prof.name? professionalDisplayName(prof) : '—'}</span></td>
       <td>${a.reminderSent? '<span class="chip ok">Ya enviado</span>':'<span class="chip warn">Pendiente</span>'}</td>
       <td>
-        ${reminderRecipientsHTML(pat.id? pat : null, a, prof.name? prof : null)}
-        ${!a.reminderSent?`<button class="btn small secondary" onclick="markReminder('${a.id}')">Marcar enviado</button>`:''}
-        <br><span class="hint">Al profesional:</span> ${contactButtons(prof.phone, prof.email, profMsg, 'Recordatorio de cita')}
+        <button class="btn small ${a.reminderSent?'secondary':''}" onclick="abrirRecordatorio('${a.id}')">
+          ${a.reminderSent? '✓ Avisado' : '💬 Avisar'}</button>
+        <span class="sub">${avisar.length? `a ${avisar.length} ${avisar.length===1?'persona':'personas'}` : 'nadie recibirá aviso'}${prof.name? ' + la profesional':''}</span>
       </td>
     </tr>`;
   }).join('');
@@ -6324,11 +7258,11 @@ function viewAlertas(){
       : `Queda pendiente el pago ${deQuien} de ${fmtMoney(saldo)}.`;
     const msg = `Hola ${saludo}, le saludamos del ${nombreDelCentro()}. ${detalle} Cualquier consulta, con gusto le ayudamos.${methodsLine}`;
     return `<tr>
-      <td>${p.name}</td>
+      <td><span class="nom" title="${p.name}">${p.name}</span></td>
       <td><span class="chip alert">${status}</span></td>
-      <td><b>${fmtMoney(saldo)}</b>${bal.paid>0? `<br><span class="hint">de ${fmtMoney(bal.totalPrice)} · pagó ${fmtMoney(bal.paid)}</span>`:''}</td>
+      <td style="white-space:nowrap"><b>${fmtMoney(saldo)}</b>${bal.paid>0? `<span class="sub">de ${fmtMoney(bal.totalPrice)} · pagó ${fmtMoney(bal.paid)}</span>`:''}</td>
       <td>
-        <div class="hint" style="margin-bottom:4px">Paso 1: manda el texto → Paso 2: adjunta el QR aparte</div>
+        <div class="sub" style="margin-bottom:4px">Paso 1: manda el texto → Paso 2: adjunta el QR aparte</div>
         ${contactButtons(phone, email, msg, 'Recordatorio de pago pendiente')}
         <button class="btn small secondary" onclick="showPaymentMethodsCard()">2️⃣ Descargar tarjeta con QR</button>
         <button class="btn small secondary" onclick="goToRegisterPayment('${p.id}')">💰 Registrar pago</button>
@@ -6345,20 +7279,23 @@ function viewAlertas(){
     const retraso = p.reportDueDate? (p.diasRetraso>0? `${p.diasRetraso} día(s) de retraso` : `vence en ${-p.diasRetraso} día(s)`) : 'sin fecha límite';
     const msg = `Hola ${professionalDisplayName(prof)||''}, recordatorio: está pendiente presentar el informe de ${p.name} (${retraso}).`;
     return `<tr>
-      <td>${p.name}</td>
-      <td>${prof.name? professionalDisplayName(prof) : '—'}</td>
-      <td>${p.diasRetraso>0? `<span class="chip alert">${p.diasRetraso} día(s) de retraso</span>` : `<span class="chip warn">Vence en ${-p.diasRetraso} día(s)</span>`}</td>
+      <td><span class="nom" title="${p.name}">${p.name}</span></td>
+      <td><span class="nom corto" title="${prof.name? professionalDisplayName(prof) : ''}">${prof.name? professionalDisplayName(prof) : '—'}</span></td>
+      <td style="white-space:nowrap">${p.diasRetraso>0? `<span class="chip alert">${p.diasRetraso} día(s) de retraso</span>` : `<span class="chip warn">Vence en ${-p.diasRetraso} día(s)</span>`}</td>
       <td>${contactButtons(prof.phone, prof.email, msg, 'Informe pendiente')}</td>
     </tr>`;
   }).join('');
 
   // 4) Profesionales con pago pendiente (para avisarles que ya está listo su pago, por ejemplo)
-  const profesionalesPendientes = DB.professionals.filter(pr=>pr.paid===false);
+  const profesionalesPendientes = DB.professionals.filter(pr=>pr.active!==false && deudaConProfesional(pr)>0);
   const profRows = profesionalesPendientes.map(pr=>{
-    const msg = `Hola ${pr.name}, le escribimos del Centro Psicológico respecto a su pago pendiente de ${fmtMoney(pr.amountToPay)}.`;
+    const debe = deudaConProfesional(pr);
+    const nPend = atencionesPendientesDe(pr.id).length;
+    const msg = `Hola ${nombreDePila(pr.name)}, le escribimos del ${nombreDelCentro()} respecto a su pago pendiente de ${fmtMoney(debe)}${nPend? ` por ${nPend} atención(es)` : ''}.`;
     return `<tr>
-      <td>${pr.name}</td>
-      <td>${fmtMoney(pr.amountToPay)}</td>
+      <td><span class="nom" title="${pr.name}">${pr.name}</span>${nPend? `<span class="sub">${nPend} atención(es) sin pagar</span>`:''}</td>
+      <td style="white-space:nowrap"><b>${fmtMoney(debe)}</b>
+        <span class="sub"><button class="btn small secondary" onclick="abrirPagoProf('${pr.id}')">Ver y pagar</button></span></td>
       <td>${contactButtons(pr.phone, pr.email, msg, 'Sobre tu pago')}</td>
     </tr>`;
   }).join('');
@@ -6673,13 +7610,13 @@ function viewTalleres(){
   const proximos = DB.talleres.filter(t=>t.date && t.date>=todayISO() && t.status!=='Cancelado').length;
 
   const rows = talleres.map(t=>`<tr>
-    <td><b>${t.name}</b><br><span class="chip neutral">${t.serviceType||"Taller"}</span>${t.notes? `<br><span class="hint">${t.notes}</span>`:''}</td>
+    <td><span class="nom" title="${t.name}"><b>${t.name}</b></span> <span class="chip neutral">${t.serviceType||"Taller"}</span>${t.notes? `<span class="sub">${t.notes}</span>`:''}</td>
     <td>${tallerFechasResumen(t)}</td>
-    <td>${t.professionalId? findName(DB.professionals,t.professionalId) : '—'}</td>
-    <td>${t.modality||'Presencial'}${t.place? `<br><span class="hint">${t.place}</span>`:''}${t.meetingLink? `<br><a href="${t.meetingLink}" target="_blank" rel="noopener" class="hint">🔗 Enlace</a>`:''}</td>
+    <td><span class="nom corto" title="${t.professionalId? findName(DB.professionals,t.professionalId) : ''}">${t.professionalId? findName(DB.professionals,t.professionalId) : '—'}</span></td>
+    <td>${t.modality||'Presencial'}${t.place? `<span class="sub">${t.place}</span>`:''}${t.meetingLink? `<span class="sub"><a href="${t.meetingLink}" target="_blank" rel="noopener">🔗 Enlace</a></span>`:''}</td>
     <td>${tallerCupoChip(t)}</td>
     <td>${tallerCobroLabel(t)}</td>
-    <td><b>${fmtMoney(tallerCobrado(t))}</b>${tallerPorCobrar(t)>0? `<br><span class="hint" style="color:var(--alert)">Falta ${fmtMoney(tallerPorCobrar(t))}</span>`:''}</td>
+    <td style="white-space:nowrap"><b>${fmtMoney(tallerCobrado(t))}</b>${tallerPorCobrar(t)>0? `<span class="sub" style="color:var(--alert)">Falta ${fmtMoney(tallerPorCobrar(t))}</span>`:''}</td>
     <td>${tallerEstadoChip(t.status)}</td>
     <td>
       <button class="btn small" onclick="openTallerParticipants('${t.id}')">👥 ${tallerEsGrupal(t)?'Asistentes':'Participantes'} (${tallerParticipantes(t).length}${Number(t.capacity)? '/'+t.capacity : ''})</button>
@@ -6721,7 +7658,8 @@ function viewTalleres(){
         </div>
         <div class="field" id="tf_placeWrap"><label>Lugar</label><input id="tf_place" placeholder="Aula 2, local del colegio, auditorio…"></div>
         <div class="field" id="tf_linkWrap" style="display:none"><label>Enlace de la capacitación</label>
-          <input id="tf_meetingLink" placeholder="Pega aquí el Zoom o Google Meet">
+          <input id="tf_meetingLink" placeholder="Genéralo aquí o pega uno de Zoom / Meet">
+          ${botonesDeEnlace("tf_meetingLink", "()=>(document.getElementById('tf_name')||{}).value")}
           <p class="hint" style="margin-top:3px">
             <a href="https://zoom.us/start/videomeeting" target="_blank" rel="noopener">Crear en Zoom</a> ·
             <a href="https://meet.google.com/new" target="_blank" rel="noopener">Crear en Google Meet</a>
@@ -7423,7 +8361,39 @@ function abonosDeMes(e, mes){
   const suyos = esFijo(e)? abonosDe(e).filter(a=>a.periodo===mes) : abonosDe(e);
   return suyos.sort((a,b)=>(a.fecha||'').localeCompare(b.fecha||''));
 }
+/* ===== Gastos de la casa que son, en realidad, una cuota ya registrada =====
+   Luis tenía sus deudas anotadas dos veces: como gasto fijo personal y como
+   préstamo con su cronograma. La cascada las contaba dos veces y el mismo
+   dinero aparecía "pagado" en un lado y "vencido" en el otro.
+   Al vincularlos manda el préstamo (o la junta): ahí está el cronograma, el
+   interés y la liquidación. El gasto se queda en su lista de siempre, pero
+   deja de sumar por su cuenta y muestra el estado del préstamo. */
+function prestamoVinculado(e){
+  return e && e.prestamoId ? (prestamosLista().find(p=>p.id===e.prestamoId) || null) : null;
+}
+function juntaVinculada(e){
+  return e && e.juntaId ? (juntasLista().find(j=>j.id===e.juntaId) || null) : null;
+}
+function estaVinculado(e){ return !!prestamoVinculado(e) || !!juntaVinculada(e); }
+/* La cuota de ese préstamo que vence en el mes, que es la que este gasto representa. */
+function cuotaVinculada(e, mes){
+  const p = prestamoVinculado(e);
+  if(!p) return null;
+  return cuotasDe(p).find(c=>String(c.fecha||'').slice(0,7)===mes) || null;
+}
+function pagoJuntaVinculado(e, mes){
+  const j = juntaVinculada(e);
+  if(!j) return null;
+  return (j.pagos||[]).find(x=>x.periodo===mes) || null;
+}
+
 function pagadoDe(e, mes){
+  // Si el gasto es una cuota ya registrada en otro módulo, manda ese módulo:
+  // no puede decir "pagado" aquí y "vencida" allá.
+  const c = cuotaVinculada(e, mes);
+  if(c) return c.pagada ? Number(e.amount||0) : 0;
+  const j = juntaVinculada(e);
+  if(j) return pagoJuntaVinculado(e, mes) ? Number(e.amount||0) : 0;
   return abonosDeMes(e, mes).reduce((s,a)=>s+Number(a.monto||0), 0);
 }
 function saldoDe(e, mes){
@@ -7440,6 +8410,10 @@ function abonadoParcial(e, mes){
 /* El día de vencimiento dice cuándo TOCA pagar; esto dice cuándo se pagó de
    verdad — la fecha del último abono, que es la que salda la cuenta. */
 function fechaPagoDe(e, mes){
+  const c = cuotaVinculada(e, mes);
+  if(c) return c.pagada ? (c.fechaPago || c.fecha || '') : '';
+  const pj = pagoJuntaVinculado(e, mes);
+  if(pj) return pj.fecha || '';
   const lista = abonosDeMes(e, mes);
   return lista.length? (lista[lista.length-1].fecha || '') : '';
 }
@@ -7524,6 +8498,10 @@ function personalDelMes(mes){
   const suma = arr => arr.reduce((s,e)=>s+Number(e.amount||0),0);
   const gastosFijos = todas.filter(e=>e.tipo==='gasto' && esFijo(e));
   const gastosVar = todas.filter(e=>e.tipo==='gasto' && !esFijo(e) && enMes(e));
+  // Los vinculados siguen en la lista —son los de siempre— pero ya los cuenta
+  // Préstamos o Juntas. Sumarlos aquí también sería cobrarse dos veces.
+  const vinculados = [...gastosFijos, ...gastosVar].filter(estaVinculado);
+  const sueltos = arr => arr.filter(e=>!estaVinculado(e));
   const ingFijos = todas.filter(e=>e.tipo==='ingreso' && esFijo(e));
   const ingVar = todas.filter(e=>e.tipo==='ingreso' && !esFijo(e) && enMes(e));
   // Un gasto variable de un mes anterior que quedó a medias se sigue debiendo,
@@ -7544,10 +8522,11 @@ function personalDelMes(mes){
 
   return {
     gastosFijos, gastosVar, ingFijos, ingVar, arrastre,
-    totalGastoFijo: suma(gastosFijos), totalGastoVar: suma(gastosVar),
+    vinculados, totalVinculado: suma(vinculados),
+    totalGastoFijo: suma(sueltos(gastosFijos)), totalGastoVar: suma(sueltos(gastosVar)),
     totalIngFijo: suma(ingFijos), totalIngVar: suma(ingVar),
-    pagadoGastoFijo: gastosFijos.reduce((s,e)=>s+Math.min(pagadoDe(e, mes), Number(e.amount||0)), 0),
-    porPagar: sumaSaldos(gastosFijos) + sumaSaldos(gastosVar) + sumaSaldos(arrastre),
+    pagadoGastoFijo: sueltos(gastosFijos).reduce((s,e)=>s+Math.min(pagadoDe(e, mes), Number(e.amount||0)), 0),
+    porPagar: sumaSaldos(sueltos(gastosFijos)) + sumaSaldos(sueltos(gastosVar)) + sumaSaldos(arrastre),
     porCobrar: sumaSaldos(ingFijos),
     vencidos: conFecha.filter(e=>pendiente(e) && diasDe(e)<0),
     porVencer: conFecha.filter(e=>pendiente(e) && diasDe(e)>=0 && diasDe(e)<=5),
@@ -7811,6 +8790,9 @@ function leerFormPrestamo(){
   return {
     id: editandoPrestamoId || uid(),
     direccion: g('pr_direccion') || 'recibido',
+    // Solo tiene sentido en los que le dieron a él: dice quién paga la cuota,
+    // el centro o su bolsillo. En los que él otorgó no aplica.
+    destino: g('pr_destino') || 'personal',
     prestamista: g('pr_prestamista').trim(),
     receptor: g('pr_receptor').trim(),
     capital: redondear(num('pr_capital')),
@@ -7838,6 +8820,9 @@ function simularPrestamo(){
   const lblRecibe = document.getElementById('pr_lblReceptor');
   if(lblQuien)  lblQuien.textContent  = dir==='otorgado'? 'Quién presta (tú)' : 'Quién te presta';
   if(lblRecibe) lblRecibe.textContent = dir==='otorgado'? 'Quién lo solicita y recibe' : 'Quién lo recibe';
+  // Preguntar "¿para qué fue el dinero?" solo tiene sentido en una deuda suya.
+  const wrapDest = document.getElementById('pr_destinoWrap');
+  if(wrapDest) wrapDest.style.display = dir==='otorgado'? 'none' : '';
 
   const esCuotas = ((document.getElementById('pr_tipo')||{}).value || 'cuotas') === 'cuotas';
   const wrapCuota = document.getElementById('pr_cuotaWrap');
@@ -7919,7 +8904,7 @@ function nuevoPrestamo(direccion){
   const form = document.getElementById('prestamoForm');
   if(form && !form.classList.contains('open')) toggleForm('prestamoForm');
   const set = (id,v)=>{ const e=document.getElementById(id); if(e) e.value = v; };
-  set('pr_direccion', direccion || 'recibido');
+  set('pr_direccion', direccion || 'recibido'); set('pr_destino','personal');
   set('pr_prestamista', direccion==='otorgado'? receptorPorDefecto() : '');
   set('pr_receptor',    direccion==='otorgado'? '' : receptorPorDefecto());
   set('pr_capital',''); set('pr_tasa','5'); set('pr_tipo','cuotas');
@@ -7937,7 +8922,7 @@ function editarPrestamo(id){
   const form = document.getElementById('prestamoForm');
   if(form && !form.classList.contains('open')) toggleForm('prestamoForm');
   const set = (i,v)=>{ const e=document.getElementById(i); if(e) e.value = v; };
-  set('pr_direccion', p.direccion||'recibido');
+  set('pr_direccion', p.direccion||'recibido'); set('pr_destino', p.destino||'personal');
   set('pr_prestamista', p.prestamista||''); set('pr_receptor', p.receptor||'');
   set('pr_capital', p.capital); set('pr_tasa', p.tasaMensual);
   set('pr_tipo', p.tipo||'cuotas'); set('pr_ncuotas', p.nCuotas);
@@ -8236,6 +9221,521 @@ function avisosPersonales(){
 
   return avisos;
 }
+/* ===== La cascada del mes: primero el consultorio, después lo personal =====
+   La regla la puso Luis: el consultorio se paga solo (sus gastos y las deudas
+   que se pidieron PARA el consultorio), y lo que sobre es lo que hay para la
+   casa. Los ingresos de sus otros trabajos NO se mezclan: van aparte, para
+   saber con qué más cuenta si el mes no alcanzó. */
+
+/* Cuotas de préstamos que vencen dentro de un mes.
+   Los de "interés acumulado" no entran: ahí no se paga nada mes a mes, cada
+   fila es una alternativa de cuánto costaría cancelar, no una cuota. */
+function cuotasDePrestamosEnMes(mes, filtro){
+  let total = 0, pendiente = 0;
+  const detalle = [];
+  prestamosLista().filter(p => p.tipo !== 'acumula' && filtro(p)).forEach(p=>{
+    cuotasDe(p).filter(c => String(c.fecha||'').slice(0,7) === mes).forEach(c=>{
+      const monto = Number(c.cuota||0);
+      total += monto;
+      if(!c.pagada) pendiente += monto;
+      detalle.push({p, c});
+    });
+  });
+  return {total: redondear(total), pendiente: redondear(pendiente), detalle};
+}
+function esDelConsultorio(p){
+  return !esOtorgado(p) && (p.destino||'personal') === 'consultorio';
+}
+
+/* Lo que pesa la junta en un mes: la cuota que toca pagar y, si ese mes te
+   toca el turno, lo que te entregan. */
+function juntaDelMes(mes){
+  let total = 0, pendiente = 0, recibo = 0;
+  juntasLista().forEach(j=>{
+    const inicio = j.mesInicio || '';
+    const pagados = new Set((j.pagos||[]).map(x=>x.periodo));
+    if(inicio){
+      const [y,m] = inicio.split('-').map(Number);
+      for(let i=0; i<Number(j.totalCuotas||0); i++){
+        const d = new Date(y, (m-1)+i, 1);
+        const p = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+        if(p === mes){
+          total += Number(j.cuota||0);
+          if(!pagados.has(mes)) pendiente += Number(j.cuota||0);
+        }
+      }
+    }
+    if(mesDeMiTurno(j) === mes) recibo += montoDeMiTurno(j);
+  });
+  return {total: redondear(total), pendiente: redondear(pendiente), recibo: redondear(recibo)};
+}
+
+function cascadaDelMes(mes){
+  // --- Primer nivel: el consultorio ---
+  const porProf = centerIncomeByProfessional(mes+'-01', mes+'-31');
+  const ingresoCentro = sumCenterIncome(porProf);
+  const ingresoProductos = DB.products.reduce(
+    (s,pr)=>s+((Number(pr.price||0)-Number(pr.cost||0))*Number(pr.monthlyUnits||0)), 0);
+  const entra = redondear(ingresoCentro + ingresoProductos);
+  const g = gastosDelMes(mes);
+  const deudasCentro = cuotasDePrestamosEnMes(mes, esDelConsultorio);
+  const queda = redondear(entra - g.total - deudasCentro.total);
+
+  // --- Segundo nivel: lo personal, con lo que sobró del centro ---
+  const r = personalDelMes(mes);
+  const gastosCasa = redondear(r.totalGastoFijo + r.totalGastoVar);
+  const deudasCasa = cuotasDePrestamosEnMes(mes, p => !esOtorgado(p) && !esDelConsultorio(p));
+  const junta = juntaDelMes(mes);
+  const compromisoCasa = redondear(gastosCasa + deudasCasa.total + junta.total);
+  const disponible = Math.max(0, queda);
+  const libre = redondear(disponible - compromisoCasa);
+
+  // --- Aparte: lo que no entra en la cascada ---
+  const extras = redondear(r.totalIngFijo + r.totalIngVar);
+  const cobros = cuotasDePrestamosEnMes(mes, esOtorgado);
+  const apoyo = redondear(extras + cobros.pendiente + junta.recibo);
+
+  return {
+    mes, entra, ingresoCentro, ingresoProductos, gastosCentro: g,
+    deudasCentro, queda,
+    gastosCasa, porPagarCasa: r.porPagar, deudasCasa, junta,
+    compromisoCasa, disponible, libre,
+    extras, cobros, apoyo,
+    // El centro no llega a cubrir lo suyo: eso es lo primero que hay que ver.
+    centroEnRojo: queda < 0,
+    faltaCasa: libre < 0 ? redondear(-libre) : 0,
+  };
+}
+
+/* ===== Detectar la misma deuda anotada dos veces =====
+   Se proponen, nunca se unen solas: el único que sabe cuál es cuál es Luis. */
+function posiblesDuplicados(mes){
+  const norm = s => String(s||'').toLowerCase().normalize('NFD')
+    .replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9 ]/g,' ').replace(/\s+/g,' ').trim();
+  const salida = [];
+  personalEntradas()
+    .filter(e => e.tipo !== 'ingreso' && !estaVinculado(e) && !e.noEsDuplicado)
+    .forEach(e=>{
+      const monto = Number(e.amount||0);
+      if(monto <= 0) return;
+      const texto = norm(`${e.name} ${e.category||''} ${e.notes||''}`);
+      // Coincidir solo por el monto no alcanza: la comida de casa puede costar
+      // lo mismo que una cuota y no tiene nada que ver. Hace falta que además
+      // el gasto suene a deuda o lleve el nombre de quien prestó.
+      const pareceDeuda = /prestamo|deuda|cuota|interes|banco|caja|tarjeta|junta/.test(texto);
+      const candidatos = [];
+
+      prestamosLista().filter(p=>!esOtorgado(p)).forEach(p=>{
+        const quien  = norm(p.prestamista);
+        const cuotas = cuotasDe(p).filter(c=>String(c.fecha||'').slice(0,7)===mes);
+        const porCuota   = cuotas.find(c=>Math.abs(Number(c.cuota||0)-monto) < 0.5);
+        const porInteres = cuotas.find(c=>Math.abs(Number(c.intereses||0)-monto) < 0.5);
+        const porCapital = Math.abs(Number(p.capital||0)-monto) < 0.5;
+        const porNombre  = quien.length > 2 && texto.includes(quien);
+        if(!porCuota && !porInteres && !porCapital && !porNombre) return;
+        const razones = [];
+        let peso = 0;
+        if(porNombre){ peso += 2; razones.push('el mismo nombre'); }
+        if(porCuota){ peso += 3; razones.push('el mismo monto de la cuota'); }
+        else if(porInteres){ peso += 2; razones.push('el monto del interés'); }
+        else if(porCapital){ peso += 2; razones.push('el monto prestado'); }
+        candidatos.push({tipo:'prestamo', p, c: porCuota||porInteres||cuotas[0]||null,
+                         peso, motivo: razones.join(' y ')});
+      });
+
+      juntasLista().forEach(j=>{
+        const porMonto  = Math.abs(Number(j.cuota||0)-monto) < 0.5;
+        const porNombre = texto.includes('junta');
+        if(!porMonto && !porNombre) return;
+        const razones = [];
+        if(porNombre) razones.push('dice "junta"');
+        if(porMonto)  razones.push('el mismo monto');
+        candidatos.push({tipo:'junta', j, peso:(porMonto?3:0)+(porNombre?2:0),
+                         motivo: razones.join(' y ')});
+      });
+
+      if(!candidatos.length) return;
+      candidatos.sort((a,b)=>b.peso-a.peso);
+      // Nombre + monto es seguro. Solo el monto vale únicamente si el gasto
+      // ya suena a deuda; si no, se calla: vale más no molestar que señalar
+      // el mercado como si fuera una cuota.
+      const peso = candidatos[0].peso;
+      if(!(peso >= 4 || (pareceDeuda && peso >= 2))) return;
+      salida.push({e, candidatos});
+    });
+  return salida;
+}
+
+/* ===== La misma deuda anotada dos veces DENTRO de cuentas personales =====
+   Distinto del caso anterior: aquí no se compara contra Préstamos, sino un
+   gasto contra otro. Se exige el mismo monto y una palabra en común que no
+   se repita en otras fichas: el nombre de un prestamista que sale en dos
+   gastos distingue, pero un apellido que se repite en cuatro —las pensiones
+   de cuatro hijos, por ejemplo— no distingue nada. */
+function duplicadosInternos(){
+  const norm = s => String(s||'').toLowerCase().normalize('NFD')
+    .replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9 ]/g,' ').replace(/\s+/g,' ').trim();
+  const palabras = e => [...new Set(norm(`${e.name} ${e.notes||''}`).split(' ').filter(w=>w.length>3))];
+  const gastos = personalEntradas().filter(e=>e.tipo!=='ingreso' && Number(e.amount||0)>0);
+
+  // En cuántas fichas aparece cada palabra: si está en muchas, no distingue.
+  const cuenta = {};
+  gastos.forEach(e=> palabras(e).forEach(w=> cuenta[w] = (cuenta[w]||0)+1));
+
+  const pares = [];
+  for(let i=0; i<gastos.length; i++){
+    for(let j=i+1; j<gastos.length; j++){
+      const a = gastos[i], b = gastos[j];
+      if(Math.abs(Number(a.amount||0) - Number(b.amount||0)) > 0.005) continue;
+      if((a.sinPareja||[]).includes(b.id) || (b.sinPareja||[]).includes(a.id)) continue;
+      const pb = palabras(b);
+      const distintiva = palabras(a).filter(w=>pb.includes(w)).find(w=>cuenta[w] <= 2);
+      if(!distintiva) continue;
+      pares.push({a, b, palabra: distintiva});
+    }
+  }
+  return pares;
+}
+
+function bloqueDuplicadosInternos(){
+  const pares = duplicadosInternos();
+  if(!pares.length) return '';
+  const cual = e => `<b>${e.name}</b><br><span class="hint">${fmtMoney(e.amount)} · ${e.category||'Otro'}`
+    + (esFijo(e)? ` · todos los meses, día ${e.dueDay||'?'}` : ` · pago único del ${e.date||'?'}`)
+    + (abonosDe(e).length? ` · <b>tiene ${abonosDe(e).length} pago(s) registrado(s)</b>` : ' · sin pagos registrados')
+    + `</span>`;
+
+  return `
+  <div class="backupbanner show" style="display:block;margin-bottom:16px">
+    <h4 style="margin-top:0">¿${pares.length===1?'Esta cuenta está':'Estas cuentas están'} anotada${pares.length===1?'':'s'} dos veces?</h4>
+    <p style="margin:0 0 10px">Encontré ${pares.length===1?'un par':'pares'} de gastos <b>del mismo monto</b> que mencionan
+      lo mismo. Puede que sean la misma deuda escrita dos veces — o que sean de verdad dos cosas distintas.
+      Míralos y decide: <b>borrar uno no se puede deshacer</b>.</p>
+    <div class="tablewrap"><table>
+      <tr><th>Uno</th><th>El otro</th><th></th></tr>
+      ${pares.map(p=>`<tr>
+        <td>${cual(p.a)}</td>
+        <td>${cual(p.b)}</td>
+        <td style="white-space:nowrap">
+          <button class="btn small danger" onclick="borrarDuplicadoInterno('${p.a.id}','${p.b.id}')">Borrar el primero</button>
+          <button class="btn small danger" onclick="borrarDuplicadoInterno('${p.b.id}','${p.a.id}')">Borrar el segundo</button>
+          <br><button class="btn small secondary" style="margin-top:4px" onclick="separarDuplicadoInterno('${p.a.id}','${p.b.id}')">Son distintos</button>
+        </td></tr>`).join('')}
+    </table></div>
+  </div>`;
+}
+
+async function borrarDuplicadoInterno(idBorrar, idQueda){
+  const e = personalEntradas().find(x=>x.id===idBorrar); if(!e) return;
+  const q = personalEntradas().find(x=>x.id===idQueda);
+  const pagos = abonosDe(e).length;
+  if(!confirm(`Se borra "${e.name}" (${fmtMoney(e.amount)})`
+    + (pagos? ` y sus ${pagos} pago(s) registrado(s)` : '')
+    + `.\n\nQueda "${q? q.name : ''}". Esto no se puede deshacer. ¿Seguro?`)) return;
+  DB.personalEntries = personalEntradas().filter(x=>x.id!==idBorrar);
+  const ok = await setColl('personalEntries', DB.personalEntries);
+  showToast(ok? `"${e.name}" eliminado. Ya no se cuenta dos veces.` : 'No se pudo guardar, reintentando…', ok);
+  renderTabs();
+  renderPanel();
+}
+
+async function separarDuplicadoInterno(idA, idB){
+  DB.personalEntries = personalEntradas().map(x=>{
+    if(x.id===idA) return {...x, sinPareja:[...(x.sinPareja||[]), idB]};
+    if(x.id===idB) return {...x, sinPareja:[...(x.sinPareja||[]), idA]};
+    return x;
+  });
+  const ok = await setColl('personalEntries', DB.personalEntries);
+  showToast(ok? 'Entendido, son cuentas distintas.' : 'No se pudo guardar, reintentando…', ok);
+  renderPanel();
+}
+
+/* Cuándo se puede unir sin preguntar: cuando coinciden el nombre Y el monto,
+   o cuando el monto calza y no hay ningún otro préstamo que pueda ser.
+   "PAGO DE INTERESES" no lleva el nombre de nadie, pero solo hay un préstamo
+   cuyo interés son exactamente esos soles: ahí no hay nada que dudar. */
+function esVinculoSeguro(d){
+  const mejor = d.candidatos[0];
+  if(!mejor) return false;
+  if(mejor.peso >= 4) return true;
+  const distintos = new Set(d.candidatos.map(c=>c.tipo==='prestamo'? 'p:'+c.p.id : 'j:'+c.j.id));
+  return mejor.peso >= 2 && distintos.size === 1;
+}
+
+function bloqueDuplicados(mes){
+  const dups = posiblesDuplicados(mes);
+  if(!dups.length) return '';
+  const total = redondear(dups.reduce((s,d)=>s+Number(d.e.amount||0), 0));
+
+  const opciones = (d)=>{
+    const vistos = [];
+    const op = [];
+    const agregar = (val, etq, sel)=>{
+      if(vistos.includes(val)) return;
+      vistos.push(val);
+      op.push(`<option value="${val}"${sel?' selected':''}>${etq}</option>`);
+    };
+    d.candidatos.forEach((c,i)=>{
+      if(c.tipo==='prestamo'){
+        agregar(`p:${c.p.id}`,
+          `Préstamo de ${c.p.prestamista} (${fmtMoney(c.p.capital)})`
+          + (c.c? ` · cuota ${c.c.n} de ${fmtMoney(c.c.cuota)}` : ''), i===0);
+      } else {
+        agregar(`j:${c.j.id}`, `La junta · cuota de ${fmtMoney(c.j.cuota)}`, i===0);
+      }
+    });
+    prestamosLista().filter(p=>!esOtorgado(p)).forEach(p=>
+      agregar(`p:${p.id}`, `Préstamo de ${p.prestamista} (${fmtMoney(p.capital)})`, false));
+    juntasLista().forEach(j=> agregar(`j:${j.id}`, `La junta · cuota de ${fmtMoney(j.cuota)}`, false));
+    return op.join('');
+  };
+
+  const seguros = dups.filter(esVinculoSeguro);
+  const filas = dups.map(d=>{
+    const seguro = esVinculoSeguro(d);
+    return `<tr>
+    <td><span class="nom" title="${d.e.name}"><b>${d.e.name}</b></span>
+      <span class="sub">${fmtMoney(d.e.amount)} · ${d.e.category||'Otro'}</span></td>
+    <td><select id="dup_${d.e.id}" style="min-width:260px">${opciones(d)}</select>
+      <span class="sub">${seguro
+        ? `Coinciden por ${d.candidatos[0].motivo}.`
+        : `<b style="color:var(--accent)">Revísalo tú:</b> solo coinciden por ${d.candidatos[0].motivo}, y hay más de un préstamo que encaja.`}</span></td>
+    <td style="white-space:nowrap">
+      <button class="btn small" onclick="unirDuplicado('${d.e.id}')">Es el mismo</button>
+      <button class="btn small secondary" onclick="descartarDuplicado('${d.e.id}')">No, son distintos</button>
+    </td></tr>`;}).join('');
+
+  return `
+  <div class="backupbanner show critical" style="display:block;margin-bottom:16px">
+    <h4 style="margin-top:0">Hay ${dups.length} gasto${dups.length>1?'s':''} que se ${dups.length>1?'están contando':'está contando'} dos veces</h4>
+    <p style="margin:0 0 10px">Estos gastos de la casa parecen ser las mismas deudas que ya llevas en <b>Préstamos</b> y en <b>la junta</b>.
+      Por eso el mismo dinero te sale <b>pagado</b> en un lado y <b>vencido</b> en el otro, y por eso
+      "Te falta" está ${fmtMoney(total)} más alto de lo real.</p>
+    <p style="margin:0 0 10px">Dime cuál es cuál y se unen: manda el préstamo, que es el que tiene el cronograma y los intereses.
+      El gasto se queda en tu lista, pero deja de sumar aparte.</p>
+    ${seguros.length? `<p style="margin:0 0 12px">
+      <button class="btn" onclick="unirTodosLosDuplicados()">Unir los ${seguros.length} que coinciden en nombre y monto</button>
+      ${dups.length>seguros.length? `<span class="hint" style="margin-left:8px">Los otros ${dups.length-seguros.length} hay que mirarlos uno por uno.</span>`:''}
+    </p>`:''}
+    <div class="tablewrap"><table>
+      <tr><th>Gasto de la casa</th><th>¿Es esta deuda?</th><th></th></tr>${filas}
+    </table></div>
+  </div>`;
+}
+
+/* Une de un golpe todos los que coinciden en nombre Y monto. Los que solo
+   coinciden en el monto se quedan: ahí el panel puede errarle de préstamo y
+   es mejor que los mire él. */
+async function unirTodosLosDuplicados(){
+  const mes = todayISO().slice(0,7);
+  const dups = posiblesDuplicados(mes).filter(esVinculoSeguro);
+  if(!dups.length){ showToast('No hay ninguno lo bastante claro para unirlo solo.'); return; }
+  if(!confirm(`Se van a unir ${dups.length} gasto(s) con la deuda que ya llevas:\n\n`
+    + dups.map(d=>`· ${d.e.name} → ${d.candidatos[0].tipo==='prestamo'? d.candidatos[0].p.prestamista : 'la junta'}`).join('\n')
+    + `\n\nSi alguno queda mal, después puedes separarlo. ¿Continuar?`)) return;
+
+  let entradas  = personalEntradas();
+  let prestamos = prestamosLista();
+  let juntas    = juntasLista();
+
+  dups.forEach(d=>{
+    const e = d.e, cand = d.candidatos[0];
+    // Lo que ya estaba marcado como pagado se pasa a la cuota, que manda de ahora en más.
+    const abonos = esFijo(e)? abonosDe(e).filter(a=>a.periodo===mes) : abonosDe(e);
+    const pagadoAntes = abonos.reduce((s,a)=>s+Number(a.monto||0), 0);
+    const estabaPagado = Number(e.amount||0) > 0 && pagadoAntes >= Number(e.amount||0) - 0.005;
+    const fechaPago = (abonos[abonos.length-1] || {}).fecha || todayISO();
+
+    if(cand.tipo === 'prestamo'){
+      entradas = entradas.map(x=> x.id!==e.id? x
+        : {...x, prestamoId: cand.p.id, juntaId: undefined, noEsDuplicado: undefined});
+      if(estabaPagado){
+        prestamos = prestamos.map(p=>{
+          if(p.id !== cand.p.id) return p;
+          const c = cuotasDe(p).find(q=>String(q.fecha||'').slice(0,7)===mes && !q.pagada);
+          return c? {...p, cuotas: cuotasDe(p).map(q=>q.n===c.n? {...q, pagada:true, fechaPago} : q)} : p;
+        });
+      }
+    } else {
+      entradas = entradas.map(x=> x.id!==e.id? x
+        : {...x, juntaId: cand.j.id, prestamoId: undefined, noEsDuplicado: undefined});
+      if(estabaPagado){
+        juntas = juntas.map(j=> (j.id!==cand.j.id || (j.pagos||[]).some(p=>p.periodo===mes)) ? j
+          : {...j, pagos:[...(j.pagos||[]), {id: uid(), periodo: mes, fecha: fechaPago, monto: Number(j.cuota||0)}]});
+      }
+    }
+  });
+
+  DB.personalEntries = entradas;
+  DB.prestamos = prestamos;
+  DB.juntas = juntas;
+  const ok = (await Promise.all([
+    setColl('personalEntries', DB.personalEntries),
+    setColl('prestamos', DB.prestamos),
+    setColl('juntas', DB.juntas),
+  ])).every(Boolean);
+  showToast(ok? `${dups.length} gasto(s) unidos: ya no se cuentan dos veces.`
+              : 'No se pudo guardar, reintentando…', ok);
+  renderTabs();
+  renderPanel();
+}
+
+/* Une el gasto con su préstamo (o con la junta). Lo que ya estaba marcado
+   como pagado no se pierde: se pasa al préstamo, que manda de ahora en más. */
+async function unirDuplicado(id){
+  const e = personalEntradas().find(x=>x.id===id); if(!e) return;
+  const sel = document.getElementById('dup_'+id); if(!sel) return;
+  const [tipo, destino] = String(sel.value||'').split(':');
+  if(!destino) return;
+  const mes = todayISO().slice(0,7);
+
+  const abonos = esFijo(e)? abonosDe(e).filter(a=>a.periodo===mes) : abonosDe(e);
+  const pagadoAntes = abonos.reduce((s,a)=>s+Number(a.monto||0), 0);
+  const estabaPagado = Number(e.amount||0) > 0 && pagadoAntes >= Number(e.amount||0) - 0.005;
+  const fechaPago = (abonos[abonos.length-1] || {}).fecha || todayISO();
+
+  DB.personalEntries = personalEntradas().map(x=> x.id!==id ? x : {
+    ...x,
+    prestamoId: tipo==='p'? destino : undefined,
+    juntaId:    tipo==='j'? destino : undefined,
+    noEsDuplicado: undefined,
+  });
+
+  let aviso = '';
+  if(tipo === 'p'){
+    const p = prestamosLista().find(x=>x.id===destino);
+    if(estabaPagado && p){
+      const cuota = cuotasDe(p).find(c=>String(c.fecha||'').slice(0,7)===mes && !c.pagada);
+      if(cuota){
+        DB.prestamos = prestamosLista().map(x=> x.id!==destino ? x : {
+          ...x,
+          cuotas: cuotasDe(x).map(c=> c.n===cuota.n? {...c, pagada:true, fechaPago} : c),
+        });
+        await setColl('prestamos', DB.prestamos);
+        aviso = ` La cuota ${cuota.n} quedó marcada como pagada el ${fechaPago}.`;
+      }
+    }
+  } else {
+    const j = juntasLista().find(x=>x.id===destino);
+    if(estabaPagado && j && !(j.pagos||[]).some(x=>x.periodo===mes)){
+      DB.juntas = juntasLista().map(x=> x.id!==destino ? x : {
+        ...x, pagos:[...(x.pagos||[]), {id: uid(), periodo: mes, fecha: fechaPago, monto: Number(x.cuota||0)}],
+      });
+      await setColl('juntas', DB.juntas);
+      aviso = ` La cuota de ${mes} quedó registrada en la junta.`;
+    }
+  }
+
+  const ok = await setColl('personalEntries', DB.personalEntries);
+  showToast(ok? `"${e.name}" ya no se cuenta dos veces.${aviso}` : 'No se pudo guardar, reintentando…', ok);
+  renderTabs();
+  renderPanel();
+}
+
+async function descartarDuplicado(id){
+  DB.personalEntries = personalEntradas().map(x=> x.id===id? {...x, noEsDuplicado:true} : x);
+  const ok = await setColl('personalEntries', DB.personalEntries);
+  showToast(ok? 'Entendido, son deudas distintas.' : 'No se pudo guardar, reintentando…', ok);
+  renderPanel();
+}
+
+async function desvincularGasto(id){
+  const e = personalEntradas().find(x=>x.id===id); if(!e) return;
+  if(!confirm(`"${e.name}" volverá a llevarse por su cuenta, aparte del préstamo. ¿Seguro?`)) return;
+  DB.personalEntries = personalEntradas().map(x=> x.id!==id? x
+    : {...x, prestamoId:undefined, juntaId:undefined, noEsDuplicado:true});
+  const ok = await setColl('personalEntries', DB.personalEntries);
+  showToast(ok? 'Separado del préstamo.' : 'No se pudo guardar, reintentando…', ok);
+  renderTabs();
+  renderPanel();
+}
+
+/* `verPersonal` en false muestra solo el primer nivel. Se usa en Finanzas:
+   si pusiste clave a las cuentas personales, tus gastos de la casa no pueden
+   asomarse en una pestaña que no la pide. */
+function bloqueCascada(mes, verPersonal){
+  const c = cascadaDelMes(mes);
+  if(verPersonal === undefined) verPersonal = true;
+  const fila = (etiqueta, monto, signo, tenue) => `<tr>
+    <td style="${tenue?'color:var(--muted)':''}">${signo||''} ${etiqueta}</td>
+    <td style="text-align:right;white-space:nowrap;${tenue?'color:var(--muted)':''}">${signo==='−'?'−':''}${fmtMoney(monto)}</td></tr>`;
+  const total = (etiqueta, monto, bueno) => `<tr style="border-top:2px solid var(--line)">
+    <td><b>${etiqueta}</b></td>
+    <td style="text-align:right;white-space:nowrap"><b style="font-size:17px;color:${bueno?'var(--ok)':'var(--alert)'}">${fmtMoney(monto)}</b></td></tr>`;
+
+  const avisoCentro = c.centroEnRojo
+    ? `<p class="hint" style="color:var(--alert);margin-top:8px"><b>El consultorio no se está pagando solo este mes.</b>
+         Le faltan ${fmtMoney(-c.queda)} para cubrir sus propios gastos, así que <b>no hay nada que pasar a lo personal</b>.</p>`
+    : `<p class="hint" style="margin-top:8px">Esto es lo que el consultorio deja libre después de pagar lo suyo. Es la plata con la que se pagan tus gastos personales.</p>`;
+
+  const avisoCasa = c.faltaCasa > 0
+    ? `<p class="hint" style="color:var(--alert);margin-top:8px"><b>Te faltan ${fmtMoney(c.faltaCasa)} este mes.</b>
+         ${c.apoyo > 0
+            ? (c.apoyo >= c.faltaCasa
+                ? `Con lo que tienes aparte (${fmtMoney(c.apoyo)}) alcanzas a cubrirlo.`
+                : `Aun sumando lo que tienes aparte (${fmtMoney(c.apoyo)}), seguirían faltando ${fmtMoney(redondear(c.faltaCasa - c.apoyo))}.`)
+            : 'No tienes nada registrado aparte para cubrirlo.'}</p>`
+    : `<p class="hint" style="margin-top:8px">Lo que queda después de pagar todo lo tuyo. ${c.extras>0? `Tus otros trabajos (${fmtMoney(c.extras)}) van aparte y no están contados aquí.`:''}</p>`;
+
+  const detalleDeuda = (d, vacio) => d.detalle.length
+    ? d.detalle.map(({p,c:q})=>`<tr>
+        <td style="font-size:13px">${p.prestamista||p.receptor||'Préstamo'} <span class="hint">· cuota ${q.n}</span></td>
+        <td style="text-align:right;font-size:13px;white-space:nowrap">${fmtMoney(q.cuota)}
+          ${q.pagada? '<span class="chip ok">Pagada</span>' : `<span class="chip ${q.fecha<todayISO()?'alert':'warn'}">${q.fecha<todayISO()?'Vencida':'Por pagar'}</span>`}</td>
+      </tr>`).join('')
+    : `<tr><td colspan="2" class="hint">${vacio}</td></tr>`;
+
+  return `
+  <div class="card" style="margin-bottom:18px">
+    <h3 style="margin-top:0">Primero el consultorio, después lo personal — ${mes}</h3>
+    <p class="hint" style="margin-bottom:14px">El consultorio se paga solo. Lo que le sobre es lo que hay para tus gastos personales.</p>
+    <div class="row">
+      <div class="col">
+        <h4 style="margin:0 0 6px">1 · El consultorio</h4>
+        <table>
+          ${fila('Ingreso del centro este mes', c.ingresoCentro)}
+          ${c.ingresoProductos>0? fila('Productos adicionales', c.ingresoProductos) : ''}
+          ${fila('Gastos fijos del centro', c.gastosCentro.fijos, '−', true)}
+          ${fila('Gastos variables del mes', c.gastosCentro.variables, '−', true)}
+          ${fila('Cuotas de deudas del consultorio', c.deudasCentro.total, '−', true)}
+          ${total('= Queda del consultorio', c.queda, !c.centroEnRojo)}
+        </table>
+        ${avisoCentro}
+        <table style="margin-top:10px">${detalleDeuda(c.deudasCentro, 'Ninguna deuda marcada como del consultorio.')}</table>
+      </div>
+      <div class="col">
+        <h4 style="margin:0 0 6px">2 · Lo personal</h4>
+        ${!verPersonal? `
+        <table>
+          ${fila('Te llega del consultorio', c.disponible)}
+          ${total('= Disponible para la casa', c.disponible, c.disponible>0)}
+        </table>
+        <p class="hint" style="margin-top:8px">El detalle de tus gastos personales está protegido con clave. Ábrelo en <b>Cuentas personales</b>.</p>
+        ` : `
+        <table>
+          ${fila('Te llega del consultorio', c.disponible)}
+          ${fila('Gastos personales del mes', c.gastosCasa, '−', true)}
+          ${fila('Cuotas de tus préstamos', c.deudasCasa.total, '−', true)}
+          ${c.junta.total>0? fila('Cuota de la junta', c.junta.total, '−', true) : ''}
+          ${total(c.faltaCasa>0? '= Te falta' : '= Te queda libre', c.faltaCasa>0? c.faltaCasa : c.libre, c.faltaCasa<=0)}
+        </table>
+        ${avisoCasa}
+        <table style="margin-top:10px">${detalleDeuda(c.deudasCasa, 'Ninguna cuota personal vence este mes.')}</table>
+        `}
+      </div>
+    </div>
+    ${verPersonal? `
+    <h4 style="margin:16px 0 6px">Aparte — no entra en la cuenta de arriba</h4>
+    <table>
+      ${fila('Ingresos de tus otros trabajos', c.extras)}
+      ${c.cobros.pendiente>0? fila('Cuotas que te deben cobrar este mes', c.cobros.pendiente) : ''}
+      ${c.junta.recibo>0? fila('Este mes te toca recibir la junta', c.junta.recibo) : ''}
+      ${total('= Con lo que cuentas aparte', c.apoyo, true)}
+    </table>
+    <p class="hint" style="margin-top:8px">Tú pediste que lo personal se pague con lo que sobra del consultorio, así que esto se muestra al costado: es plata tuya, pero no la cuenta el reparto.</p>`:''}
+  </div>`;
+}
+
 function bloqueAvisosPersonales(){
   const avisos = avisosPersonales();
   if(!avisos.length) return '';
@@ -8334,6 +9834,43 @@ function borrarJunta(id){
   guardarJuntas('Junta eliminada.');
 }
 
+/* Los botones de una fila de cuentas personales. Si el gasto está unido a un
+   préstamo, no se paga desde aquí: se marca la cuota, que es la que manda. */
+function botonesPersonal(e, mes, saldo, abonado, esIngreso){
+  const p = prestamoVinculado(e);
+  const j = juntaVinculada(e);
+  if(p){
+    const c = cuotaVinculada(e, mes);
+    return `${c? `<button class="btn small ${c.pagada?'secondary':''}" onclick="marcarCuota('${p.id}',${c.n})">
+                   ${c.pagada? 'Quitar el pago de la cuota' : 'Pagar la cuota '+c.n}</button>` : ''}
+      <button class="btn small secondary" onclick="verPrestamo('${p.id}')">Ver el préstamo</button>
+      <button class="btn small secondary" onclick="desvincularGasto('${e.id}')">Separar</button>`;
+  }
+  if(j){
+    return `<button class="btn small secondary" onclick="desvincularGasto('${e.id}')">Separar de la junta</button>`;
+  }
+  return `${saldo>0? `<button class="btn small" onclick="openAbonoModal('${e.id}')">${esIngreso? 'Cobrar o abonar':'Pagar o adelantar'}</button>`:''}
+    ${abonado>0? `<button class="btn small secondary" onclick="openAbonoModal('${e.id}')">Ver ${esIngreso?'cobros':'pagos'}</button>`:''}
+    <button class="btn small secondary" onclick="editPersonal('${e.id}')">Editar</button>
+    <button class="btn small danger" onclick="deletePersonal('${e.id}')">Eliminar</button>`;
+}
+/* Abre el cronograma de un préstamo desde cualquier parte de la pantalla. */
+function verPrestamo(id){
+  prestamoAbierto = prestamoAbierto === id ? null : id;
+  renderPanel();
+  setTimeout(()=>{
+    const fila = document.getElementById('prestamo_'+id);
+    if(fila) fila.scrollIntoView({block:'center', behavior:'smooth'});
+  }, 60);
+}
+/* La etiqueta que avisa que ese gasto ya lo lleva otro módulo. */
+function chipVinculo(e){
+  const p = prestamoVinculado(e);
+  if(p) return ` <span class="chip neutral">Es la cuota de ${p.prestamista}</span>`;
+  if(juntaVinculada(e)) return ` <span class="chip neutral">Es la cuota de la junta</span>`;
+  return '';
+}
+
 function viewPersonal(){
   const cfg = personalConfig();
   if(cfg.pinEnabled && !personalDesbloqueado) return vistaPersonalBloqueada();
@@ -8351,19 +9888,14 @@ function viewPersonal(){
     const nAbonos = abonosDeMes(e, mes).length;
     const esIngreso = e.tipo==='ingreso';
     return `<tr style="${pagado?'opacity:.7':''}">
-      <td><b>${e.name}</b><br><span class="hint">${e.category||'Otro'}${e.notes? ' · '+e.notes:''}</span></td>
+      <td><span class="nom" title="${e.name}"><b>${e.name}</b></span>${chipVinculo(e)}<span class="sub">${e.category||'Otro'}${e.notes? ' · '+e.notes:''}</span></td>
       <td>Día ${Math.min(Number(e.dueDay)||1,31)}</td>
       <td><span class="chip ${est.clase}">${est.texto}</span></td>
       <td style="text-align:right;white-space:nowrap">${fmtMoney(e.amount)}</td>
       <td style="text-align:right;white-space:nowrap">${abonado>0? fmtMoney(abonado) : '—'}
         ${nAbonos>1? `<br><span class="hint">${nAbonos} abonos</span>`:''}</td>
       <td style="text-align:right;white-space:nowrap">${saldo>0? `<b style="color:var(--alert)">${fmtMoney(saldo)}</b>` : '<span class="chip ok">Al día</span>'}</td>
-      <td>
-        ${saldo>0? `<button class="btn small" onclick="openAbonoModal('${e.id}')">${esIngreso? 'Registrar cobro':'Registrar pago'}</button>`:''}
-        ${abonado>0? `<button class="btn small secondary" onclick="openAbonoModal('${e.id}')">Ver ${esIngreso?'cobros':'pagos'}</button>`:''}
-        <button class="btn small secondary" onclick="editPersonal('${e.id}')">Editar</button>
-        <button class="btn small danger" onclick="deletePersonal('${e.id}')">Eliminar</button>
-      </td>
+      <td>${botonesPersonal(e, mes, saldo, abonado, esIngreso)}</td>
     </tr>`;
   };
   // Un variable es un pago único: se paga una vez y se termina. Por eso lleva
@@ -8375,18 +9907,13 @@ function viewPersonal(){
     const saldo = saldoDe(e, mes);
     const esIngreso = e.tipo==='ingreso';
     return `<tr style="${pagado?'opacity:.7':''}">
-      <td><b>${e.name}</b><br><span class="hint">${e.category||'Otro'}${e.notes? ' · '+e.notes:''}</span></td>
+      <td><span class="nom" title="${e.name}"><b>${e.name}</b></span>${chipVinculo(e)}<span class="sub">${e.category||'Otro'}${e.notes? ' · '+e.notes:''}</span></td>
       <td style="white-space:nowrap">${e.date||'—'}</td>
       <td><span class="chip ${est.clase}">${est.texto}</span></td>
       <td style="text-align:right;white-space:nowrap">${fmtMoney(e.amount)}</td>
       <td style="text-align:right;white-space:nowrap">${abonado>0? fmtMoney(abonado) : '—'}</td>
       <td style="text-align:right;white-space:nowrap">${saldo>0? `<b style="color:var(--alert)">${fmtMoney(saldo)}</b>` : '<span class="chip ok">Al día</span>'}</td>
-      <td>
-        ${saldo>0? `<button class="btn small" onclick="openAbonoModal('${e.id}')">${esIngreso? 'Registrar cobro':'Registrar pago'}</button>`:''}
-        ${abonado>0? `<button class="btn small secondary" onclick="openAbonoModal('${e.id}')">Ver ${esIngreso?'cobros':'pagos'}</button>`:''}
-        <button class="btn small secondary" onclick="editPersonal('${e.id}')">Editar</button>
-        <button class="btn small danger" onclick="deletePersonal('${e.id}')">Eliminar</button>
-      </td>
+      <td>${botonesPersonal(e, mes, saldo, abonado, esIngreso)}</td>
     </tr>`;
   };
   const cabeceraVar = (etiqueta, verbo)=>
@@ -8415,10 +9942,13 @@ function viewPersonal(){
 
     ${bloqueAvisos}
     ${bloqueAvisosPersonales()}
+    ${bloqueDuplicadosInternos()}
+    ${bloqueDuplicados(mes)}
+    ${bloqueCascada(mes)}
 
     <div class="kpi-grid">
       <div class="kpi ok"><div class="num">${fmtMoney(ingresos)}</div><div class="label">Ingresos del mes</div></div>
-      <div class="kpi"><div class="num">${fmtMoney(r.totalGastoFijo)}</div><div class="label">Gastos fijos</div></div>
+      <div class="kpi"><div class="num">${fmtMoney(r.totalGastoFijo)}</div><div class="label">Gastos fijos${r.totalVinculado>0? ` <span class="hint">(+ ${fmtMoney(r.totalVinculado)} que ya cuenta Préstamos)</span>`:''}</div></div>
       <div class="kpi"><div class="num">${fmtMoney(r.totalGastoVar)}</div><div class="label">Gastos variables del mes</div></div>
       <div class="kpi ${saldo>=0?'ok':'alert'}"><div class="num">${fmtMoney(saldo)}</div><div class="label">Te queda este mes</div></div>
       <div class="kpi ${r.porPagar>0?'alert':'ok'}"><div class="num">${fmtMoney(r.porPagar)}</div><div class="label">Aún por pagar${r.pagadoGastoFijo>0? ` (ya diste ${fmtMoney(r.pagadoGastoFijo)})`:''}</div></div>
@@ -8501,6 +10031,13 @@ function formularioPrestamo(){
           <option value="recibido">Me lo dieron a mí (deuda)</option>
           <option value="otorgado">Yo lo di (me deben)</option>
         </select>
+      </div>
+      <div class="field" id="pr_destinoWrap"><label>¿Para qué fue ese dinero?</label>
+        <select id="pr_destino" onchange="simularPrestamo()">
+          <option value="personal">Para mí — la cuota sale de mi bolsillo</option>
+          <option value="consultorio">Para el consultorio — la cuota la paga el centro</option>
+        </select>
+        <p class="hint" style="margin-top:3px">Los del consultorio se pagan antes que tus gastos personales.</p>
       </div>
       <div class="field"><label id="pr_lblPrestamista">Quién te presta</label>
         <input type="text" id="pr_prestamista" oninput="simularPrestamo()" placeholder="Nombre de quien da el dinero">
@@ -8594,8 +10131,9 @@ function tablaPrestamos(dir){
       </td></tr>`;
 
     const forma = {cuotas:'cuotas fijas', interes:'solo intereses', acumula:'interés acumulado'}[p.tipo] || 'cuotas fijas';
-    return `<tr style="${saldo<=0?'opacity:.6':''}">
+    return `<tr id="prestamo_${p.id}" style="${saldo<=0?'opacity:.6':''}">
       <td><b>${otorgado? (p.receptor||'—') : p.prestamista}</b>
+        ${!otorgado? ` <span class="chip ${esDelConsultorio(p)?'warn':'neutral'}">${esDelConsultorio(p)?'Consultorio':'Personal'}</span>`:''}
         <br><span class="hint">${otorgado
             ? `Se lo prestaste tú (${p.prestamista||receptorPorDefecto()})`
             : `Te lo dio a ti (${p.receptor || receptorPorDefecto()})`}</span>
@@ -8900,10 +10438,14 @@ async function savePersonal(){
    así que hay un solo sitio donde registrarlos. La casilla viene con el saldo
    pendiente puesto: pagar todo es un clic, y adelantar es cambiar el número. */
 let abonoMovimientoId = null;
+/* Un adelanto mal escrito se corrige, no se borra y se vuelve a escribir:
+   así no se pierde la fecha en que realmente se dio la plata. */
+let abonoEditandoId = null;
 
 function openAbonoModal(id){
   const e = personalEntradas().find(x=>x.id===id); if(!e) return;
   abonoMovimientoId = id;
+  abonoEditandoId = null;
   document.getElementById('abonoModal').classList.add('open');
   renderAbonoModal();
   setTimeout(()=>{ const el = document.getElementById('ab_monto'); if(el){ el.focus(); el.select(); } }, 80);
@@ -8911,6 +10453,7 @@ function openAbonoModal(id){
 function closeAbonoModal(){
   document.getElementById('abonoModal').classList.remove('open');
   abonoMovimientoId = null;
+  abonoEditandoId = null;
   renderTabs();
   renderPanel();
 }
@@ -8938,22 +10481,35 @@ function renderAbonoModal(){
         : 'Sin fecha de vencimiento.')
     + `</span>`;
 
-  document.getElementById('abonoLabelMonto').textContent = esIngreso? 'Monto que cobraste (S/)' : 'Monto que pagaste (S/)';
-  document.getElementById('ab_monto').value = saldo>0? saldo.toFixed(2) : '';
-  document.getElementById('ab_fecha').value = todayISO();
-  document.getElementById('abonoSubmit').textContent = esIngreso? 'Registrar cobro' : 'Registrar pago';
-  document.getElementById('abonoAvisoTotal').textContent = saldo>0
-    ? `Déjalo así para ${esIngreso?'cobrar':'pagar'} todo lo que falta, o escribe menos si es un adelanto.`
-    : `Ya está cubierto${esFijo(e)? ' el mes':''}. Si registras más, quedará como un ${esIngreso?'cobro':'pago'} de más.`;
+  const corrigiendo = lista.find(a=>a.id===abonoEditandoId) || null;
+  document.getElementById('abonoLabelMonto').textContent = corrigiendo
+    ? (esIngreso? 'Corregir el monto cobrado (S/)' : 'Corregir el monto pagado (S/)')
+    : (esIngreso? 'Monto que cobraste (S/)' : 'Monto que pagaste (S/)');
+  document.getElementById('ab_monto').value = corrigiendo
+    ? Number(corrigiendo.monto||0).toFixed(2)
+    : (saldo>0? saldo.toFixed(2) : '');
+  document.getElementById('ab_fecha').value = corrigiendo ? (corrigiendo.fecha || todayISO()) : todayISO();
+  document.getElementById('abonoSubmit').textContent = corrigiendo
+    ? 'Guardar la corrección'
+    : (esIngreso? 'Registrar cobro' : 'Registrar pago');
+  document.getElementById('abonoCancelEdit').style.display = corrigiendo? '' : 'none';
+  document.getElementById('abonoAvisoTotal').textContent = corrigiendo
+    ? `Cambia el monto o la fecha y guarda. El saldo que falta se recalcula solo.`
+    : (saldo>0
+        ? `Déjalo así para ${esIngreso?'cobrar':'pagar'} todo lo que falta, o escribe menos si es un adelanto. Puedes ponerle la fecha del día en que diste la plata, aunque sea antes del vencimiento.`
+        : `Ya está cubierto${esFijo(e)? ' el mes':''}. Si registras más, quedará como un ${esIngreso?'cobro':'pago'} de más.`);
 
   document.getElementById('abonoListaTitulo').textContent = esFijo(e)
     ? 'Lo registrado este mes' : 'Lo registrado';
   document.getElementById('abonoLista').innerHTML = lista.length
     ? `<table><tr><th>Fecha</th><th style="text-align:right">Monto</th><th></th></tr>
-       ${lista.map(a=>`<tr>
-          <td>${a.fecha? tallerFechaLarga(a.fecha) : '—'}</td>
+       ${lista.map((a,i)=>`<tr style="${a.id===abonoEditandoId?'background:#fff6e5':''}">
+          <td>${a.fecha? tallerFechaLarga(a.fecha) : '—'}
+            ${lista.length>1? `<br><span class="hint">${esIngreso?'cobro':'pago'} ${i+1} de ${lista.length}</span>`:''}</td>
           <td style="text-align:right">${fmtMoney(a.monto)}</td>
-          <td><button class="btn small danger" onclick="deleteAbono('${a.id}')">Quitar</button></td>
+          <td style="white-space:nowrap">
+            <button class="btn small secondary" onclick="editAbono('${a.id}')">Editar</button>
+            <button class="btn small danger" onclick="deleteAbono('${a.id}')">Quitar</button></td>
         </tr>`).join('')}</table>`
     : `<div class="empty">Todavía no registraste ${esIngreso?'ningún cobro':'ningún pago'} de este mes.</div>`;
 }
@@ -8963,21 +10519,31 @@ async function saveAbono(){
   const monto = Number(document.getElementById('ab_monto').value)||0;
   const fecha = document.getElementById('ab_fecha').value || todayISO();
   if(monto<=0){ alert('Escribe un monto mayor a cero.'); return; }
-  const saldo = saldoDe(e, mes);
   const esIngreso = e.tipo==='ingreso';
+  // Al corregir, el monto viejo ya está contado dentro del saldo: para saber
+  // si se pasa hay que devolverlo antes de comparar.
+  const corrigiendo = abonosDe(e).find(a=>a.id===abonoEditandoId) || null;
+  const saldo = redondear(saldoDe(e, mes) + (corrigiendo? Number(corrigiendo.monto||0) : 0));
   if(monto > saldo + 0.005 && !confirm(
       `Estás registrando ${fmtMoney(monto)} y solo faltaban ${fmtMoney(saldo)}.\n\n`
       + `Quedará ${esIngreso?'cobrado':'pagado'} de más. ¿Continuar?`)) return;
 
-  const abono = {id: uid(), periodo: periodoDe(e, mes), fecha, monto};
-  DB.personalEntries = personalEntradas().map(x=>
-    x.id===e.id? {...x, abonos:[...abonosDe(x), abono]} : x);
+  DB.personalEntries = personalEntradas().map(x=>{
+    if(x.id !== e.id) return x;
+    if(corrigiendo){
+      return {...x, abonos: abonosDe(x).map(a=>
+        a.id===abonoEditandoId? {...a, fecha, monto, periodo: periodoDe(e, mes)} : a)};
+    }
+    return {...x, abonos:[...abonosDe(x), {id: uid(), periodo: periodoDe(e, mes), fecha, monto}]};
+  });
+  const eraCorreccion = !!corrigiendo;
+  abonoEditandoId = null;
   const ok = await setColl('personalEntries', DB.personalEntries);
   if(ok){
     const actualizado = personalEntradas().find(x=>x.id===e.id);
     const queda = saldoDe(actualizado, mes);
     showToast(queda>0
-      ? `${e.name}: ${fmtMoney(monto)} registrado. Falta ${fmtMoney(queda)}.`
+      ? `${e.name}: ${eraCorreccion? 'corregido a' : 'registrado'} ${fmtMoney(monto)}. Falta ${fmtMoney(queda)}.`
       : `${e.name}: queda ${esIngreso?'cobrado':'pagado'} por completo.`, true);
   } else {
     showToast('No se pudo guardar, reintentando…', false);
@@ -8985,10 +10551,24 @@ async function saveAbono(){
   renderAbonoModal();
   renderTabs();
 }
+/* Cargar un adelanto ya registrado en el formulario para corregirlo. */
+function editAbono(abonoId){
+  const e = personalEntradas().find(x=>x.id===abonoMovimientoId); if(!e) return;
+  if(!abonosDe(e).some(a=>a.id===abonoId)) return;
+  abonoEditandoId = abonoId;
+  renderAbonoModal();
+  const el = document.getElementById('ab_monto');
+  if(el){ el.focus(); el.select(); }
+}
+function cancelAbonoEdit(){
+  abonoEditandoId = null;
+  renderAbonoModal();
+}
 async function deleteAbono(abonoId){
   const e = personalEntradas().find(x=>x.id===abonoMovimientoId); if(!e) return;
   const a = abonosDe(e).find(x=>x.id===abonoId); if(!a) return;
   if(!confirm(`¿Quitar el ${e.tipo==='ingreso'?'cobro':'pago'} de ${fmtMoney(a.monto)}${a.fecha? ' del '+tallerFechaLarga(a.fecha):''}?`)) return;
+  if(abonoEditandoId === abonoId) abonoEditandoId = null;
   DB.personalEntries = personalEntradas().map(x=>
     x.id===e.id? {...x, abonos: abonosDe(x).filter(y=>y.id!==abonoId)} : x);
   const ok = await setColl('personalEntries', DB.personalEntries);
@@ -9129,6 +10709,244 @@ function updateGrafRange(){
   };
   renderPanel();
 }
+/* ===== Punto de equilibrio =====
+   La pregunta que Luis se hace todos los días: ¿cuántos pacientes necesito
+   para que el consultorio se pague solo, y cuántos me faltan? Todo lo de
+   abajo sale de responderla con sus propios números, no con supuestos. */
+
+/* Días en que se atiende dentro del mes: de lunes a sábado. */
+function diasDeAtencionEnMes(mes){
+  const [y,m] = mes.split('-').map(Number);
+  const ultimo = new Date(y, m, 0).getDate();
+  let n = 0;
+  for(let d=1; d<=ultimo; d++){
+    if(new Date(y, m-1, d).getDay() !== 0) n++;
+  }
+  return n;
+}
+
+/* Lo que paga un paciente por sesión, en promedio. Sirve para calcular qué
+   pasaría si las sesiones las diera él y se quedara con todo. */
+function tarifaTipicaDePaciente(){
+  const precios = DB.patients.map(p=>Number(p.pricePerSession||0)).filter(v=>v>0);
+  if(precios.length) return redondear(precios.reduce((s,v)=>s+v,0)/precios.length);
+  const svc = (DB.services||[]).find(s=>/individual/i.test(s.name||''));
+  const n = svc? Number(String(svc.price||'').replace(/[^\d.]/g,'')) : 0;
+  return n>0? n : 50;
+}
+
+function equilibrioDelMes(mes){
+  const casc = cascadaDelMes(mes);
+  const porProf = centerIncomeByProfessional(mes+'-01', mes+'-31');
+  let sesiones = 0;
+  Object.values(porProf).forEach(x=> sesiones += x.sessions);
+
+  const ingreso = casc.entra;
+  // El consultorio tiene que cubrir sus gastos Y las deudas que se pidieron
+  // para él. Eso es lo mínimo que hay que pagar cada mes.
+  const gasto = redondear(casc.gastosCentro.total + casc.deudasCentro.total);
+
+  // Lo que deja cada sesión al centro: medido de lo real del mes, y si todavía
+  // no hay pagos, del acuerdo firmado con los profesionales.
+  let porSesion = sesiones > 0 ? redondear(ingreso/sesiones) : 0;
+  if(porSesion <= 0){
+    // Sin pagos del mes se estima con el acuerdo: la tarifa típica menos lo
+    // que se le paga al profesional por una sesión presencial.
+    const tarifa = tarifaTipicaDePaciente();
+    const ac = DB.professionals.filter(p=>p.active!==false && p.paymentModel==='Comisión')
+      .map(p=> tieneTarifaPropia(p)
+        ? Math.max(0, redondear(tarifa - pagoAlProfesional(p, 'Presencial')))
+        : Number(p.centerShareAmount||0))
+      .filter(v=>v>0);
+    porSesion = ac.length ? redondear(ac.reduce((s,v)=>s+v,0)/ac.length) : 0;
+  }
+
+  const dias = diasDeAtencionEnMes(mes);
+  const necesarias = porSesion>0 ? Math.ceil(gasto/porSesion) : 0;
+  const resultado  = redondear(ingreso - gasto);
+  const tarifa     = tarifaTipicaDePaciente();
+  const alquiler   = (DB.expenses||[])
+    .filter(e=>/alquiler/i.test(e.category||'') || /alquiler/i.test(e.name||''))
+    .reduce((s,e)=>s+Number(e.amount||0), 0);
+
+  return {
+    mes, sesiones, ingreso, gasto, porSesion, dias, tarifa, alquiler,
+    necesarias,
+    faltan: Math.max(0, necesarias - sesiones),
+    resultado,
+    enGanancia: resultado >= 0,
+    porDia:       dias? necesarias/dias : 0,
+    porDiaActual: dias? sesiones/dias : 0,
+    avance: necesarias? Math.min(100, Math.round(sesiones/necesarias*100)) : 0,
+    // Para cubrir además todo lo de la casa
+    compromisoCasa: casc.compromisoCasa,
+    conCasa:       porSesion>0? Math.ceil((gasto + casc.compromisoCasa)/porSesion) : 0,
+    conCasaPorDia: (porSesion>0 && dias)? Math.ceil((gasto + casc.compromisoCasa)/porSesion)/dias : 0,
+    // Escenarios
+    siAtiendeEl:   tarifa>0? Math.ceil(gasto/tarifa) : 0,
+    siBajaAlquiler: porSesion>0? Math.ceil((gasto - alquiler/2)/porSesion) : 0,
+    turnosQueCubren: Math.ceil(gasto/300),
+    casc,
+  };
+}
+
+/* Barras de cada mes con la línea que hay que cruzar. Es el gráfico que
+   contesta de un vistazo "¿voy ganando o perdiendo?". */
+function svgBarrasConMeta(data, meta){
+  if(!data.length) return '<div class="empty">Sin datos suficientes todavía.</div>';
+  const w=560, h=250, padL=10, padB=36, padT=30, gap=14;
+  const max = Math.max(1, meta*1.15, ...data.map(d=>d.value));
+  const barW = Math.max(18, (w-padL-20)/data.length - gap);
+  const yDe = v => h-padB-(v/max)*(h-padB-padT);
+  let bars='', labels='';
+  data.forEach((d,i)=>{
+    const x = padL + i*(barW+gap);
+    const y = yDe(d.value);
+    const cubre = d.value >= meta;
+    bars += `<rect x="${x}" y="${y}" width="${barW}" height="${Math.max(2,h-padB-y)}" rx="4"
+             style="fill:${cubre? 'var(--ok)' : 'var(--alert)'};opacity:${cubre?1:.75}"/>`;
+    bars += `<text x="${x+barW/2}" y="${y-6}" font-size="11" text-anchor="middle" fill="#22302A" font-family="Work Sans">${Math.round(d.value)}</text>`;
+    labels += `<text x="${x+barW/2}" y="${h-14}" font-size="10" text-anchor="middle" fill="#5B685F" font-family="Work Sans">${d.label}</text>`;
+  });
+  const yMeta = yDe(meta);
+  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:auto;max-width:560px;display:block">
+    <line x1="${padL}" y1="${h-padB}" x2="${w-10}" y2="${h-padB}" stroke="#D9D5C6"/>
+    ${bars}${labels}
+    <line x1="${padL}" y1="${yMeta}" x2="${w-10}" y2="${yMeta}" stroke="#22302A" stroke-width="1.5" stroke-dasharray="6 4"/>
+    <text x="${w-12}" y="${Math.max(12, yMeta-7)}" font-size="11" text-anchor="end" fill="#22302A" font-family="Work Sans">
+      Punto de equilibrio: S/ ${Math.round(meta)}</text>
+  </svg>`;
+}
+
+/* Una barra de avance con el corte del equilibrio marcado. */
+function barraAvance(actual, meta){
+  const max = Math.max(meta, actual, 1);
+  const pctActual = Math.min(100, actual/max*100);
+  const pctMeta   = Math.min(100, meta/max*100);
+  const llega = actual >= meta;
+  return `<div style="position:relative;background:#E4E2D6;border-radius:99px;height:26px;overflow:hidden">
+      <div style="width:${pctActual}%;height:100%;background:${llega?'var(--ok)':'var(--alert)'};
+                  border-radius:99px;transition:width .3s"></div>
+      <div style="position:absolute;top:0;left:${pctMeta}%;width:2px;height:100%;background:#22302A"></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;margin-top:4px">
+      <span class="hint">Tienes ${actual}</span>
+      <span class="hint">Necesitas ${meta}</span>
+    </div>`;
+}
+
+function bloqueEquilibrio(mes, verPersonal){
+  const e = equilibrioDelMes(mes);
+  if(e.porSesion <= 0){
+    return `<div class="card" style="margin-bottom:16px">
+      <h3 style="margin-top:0">Punto de equilibrio</h3>
+      <p class="hint">Para calcularlo hace falta saber cuánto le queda al centro por cada sesión.
+        Registra un profesional con su comisión en la pestaña <b>Profesionales</b>, o anota
+        los pagos del mes en <b>Pagos</b>.</p></div>`;
+  }
+
+  const un = n => n===1? '' : 's';
+  const meses = [];
+  const hoy = new Date();
+  for(let i=5; i>=0; i--){
+    const d = new Date(hoy.getFullYear(), hoy.getMonth()-i, 1);
+    const p = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+    meses.push({label: d.toLocaleDateString('es-PE',{month:'short'}),
+                value: sumCenterIncome(centerIncomeByProfessional(p+'-01', p+'-31'))});
+  }
+
+  const veredicto = e.enGanancia
+    ? `<div class="kpi ok" style="grid-column:1/-1">
+         <div class="num">Ganancia de ${fmtMoney(e.resultado)}</div>
+         <div class="label">El consultorio se pagó solo este mes y le sobró</div></div>`
+    : `<div class="kpi alert" style="grid-column:1/-1">
+         <div class="num">Pérdida de ${fmtMoney(-e.resultado)}</div>
+         <div class="label">Te faltan <b>${e.faltan} sesión${un(e.faltan)}</b> este mes para no perder</div></div>`;
+
+  const fila = (que, sesiones, nota) => {
+    const porDia = e.dias? sesiones/e.dias : 0;
+    return `<tr>
+      <td>${que}</td>
+      <td style="text-align:right;white-space:nowrap"><b>${sesiones}</b> al mes</td>
+      <td style="text-align:right;white-space:nowrap">${porDia.toFixed(1)} al día</td>
+      <td class="hint">${nota||''}</td></tr>`;
+  };
+
+  const personal = !verPersonal ? '' : `
+    <div class="card" style="margin-top:14px">
+      <h3 style="margin-top:0">Y para que alcance también en tu casa</h3>
+      <p>Tus cuentas personales comprometen <b>${fmtMoney(e.compromisoCasa)}</b> este mes.
+        Sumado a lo del consultorio, el centro tendría que dar <b>${fmtMoney(redondear(e.gasto + e.compromisoCasa))}</b>.</p>
+      ${barraAvance(e.sesiones, e.conCasa)}
+      <p style="margin-top:10px">Eso son <b>${e.conCasa} sesiones al mes</b>
+        — <b>${e.conCasaPorDia.toFixed(1)} por día</b> de lunes a sábado.
+        ${e.conCasa > e.necesarias*3
+          ? 'Ese número es demasiado grande para llegar solo atendiendo: la salida no está en ver más pacientes, está en bajar lo que pesa la deuda.'
+          : 'Es una meta alcanzable si mantienes la agenda llena.'}</p>
+      <h4 style="margin:16px 0 6px">A dónde se va cada sol de tu casa</h4>
+      ${(()=>{
+        const cats = {};
+        personalEntradas().filter(x=>x.tipo!=='ingreso' && !estaVinculado(x))
+          .forEach(x=>{ const c=x.category||'Otro'; cats[c]=(cats[c]||0)+Number(x.amount||0); });
+        const cuotas = e.casc.deudasCasa.total + e.casc.junta.total;
+        if(cuotas>0) cats['Cuotas de préstamos'] = (cats['Cuotas de préstamos']||0) + cuotas;
+        const total = Object.values(cats).reduce((s,v)=>s+v,0) || 1;
+        return Object.entries(cats).sort((a,b)=>b[1]-a[1]).map(([c,v])=>`
+          <div style="margin-bottom:7px">
+            <div style="display:flex;justify-content:space-between;font-size:13px">
+              <span>${c}</span><span><b>${fmtMoney(v)}</b> · ${Math.round(v/total*100)}%</span></div>
+            <div class="barwrap"><div class="bar ${/deuda|préstamo|prestamo|cuota/i.test(c)?'alertbar':''}"
+              style="width:${v/total*100}%"></div></div>
+          </div>`).join('');
+      })()}
+      <p class="hint" style="margin-top:8px">Lo que sale en rojo es deuda. Cuando pasa del 30% del total, cualquier mes flojo obliga a pedir prestado otra vez.</p>
+    </div>`;
+
+  return `
+  <div class="card" style="margin-bottom:16px">
+    <h3 style="margin-top:0">¿Voy ganando o perdiendo? — ${mes}</h3>
+    <div class="kpi-grid" style="margin-bottom:14px">
+      ${veredicto}
+      <div class="kpi"><div class="num">${fmtMoney(e.gasto)}</div><div class="label">Lo mínimo que debe pagar el consultorio al mes</div></div>
+      <div class="kpi"><div class="num">${fmtMoney(e.porSesion)}</div><div class="label">Le queda al centro por cada sesión</div></div>
+      <div class="kpi"><div class="num">${e.necesarias}</div><div class="label">Sesiones al mes para no perder</div></div>
+      <div class="kpi ${e.porDiaActual>=e.porDia?'ok':'alert'}">
+        <div class="num">${e.porDia.toFixed(1)}</div><div class="label">Pacientes por día que necesitas (tienes ${e.porDiaActual.toFixed(1)})</div></div>
+    </div>
+
+    <h4 style="margin:0 0 6px">Cuánto te falta para el punto de equilibrio</h4>
+    ${barraAvance(e.sesiones, e.necesarias)}
+    <p style="margin-top:10px">
+      ${e.enGanancia
+        ? `Ya cruzaste la línea: llevas <b>${e.sesiones}</b> sesiones y necesitabas ${e.necesarias}.`
+        : `Llevas <b>${e.sesiones} de ${e.necesarias}</b> sesiones (${e.avance}% del camino).
+           Te faltan <b>${e.faltan}</b> — unas <b>${(e.faltan/Math.max(1,e.dias)).toFixed(1)} más por día</b> en lo que queda del mes.`}
+    </p>
+  </div>
+
+  <div class="row" style="margin-bottom:16px">
+    <div class="col card">
+      <h3 style="margin-top:0">Los últimos 6 meses contra la línea</h3>
+      ${svgBarrasConMeta(meses, e.gasto)}
+      <p class="hint">Cada barra es lo que le quedó al centro ese mes. La línea punteada es lo que
+        tiene que pagar. Verde = se pagó solo. Rojo = hubo que poner de otro lado.</p>
+    </div>
+    <div class="col card">
+      <h3 style="margin-top:0">Decisiones rápidas</h3>
+      <p class="hint" style="margin-top:0">Cuántas sesiones necesitarías en cada caso.</p>
+      <div class="tablewrap"><table>
+        <tr><th>Si…</th><th style="text-align:right">Sesiones</th><th style="text-align:right">Por día</th><th></th></tr>
+        ${fila('Todo sigue igual', e.necesarias, `el centro se queda ${fmtMoney(e.porSesion)} de cada sesión`)}
+        ${fila('Las sesiones las das tú', e.siAtiendeEl, `te quedarías con la tarifa completa (${fmtMoney(e.tarifa)})`)}
+        ${e.alquiler>0? fila('Bajas el alquiler a la mitad', e.siBajaAlquiler, `de ${fmtMoney(e.alquiler)} a ${fmtMoney(e.alquiler/2)}`) : ''}
+      </table></div>
+      <p style="margin-top:10px">Y sin depender de pacientes: <b>${e.turnosQueCubren} turno${un(e.turnosQueCubren)} fijo${un(e.turnosQueCubren)}</b>
+        alquilados a profesionales externos a S/ 300 al mes cubrirían los ${fmtMoney(e.gasto)} completos.</p>
+    </div>
+  </div>
+  ${personal}`;
+}
+
 function viewGraficos(){
   const today = new Date();
   const defaultFrom = fechaLocalISO(new Date(today.getTime()-29*86400000));
@@ -9159,6 +10977,7 @@ function viewGraficos(){
 
   return `
     <div class="sectiontitle"><h2>Gráficos y desempeño</h2></div>
+    ${bloqueEquilibrio(todayISO().slice(0,7), !personalConfig().pinEnabled || personalDesbloqueado)}
     <div class="card" style="margin-bottom:16px">
       <div class="formgrid" style="max-width:480px">
         <div class="field"><label>Desde</label><input type="date" id="graf_from" value="${from30}" onchange="updateGrafRange()"></div>
