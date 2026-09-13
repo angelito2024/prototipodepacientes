@@ -6,14 +6,15 @@
 USE centro_psicologico;
 
 -- --- Configuración del centro ----------------------------------------
+-- Los medios de pago (Yape/Plin, cuenta bancaria, CCI) NO se escriben aquí:
+-- este archivo está en GitHub y son datos bancarios. Se cargan una sola vez
+-- desde el panel, en "Datos del centro", y se guardan en esta misma tabla.
+-- Volver a ejecutar este archivo no los borra.
 INSERT INTO centro_config (id, razon_social, nombre_comercial, medios_pago)
 VALUES (1,
   'Centro Psicológico MAGUSA ARCOIRIS DE ESPERANZA S.A.C.',
   'MAGUSA Arcoíris de Esperanza',
-  CONCAT('Yape / Plin: 961287594 - Luis Gustavo Yangua Jimenez (Gerente General)\n',
-         'Cuenta BBVA: 0011-0147-0200744101\n',
-         'CCI: 01114700020074410163\n',
-         'Código SWIFT (solo para transferencias desde el extranjero): BCONPEPL'))
+  NULL)
 ON DUPLICATE KEY UPDATE razon_social = VALUES(razon_social);
 
 -- --- Sede y consultorios (antes: ENUM fijo en el HTML) ---------------

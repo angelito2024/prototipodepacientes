@@ -1347,7 +1347,10 @@ function defaultHistoria(patientId){
     informeTexto:'', informeEstado:'Borrador', informeFirmante:'', informeFechaFirma:''
   };
 }
-const DEFAULT_CENTER_INFO = {name:'Centro Psicológico MAGUSA ARCOIRIS DE ESPERANZA S.A.C.', address:'', phone:'', ruc:'', slogan:'', paymentMethods:'Yape / Plin: 961287594 - Luis Gustavo Yangua Jimenez (Gerente General)\nCuenta BBVA: 0011-0147-0200744101\nCCI: 01114700020074410163\nCódigo SWIFT (solo para transferencias desde el extranjero): BCONPEPL', reminderMinutes:10, rescheduleHours:24, latePenaltyPercent:10, includePolicy:true, sessionMinutes:60, apiPeruToken:''};
+/* Las cuentas de cobro (Yape, banco, CCI) NO van escritas aquí: este archivo
+   está en GitHub y son datos bancarios. Se escriben una sola vez en
+   "Datos del centro" y viven en la base, junto con el token de apiperu. */
+const DEFAULT_CENTER_INFO = {name:'Centro Psicológico MAGUSA ARCOIRIS DE ESPERANZA S.A.C.', address:'', phone:'', ruc:'', slogan:'', paymentMethods:'', reminderMinutes:10, rescheduleHours:24, latePenaltyPercent:10, includePolicy:true, sessionMinutes:60, apiPeruToken:''};
 const DEFAULT_AUTH_CONFIG = {enabled:false, username:'', password:''};
 
 /* ===== Horario semanal de profesionales ===== */
@@ -1576,11 +1579,8 @@ async function loadAll(){
     DB.centerInfo = {...DEFAULT_CENTER_INFO, ...(DB.centerInfo||{}), name: DEFAULT_CENTER_INFO.name};
     setColl('centerInfo', DB.centerInfo);
   }
-  // Completa los medios de pago (Yape/Plin, cuenta, CCI) si todavía no los habías puesto.
-  if(DB.centerInfo && !DB.centerInfo.paymentMethods){
-    DB.centerInfo = {...DB.centerInfo, paymentMethods: DEFAULT_CENTER_INFO.paymentMethods};
-    setColl('centerInfo', DB.centerInfo);
-  }
+  // Los medios de pago ya no se rellenan solos desde el código: se escriben
+  // en "Datos del centro" y quedan guardados. Si están vacíos, el panel avisa.
   // Corrección puntual: quita el "(Independencia)" que se había puesto de más junto a la cuenta BBVA.
   if(DB.centerInfo && DB.centerInfo.paymentMethods && DB.centerInfo.paymentMethods.includes('Cuenta BBVA (Independencia):')){
     DB.centerInfo = {...DB.centerInfo, paymentMethods: DB.centerInfo.paymentMethods.replace('Cuenta BBVA (Independencia):', 'Cuenta BBVA:')};
@@ -2317,8 +2317,8 @@ async function toggleReminderRecipient(patientId, key){
   renderPanel();
 }
 /* ===== Redacción de los recordatorios =====
-   Un mensaje que dice "la cita de DANIELA VASQUEZ GAONA el 2026-09-20 a las 15:00" suena
-   a máquina. A una madre se le habla de "su hija Daniela", y la fecha se dice como la
+   Un mensaje que dice "la cita de MARIANA TORRES QUISPE el 2026-09-20 a las 15:00" suena
+   a máquina. A una madre se le habla de "su hija Mariana", y la fecha se dice como la
    diría una persona: "el viernes 20 de setiembre a las 3:00 p. m.". */
 function nombreDePila(nombreCompleto){
   const t = String(nombreCompleto||'').trim().split(/\s+/)[0] || '';
