@@ -45,7 +45,9 @@ final class Personales extends Repositorio
         $salida = [];
         foreach (Database::todos(
             'SELECT id, uid, tipo, clase, nombre, categoria, monto,
-                    dia_vencimiento, fecha, notas, creado_en
+                    dia_vencimiento, fecha, notas, creado_en,
+                    vinculo_prestamo_uid, vinculo_junta_uid,
+                    no_es_duplicado, sin_pareja_json
                FROM personal_movimientos
               WHERE usuario_id = ?
               ORDER BY id',
@@ -63,6 +65,12 @@ final class Personales extends Repositorio
                 'date'       => (string) ($f['fecha'] ?? ''),
                 'notes'      => (string) ($f['notas'] ?? ''),
                 'abonos'     => $pagos[$id] ?? [],
+                // Si este gasto es en realidad la cuota de un préstamo o de
+                // la junta, manda aquel: aquí deja de sumar por su cuenta.
+                'prestamoId' => self::nz($f['vinculo_prestamo_uid'] ?? null),
+                'juntaId'    => self::nz($f['vinculo_junta_uid'] ?? null),
+                'noEsDuplicado' => (int) ($f['no_es_duplicado'] ?? 0) === 1 ? true : null,
+                'sinPareja'  => json_decode((string) ($f['sin_pareja_json'] ?? '[]'), true) ?: [],
                 'createdAt'  => substr((string) $f['creado_en'], 0, 10),
             ];
         }
@@ -122,13 +130,18 @@ final class Personales extends Repositorio
             Database::query(
                 'INSERT INTO personal_movimientos
                     (uid, usuario_id, tipo, clase, nombre, categoria, monto,
-                     dia_vencimiento, fecha, notas)
-                 VALUES (?,?,?,?,?,?,?,?,?,?)
+                     dia_vencimiento, fecha, notas,
+                     vinculo_prestamo_uid, vinculo_junta_uid, no_es_duplicado, sin_pareja_json)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                  ON DUPLICATE KEY UPDATE
                     tipo=VALUES(tipo), clase=VALUES(clase), nombre=VALUES(nombre),
                     categoria=VALUES(categoria), monto=VALUES(monto),
                     dia_vencimiento=VALUES(dia_vencimiento), fecha=VALUES(fecha),
-                    notas=VALUES(notas)',
+                    notas=VALUES(notas),
+                    vinculo_prestamo_uid=VALUES(vinculo_prestamo_uid),
+                    vinculo_junta_uid=VALUES(vinculo_junta_uid),
+                    no_es_duplicado=VALUES(no_es_duplicado),
+                    sin_pareja_json=VALUES(sin_pareja_json)',
                 [
                     $uid,
                     $usuarioId,
@@ -142,6 +155,14 @@ final class Personales extends Repositorio
                     $clase === 'fijo' ? $dia : null,
                     $clase === 'fijo' ? null : self::fecha($item['date'] ?? null),
                     self::nz($item['notes'] ?? null),
+                    // Un gasto se une a un préstamo O a la junta, nunca a los dos.
+                    self::nz($item['prestamoId'] ?? null),
+                    self::nz($item['juntaId'] ?? null),
+                    self::bool($item['noEsDuplicado'] ?? false),
+                    json_encode(
+                        is_array($item['sinPareja'] ?? null) ? $item['sinPareja'] : [],
+                        JSON_UNESCAPED_UNICODE
+                    ),
                 ]
             );
 

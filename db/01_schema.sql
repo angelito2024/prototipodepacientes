@@ -1161,6 +1161,15 @@ CREATE TABLE personal_movimientos (
   -- Solo para los variables: el día en que ocurrió.
   fecha           DATE NULL,
   notas           VARCHAR(500) NULL,
+  -- La misma deuda estaba anotada dos veces: como gasto de la casa y como
+  -- préstamo con su cronograma. Al unirlos manda el préstamo, y el gasto
+  -- deja de sumar por su cuenta. Guardan el uid de la colección JSON
+  -- (prestamos/juntas), que no tiene tabla propia contra la cual apuntar.
+  vinculo_prestamo_uid VARCHAR(32) NULL,
+  vinculo_junta_uid    VARCHAR(32) NULL,
+  -- Ya se revisó y no es duplicado de nada: dejar de preguntar.
+  no_es_duplicado TINYINT(1) NOT NULL DEFAULT 0,
+  sin_pareja_json JSON NULL,
   creado_en       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   actualizado_en  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
