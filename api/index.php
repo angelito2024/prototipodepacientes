@@ -51,6 +51,23 @@ try {
             }
             Http::ok(['usuario' => $r['usuario']]);
 
+        case 'credenciales':
+            // Cambiar el propio usuario y/o clave, ya con la sesión abierta.
+            if (Http::metodo() !== 'POST') {
+                Http::error('Método no permitido.', 405);
+            }
+            Auth::exigir();
+            $c = Http::cuerpo();
+            $r = Auth::cambiarCredenciales(
+                (string) ($c['claveActual'] ?? ''),
+                (string) ($c['usuario'] ?? ''),
+                (string) ($c['claveNueva'] ?? '')
+            );
+            if (!$r['ok']) {
+                Http::error($r['error'], 400);
+            }
+            Http::ok(['usuario' => $r['usuario']]);
+
         case 'logout':
             Auth::logout();
             Http::ok();

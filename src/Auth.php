@@ -117,6 +117,64 @@ final class Auth
         return ['ok' => true, 'usuario' => self::perfil((int) $fila['id'])];
     }
 
+    /**
+     * Cambia el usuario y/o la clave de quien tiene la sesión abierta.
+     *
+     * Pide la clave actual aunque ya esté dentro: si alguien deja la pantalla
+     * abierta y se levanta, no puede llegar otro y cambiarle la contraseña.
+     * El usuario nuevo no puede chocar con otro que ya exista.
+     */
+    public static function cambiarCredenciales(
+        string $claveActual, string $usuarioNuevo, string $claveNueva
+    ): array {
+        $id = self::usuarioId();
+        if ($id === null) {
+            return ['ok' => false, 'error' => 'Sesión no iniciada o expirada.'];
+        }
+        $fila = Database::uno('SELECT usuario, password_hash FROM usuarios WHERE id = ?', [$id]);
+        if ($fila === null) {
+            return ['ok' => false, 'error' => 'No se encontró el usuario.'];
+        }
+        if (!password_verify($claveActual, (string) $fila['password_hash'])) {
+            self::auditar('CAMBIO_CLAVE', $id, ['resultado' => 'clave actual incorrecta']);
+            return ['ok' => false, 'error' => 'La clave actual no es correcta.'];
+        }
+
+        $usuarioNuevo = trim($usuarioNuevo);
+        if ($usuarioNuevo === '') {
+            $usuarioNuevo = (string) $fila['usuario'];
+        }
+        if (!preg_match('/^[A-Za-z0-9._@-]{3,60}$/', $usuarioNuevo)) {
+            return ['ok' => false, 'error' => 'El usuario debe tener entre 3 y 60 caracteres, sin espacios.'];
+        }
+        $ocupado = Database::valor(
+            'SELECT COUNT(*) FROM usuarios WHERE usuario = ? AND id <> ?',
+            [$usuarioNuevo, $id]
+        );
+        if ((int) $ocupado > 0) {
+            return ['ok' => false, 'error' => 'Ese usuario ya está tomado.'];
+        }
+
+        if ($claveNueva === '') {
+            // Solo cambia el nombre de usuario.
+            Database::query('UPDATE usuarios SET usuario = ? WHERE id = ?', [$usuarioNuevo, $id]);
+            self::auditar('CAMBIO_CLAVE', $id, ['resultado' => 'ok', 'cambio' => 'usuario']);
+            return ['ok' => true, 'usuario' => $usuarioNuevo];
+        }
+        if (mb_strlen($claveNueva) < 8) {
+            return ['ok' => false, 'error' => 'La clave nueva debe tener al menos 8 caracteres.'];
+        }
+
+        Database::query(
+            'UPDATE usuarios SET usuario = ?, password_hash = ?, intentos_fallidos = 0,
+                                 bloqueado_hasta = NULL
+              WHERE id = ?',
+            [$usuarioNuevo, password_hash($claveNueva, PASSWORD_DEFAULT), $id]
+        );
+        self::auditar('CAMBIO_CLAVE', $id, ['resultado' => 'ok', 'cambio' => 'usuario y clave']);
+        return ['ok' => true, 'usuario' => $usuarioNuevo];
+    }
+
     public static function logout(): void
     {
         self::iniciarSesionPhp();

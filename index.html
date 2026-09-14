@@ -830,6 +830,29 @@
       <div class="field"><label>Medios de pago (para incluir en recordatorios de pago)</label>
         <textarea id="ci_paymentMethods" rows="5" placeholder="Ej: Yape/Plin: 987654321 - Nombre&#10;Cuenta BCP: 1934-xxxxxxx"></textarea></div>
       <div class="field" style="grid-column:1/-1;border-top:1px solid var(--line);padding-top:12px;margin-top:6px">
+        <label style="font-weight:700">Tu usuario y clave para entrar</label>
+        <p class="hint" style="margin:2px 0 0">Con esto entras al panel. Ponle algo que recuerdes.
+          La clave se guarda cifrada: ni yo ni nadie puede leerla después, así que anótala en un lugar seguro.</p>
+      </div>
+      <div class="field"><label>Clave actual</label>
+        <input type="password" id="cr_actual" autocomplete="current-password" placeholder="La que usas hoy">
+      </div>
+      <div class="field"><label>Usuario nuevo</label>
+        <input type="text" id="cr_usuario" autocomplete="username" placeholder="Sin espacios">
+      </div>
+      <div class="field"><label>Clave nueva</label>
+        <input type="password" id="cr_nueva" autocomplete="new-password" placeholder="Mínimo 8 caracteres">
+      </div>
+      <div class="field"><label>Repite la clave nueva</label>
+        <input type="password" id="cr_nueva2" autocomplete="new-password" placeholder="Para no equivocarte">
+      </div>
+      <div class="field" style="grid-column:1/-1">
+        <button type="button" class="btn secondary" onclick="cambiarCredenciales()">Cambiar mi usuario y clave</button>
+        <span class="hint" id="cr_aviso" style="margin-left:10px"></span>
+        <p class="hint" style="margin-top:4px">Si solo quieres cambiar el usuario, deja las claves nuevas vacías.</p>
+      </div>
+
+      <div class="field" style="grid-column:1/-1;border-top:1px solid var(--line);padding-top:12px;margin-top:6px">
         <label style="font-weight:700">Responsable del centro</label>
         <p class="hint" style="margin:2px 0 0">Va en el consentimiento informado. La Ley 29733 exige
           identificar a quién responde por los datos de los pacientes, con nombre y documento.</p>
@@ -12088,6 +12111,47 @@ async function bootApp(){
   // Ya con la pantalla montada se avisa de los contadores que se cuadraron.
   setTimeout(mostrarAvisoSesiones, 600);
 }
+/* Cambiar el propio usuario y clave desde Datos del centro. Hace falta
+   porque las credenciales iniciales las pone la instalación, y nadie se
+   acuerda de una clave que no eligió. */
+async function cambiarCredenciales(){
+  const aviso = document.getElementById('cr_aviso');
+  const decir = (t, mal) => {
+    aviso.textContent = t;
+    aviso.style.color = mal ? 'var(--alert)' : 'var(--ok)';
+  };
+  if(STORAGE_MODE !== 'api'){
+    decir('Esto solo funciona con la base de datos. Abre el panel desde Laragon.', true);
+    return;
+  }
+  const actual  = document.getElementById('cr_actual').value;
+  const usuario = document.getElementById('cr_usuario').value.trim();
+  const nueva   = document.getElementById('cr_nueva').value;
+  const nueva2  = document.getElementById('cr_nueva2').value;
+
+  if(!actual){ decir('Escribe tu clave actual.', true); return; }
+  if(!usuario && !nueva){ decir('No cambiaste nada.', true); return; }
+  if(nueva && nueva !== nueva2){ decir('Las dos claves nuevas no coinciden.', true); return; }
+  if(nueva && nueva.length < 8){ decir('La clave nueva necesita al menos 8 caracteres.', true); return; }
+
+  try{
+    const r = await fetch(`${API_URL}?accion=credenciales`, {
+      method:'POST', credentials:'same-origin',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({claveActual: actual, usuario, claveNueva: nueva}),
+    });
+    const d = await r.json();
+    if(!r.ok || !d.ok){ decir(d.error || 'No se pudo cambiar.', true); return; }
+    ['cr_actual','cr_usuario','cr_nueva','cr_nueva2'].forEach(i=>{
+      const el = document.getElementById(i); if(el) el.value = '';
+    });
+    decir(`Listo. Ahora entras con el usuario "${d.usuario}".`, false);
+    showToast(`Credenciales cambiadas. Usuario: ${d.usuario}`);
+  }catch(e){
+    decir('No se pudo contactar con el servidor.', true);
+  }
+}
+
 async function attemptLogin(){
   const u = document.getElementById('login_user').value.trim();
   const p = document.getElementById('login_pass').value;
@@ -12118,11 +12182,17 @@ async function attemptLogin(){
     return;
   }
 
+  // Fuera del modo base de datos la clave se compara contra lo que haya en
+  // este navegador. Si no coincide, decirlo así: "usuario o clave incorrectos"
+  // manda a buscar el error donde no está.
   const cfg = DB.authConfig || DEFAULT_AUTH_CONFIG;
   if(u===cfg.username && p===cfg.password){
     errEl.style.display = 'none';
     bootApp();
   } else {
+    errEl.innerHTML = 'Esa clave no coincide con la guardada <b>en este navegador</b>.<br>'
+      + 'Si tus datos están en la base, abre el panel desde Laragon: '
+      + '<a href="http://localhost/prototipodepacientes/">localhost/prototipodepacientes</a>';
     errEl.style.display = 'block';
   }
 }
