@@ -337,6 +337,60 @@
   /* Tablas de resumen (sin scroll horizontal): los importes no deben partirse en dos líneas. */
   .card > table td:last-child{white-space:nowrap;}
 
+  /* ===== Portada =====
+     Lo primero que se ve al abrir el panel: la hora de la próxima cita, lo
+     que hay que hacer hoy y cómo va el mes. Antes arrancaba con seis
+     recuadros de números sin decir qué hacer con ellos. */
+  .portada{
+    background:linear-gradient(135deg, var(--primary-dark), var(--primary));
+    color:#fff;border-radius:var(--r-lg);
+    padding:26px 28px;margin-bottom:18px;
+    display:flex;justify-content:space-between;align-items:flex-start;
+    gap:22px;flex-wrap:wrap;
+  }
+  .portada h1{margin:0 0 2px;font-size:26px;line-height:1.2;color:#fff;}
+  .portada .fecha{opacity:.82;font-size:13px;text-transform:capitalize;}
+  .portada .frase{margin-top:12px;font-size:15px;line-height:1.5;max-width:560px;}
+  .portada .frase b{font-weight:700;}
+  .portada .acciones{display:flex;gap:8px;flex-wrap:wrap;}
+  .portada .acciones .btn{
+    background:rgba(255,255,255,.14);color:#fff;border-color:rgba(255,255,255,.35);
+    backdrop-filter:blur(2px);
+  }
+  .portada .acciones .btn:hover{background:rgba(255,255,255,.26);border-color:#fff;color:#fff;}
+  @media(max-width:640px){
+    .portada{padding:20px 18px;}
+    .portada h1{font-size:21px;}
+  }
+
+  /* La agenda del día, como una línea de tiempo. */
+  .agendaDia{list-style:none;margin:0;padding:0;}
+  .agendaDia li{
+    display:flex;gap:14px;align-items:flex-start;
+    padding:11px 0;border-bottom:1px solid var(--border-soft);
+  }
+  .agendaDia li:last-child{border-bottom:none;}
+  .agendaDia .hora{
+    font-weight:700;font-size:15px;min-width:56px;
+    font-variant-numeric:tabular-nums;color:var(--primary-dark);
+  }
+  .agendaDia .quien{flex:1;min-width:0;}
+  .agendaDia .ahora{background:var(--primary-tint);border-radius:8px;padding:11px 10px;}
+  .agendaDia .pasada{opacity:.55;}
+
+  /* Lo que hay que hacer hoy. */
+  .pendiente{
+    display:flex;gap:11px;align-items:center;
+    padding:10px 12px;border-radius:9px;margin-bottom:7px;
+    background:var(--surface-alt);border-left:4px solid var(--border-strong);
+  }
+  .pendiente.urge{background:var(--alert-soft);border-left-color:var(--alert);}
+  .pendiente .cuenta{
+    font-weight:700;font-size:17px;min-width:30px;text-align:center;
+    font-variant-numeric:tabular-nums;
+  }
+  .pendiente .texto{flex:1;font-size:13.5px;line-height:1.4;}
+
   /* ===== Presentación uniforme de todos los registros =====
      Pacientes, profesionales, practicantes y talleres tenían el mismo
      problema: los botones de acción se apilaban uno por línea y los nombres
@@ -2569,6 +2623,25 @@ function sumCenterIncome(byProf){
 }
 
 /* ===================== RESUMEN ===================== */
+/* Buenos días / buenas tardes / buenas noches, según la hora de Perú. */
+function saludoDelDia(){
+  const h = new Date().getHours();
+  if(h < 12) return 'Buenos días';
+  if(h < 19) return 'Buenas tardes';
+  return 'Buenas noches';
+}
+/* Atajos de la portada: llevan a la pestaña y abren el formulario. */
+function irANuevaCita(){
+  currentTab = 'citas';
+  renderTabs(); renderPanel();
+  setTimeout(()=>abrirFormularioEdicion('apptForm'), 60);
+}
+function irANuevoPaciente(){
+  currentTab = 'pacientes';
+  renderTabs(); renderPanel();
+  setTimeout(()=>abrirFormularioEdicion('patientForm'), 60);
+}
+
 function viewResumen(){
   const today = todayISO();
   const citasHoy = DB.appointments.filter(a=>a.date===today && a.status!=='Cancelada');
@@ -2597,26 +2670,111 @@ function viewResumen(){
   const margen = ingresoTotal-gastosFijos;
   const informesPendientes = DB.patients.filter(p=>p.reportStatus==='Pendiente').length;
 
+  // Lo que hay que hacer hoy, ordenado por lo que más apura.
+  const citasSinCerrar = DB.appointments.filter(a=>{
+    if(a.status==='Completada' || a.status==='Cancelada') return false;
+    const fin = new Date(`${a.date}T${a.time||'00:00'}:00`);
+    return !isNaN(fin.getTime()) && fin < new Date();
+  });
+  const deudaProfesionales = DB.professionals
+    .filter(pr=>pr.active!==false)
+    .reduce((s,pr)=>s+deudaConProfesional(pr), 0);
+  const porCobrar = pagosPendientes.reduce((s,p)=>s+patientOwedAmount(p), 0);
+
+  const pendientes = [
+    {n: citasSinCerrar.length, urge:true, tab:'citas',
+     texto:`cita(s) ya pasaron y siguen sin cerrar — márcalas para que avancen los paquetes`},
+    {n: proximasSinRecordatorio.length, urge:false, tab:'alertas',
+     texto:`recordatorio(s) por enviar de aquí a dos días`},
+    {n: pagosPendientes.length, urge:false, tab:'pagos',
+     texto:`paciente(s) con pago pendiente — ${fmtMoney(porCobrar)} por cobrar`},
+    {n: deudaProfesionales>0? 1:0, urge:false, tab:'profesionales',
+     texto:`le debes ${fmtMoney(deudaProfesionales)} a tus profesionales`},
+    {n: informesPendientes, urge:false, tab:'informes',
+     texto:`informe(s) pendientes de entregar`},
+  ].filter(x=>x.n>0);
+
+  // La frase de arriba: en una línea, cómo está el negocio hoy.
+  const ahora = new Date();
+  const proxima = [...citasHoy].sort((a,b)=>(a.time||'').localeCompare(b.time||''))
+    .find(a=>{
+      const t = new Date(`${a.date}T${a.time||'00:00'}:00`);
+      return !isNaN(t.getTime()) && t >= new Date(ahora.getTime()-60*60000);
+    });
+  const frase = citasHoy.length === 0
+    ? 'Hoy no tienes citas agendadas.'
+    : (proxima
+        ? `Tu próxima cita es a las <b>${proxima.time}</b> con <b>${findName(DB.patients, proxima.patientId)}</b>.`
+        : `Hoy tuviste <b>${citasHoy.length} cita(s)</b>. No queda ninguna por delante.`);
+  const estadoMes = margen >= 0
+    ? `Este mes el centro va <b>${fmtMoney(margen)} a favor</b>.`
+    : `Este mes al centro le faltan <b>${fmtMoney(-margen)}</b> para cubrir sus gastos.`;
+
+  const filaAgenda = a => {
+    const inicio = new Date(`${a.date}T${a.time||'00:00'}:00`);
+    const dura = Number((DB.centerInfo||{}).sessionMinutes || 60);
+    const enCurso = !isNaN(inicio.getTime()) && ahora >= inicio
+                    && ahora < new Date(inicio.getTime()+dura*60000);
+    const pasada = !isNaN(inicio.getTime()) && ahora >= new Date(inicio.getTime()+dura*60000);
+    const pat = DB.patients.find(p=>p.id===a.patientId);
+    return `<li class="${enCurso?'ahora':(pasada?'pasada':'')}">
+      <span class="hora">${a.time||'--:--'}</span>
+      <span class="quien">
+        <b>${pat? pat.name : '—'}</b>${enCurso? ' <span class="chip ok">Ahora</span>':''}
+        <span class="sub">${a.modality||''}${a.room? ' · '+a.room:''} ·
+          ${findName(DB.professionals, a.professionalId)}</span>
+      </span>
+      <span style="white-space:nowrap">${statusChip(a.status)}
+        ${a.modality==='Virtual' && a.meetingLink
+          ? `<a class="btn small secondary" href="${a.meetingLink}" target="_blank" rel="noopener">Entrar</a>`:''}
+      </span></li>`;
+  };
+
   return `
-    <div class="sectiontitle"><h2>Resumen del día</h2>
-      <div><span class="hint" style="margin-right:10px">${new Date().toLocaleDateString('es-PE',{weekday:'long',day:'numeric',month:'long'})}</span>
-      <button class="btn secondary" onclick="exportGeneralReport()">Exportar reporte general</button></div>
+    <div class="portada">
+      <div>
+        <h1>${saludoDelDia()}, ${nombreDePila(receptorPorDefecto())}</h1>
+        <div class="fecha">${ahora.toLocaleDateString('es-PE',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</div>
+        <div class="frase">${frase} ${estadoMes}</div>
+      </div>
+      <div class="acciones">
+        <button class="btn" onclick="irANuevaCita()">+ Nueva cita</button>
+        <button class="btn" onclick="irANuevoPaciente()">+ Nuevo paciente</button>
+        <button class="btn" onclick="currentTab='pagos'; renderTabs(); renderPanel();">Registrar pago</button>
+        <button class="btn" onclick="exportGeneralReport()">Exportar reporte</button>
+      </div>
     </div>
+
+    ${pendientes.length? `
+    <div class="card" style="margin-bottom:16px">
+      <h3 style="margin-top:0">Lo que te toca hoy</h3>
+      ${pendientes.map(p=>`
+        <div class="pendiente ${p.urge?'urge':''}" style="cursor:pointer"
+             onclick="currentTab='${p.tab}'; renderTabs(); renderPanel();">
+          <span class="cuenta">${p.n}</span>
+          <span class="texto">${p.texto}</span>
+          <span class="hint">Ver →</span>
+        </div>`).join('')}
+    </div>` : `
+    <div class="card" style="margin-bottom:16px">
+      <h3 style="margin-top:0">Lo que te toca hoy</h3>
+      <p class="hint" style="margin:0">Nada pendiente: recordatorios enviados, cobros al día y sin informes atrasados.</p>
+    </div>`}
+
     <div class="kpi-grid">
       <div class="kpi"><div class="num">${citasHoy.length}</div><div class="label">Citas hoy</div></div>
-      <div class="kpi ${proximasSinRecordatorio.length?'alert':''}"><div class="num">${proximasSinRecordatorio.length}</div><div class="label">Recordatorios pendientes</div></div>
-      <div class="kpi ${pagosPendientes.length?'alert':'ok'}"><div class="num">${pagosPendientes.length}</div><div class="label">Pacientes con pago pendiente</div></div>
-      <div class="kpi ${profesionalesPorPagar.length?'alert':'ok'}"><div class="num">${profesionalesPorPagar.length}</div><div class="label">Profesionales por pagar</div></div>
-      <div class="kpi ${informesPendientes?'alert':'ok'}"><div class="num">${informesPendientes}</div><div class="label">Informes pendientes</div></div>
-      <div class="kpi ${margen>=0?'ok':'alert'}"><div class="num">${fmtMoney(margen)}</div><div class="label">Margen del mes (real para el centro)</div></div>
+      <div class="kpi ${pagosPendientes.length?'alert':'ok'}"><div class="num">${fmtMoney(porCobrar)}</div><div class="label">Por cobrar a pacientes</div></div>
+      <div class="kpi ${deudaProfesionales>0?'alert':'ok'}"><div class="num">${fmtMoney(deudaProfesionales)}</div><div class="label">Le debes a profesionales</div></div>
+      <div class="kpi ${margen>=0?'ok':'alert'}"><div class="num">${fmtMoney(margen)}</div><div class="label">Margen del mes (lo que queda al centro)</div></div>
     </div>
 
     <div class="row">
       <div class="col card">
-        <h3 style="margin-top:0">Citas de hoy</h3>
-        ${citasHoy.length? `<div class="tablewrap"><table><tr><th>Hora</th><th>Paciente</th><th>Profesional</th><th>Modalidad</th><th>Estado</th></tr>
-        ${citasHoy.sort((a,b)=>a.time.localeCompare(b.time)).map(a=>`<tr><td>${a.time}</td><td>${findName(DB.patients,a.patientId)}</td><td>${findName(DB.professionals,a.professionalId)}</td><td>${a.modality}</td><td>${statusChip(a.status)}</td></tr>`).join('')}
-        </table></div>` : `<div class="empty">No hay citas programadas para hoy.</div>`}
+        <h3 style="margin-top:0">Tu agenda de hoy</h3>
+        ${citasHoy.length
+          ? `<ul class="agendaDia">${[...citasHoy].sort((a,b)=>(a.time||'').localeCompare(b.time||'')).map(filaAgenda).join('')}</ul>`
+          : `<div class="empty">No hay citas programadas para hoy.<br>
+               <button class="btn small" style="margin-top:8px" onclick="irANuevaCita()">+ Agendar una</button></div>`}
       </div>
       <div class="col card">
         <h3 style="margin-top:0">Recordar pronto (próx. 2 días)</h3>
