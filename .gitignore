@@ -12,3 +12,6 @@ backup-centro-psicologico-*.json
 
 # Diagnóstico financiero: son cifras privadas de Luis, no del programa
 diagnostico-*.md
+
+# Las copias de la base son datos de pacientes: nunca al repositorio
+respaldo/copias/

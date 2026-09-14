@@ -40,6 +40,13 @@ CREATE TABLE centro_config (
   telefono              VARCHAR(30)   NULL,
   email                 VARCHAR(150)  NULL,
   lema                  VARCHAR(255)  NULL,
+  -- Quien responde por el centro y por los datos de los pacientes. La Ley
+  -- 29733 exige identificar al titular del banco de datos; la Ley General
+  -- de Salud, que el usuario sepa ante quien ejerce sus derechos.
+  titular_nombre        VARCHAR(180)  NULL,
+  titular_documento     VARCHAR(20)   NULL,
+  titular_cargo         VARCHAR(120)  NULL,
+  titular_colegiatura   VARCHAR(40)   NULL,
   medios_pago           TEXT          NULL,   -- texto libre mostrado en el recibo
   -- Salas fijas de videollamada. Zoom y Meet no permiten crear una reunión
   -- desde fuera; su sala personal sí es siempre la misma y siempre está
@@ -274,6 +281,11 @@ CREATE TABLE pacientes (
   avisar_paciente    TINYINT(1) NULL,
   fecha_alta         DATE NULL,                     -- alta terapéutica
   motivo_alta        VARCHAR(255) NULL,
+  -- Cuándo firmó su consentimiento informado y quién lo firmó (el paciente
+  -- o su apoderado si es menor). Si algún día hay un reclamo, es lo primero
+  -- que se pide.
+  consentimiento_fecha    DATE NULL,
+  consentimiento_firmante VARCHAR(180) NULL,
   PRIMARY KEY (persona_id),
   KEY idx_paciente_prof (profesional_id),
   KEY idx_paciente_informe (estado_informe, fecha_limite_informe),

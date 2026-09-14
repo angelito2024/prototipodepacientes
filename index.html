@@ -829,6 +829,20 @@
       <div class="field"><label>Eslogan / frase (opcional)</label><input id="ci_slogan" placeholder="Ej: Tu bienestar es nuestra prioridad"></div>
       <div class="field"><label>Medios de pago (para incluir en recordatorios de pago)</label>
         <textarea id="ci_paymentMethods" rows="5" placeholder="Ej: Yape/Plin: 987654321 - Nombre&#10;Cuenta BCP: 1934-xxxxxxx"></textarea></div>
+      <div class="field" style="grid-column:1/-1;border-top:1px solid var(--line);padding-top:12px;margin-top:6px">
+        <label style="font-weight:700">Responsable del centro</label>
+        <p class="hint" style="margin:2px 0 0">Va en el consentimiento informado. La Ley 29733 exige
+          identificar a quién responde por los datos de los pacientes, con nombre y documento.</p>
+      </div>
+      <div class="field"><label>Nombre completo del responsable</label>
+        <input type="text" id="ci_titularNombre" placeholder="Nombres y apellidos"></div>
+      <div class="field"><label>DNI del responsable</label>
+        <input type="text" id="ci_titularDni" placeholder="8 dígitos"></div>
+      <div class="field"><label>Cargo</label>
+        <input type="text" id="ci_titularCargo" placeholder="Ej: Gerente General"></div>
+      <div class="field"><label>Colegiatura (si es psicólogo colegiado)</label>
+        <input type="text" id="ci_titularColegiatura" placeholder="N° de C.Ps.P., opcional"></div>
+
       <div class="field"><label>Tu sala fija de Zoom</label>
         <input type="text" id="ci_zoomSala" placeholder="Pega el enlace o solo el número: 123 4567 8901">
         <p class="hint" style="margin-top:3px">
@@ -1087,6 +1101,7 @@
       <button class="btn secondary" id="reciboPdfWhatsApp" style="display:none"
               onclick="pdfYLuegoWhatsApp(this)">PDF + abrir WhatsApp</button>
       <a class="btn secondary" id="reciboWhatsApp" style="display:none" target="_blank" rel="noopener">Solo el texto por WhatsApp</a>
+      <button class="btn secondary" id="reciboFirmado" style="display:none">Marcar como firmado</button>
       <button class="btn secondary" onclick="window.print()">Imprimir</button>
       <button class="btn secondary" onclick="closeReceipt()">Cerrar</button>
     </div>
@@ -2846,6 +2861,9 @@ function viewPacientes(){
       <td>${p.birthday? fmtBirthday(p.birthday):'—'}</td>
       <td>
         <button class="btn small secondary" onclick="openHistoria('${p.id}')">Historia clínica</button>
+        <button class="btn small ${p.consentimientoFecha?'secondary':''}" onclick="consentimientoInformado('${p.id}')"
+          title="${p.consentimientoFecha? 'Firmado el '+p.consentimientoFecha : 'Todavía no lo ha firmado'}">
+          ${p.consentimientoFecha? '✓ Consentimiento' : '⚠ Consentimiento'}</button>
         ${paqueteCompleto? `<button class="btn small secondary" onclick="startNewPackage('${p.id}')">🔄 Nuevo paquete</button>`:''}
         <button class="btn small secondary" onclick="irACobrarPaciente('${p.id}')">Cobrar</button>
         <button class="btn small secondary" onclick="editPatient('${p.id}')">Editar</button>
@@ -6635,6 +6653,10 @@ function openCenterInfoModal(){
   document.getElementById('ci_ruc').value = DB.centerInfo.ruc||'';
   document.getElementById('ci_slogan').value = DB.centerInfo.slogan||'';
   document.getElementById('ci_paymentMethods').value = DB.centerInfo.paymentMethods||'';
+  document.getElementById('ci_titularNombre').value = DB.centerInfo.titular_nombre||'';
+  document.getElementById('ci_titularDni').value = DB.centerInfo.titular_documento||'';
+  document.getElementById('ci_titularCargo').value = DB.centerInfo.titular_cargo||'';
+  document.getElementById('ci_titularColegiatura').value = DB.centerInfo.titular_colegiatura||'';
   document.getElementById('ci_zoomSala').value = DB.centerInfo.zoomSala||'';
   document.getElementById('ci_meetSala').value = DB.centerInfo.meetSala||'';
   document.getElementById('ci_reminderMinutes').value = DB.centerInfo.reminderMinutes ?? 10;
@@ -6716,6 +6738,10 @@ async function saveCenterInfo(){
     ruc: document.getElementById('ci_ruc').value.trim(),
     slogan: document.getElementById('ci_slogan').value.trim(),
     paymentMethods: document.getElementById('ci_paymentMethods').value.trim(),
+    titular_nombre: document.getElementById('ci_titularNombre').value.trim(),
+    titular_documento: document.getElementById('ci_titularDni').value.trim(),
+    titular_cargo: document.getElementById('ci_titularCargo').value.trim(),
+    titular_colegiatura: document.getElementById('ci_titularColegiatura').value.trim(),
     zoomSala: normalizarSalaZoom(document.getElementById('ci_zoomSala').value),
     meetSala: normalizarSalaMeet(document.getElementById('ci_meetSala').value),
     reminderMinutes: Number(document.getElementById('ci_reminderMinutes').value)||10,
@@ -6838,6 +6864,243 @@ function numeroALetras(n){
     texto = (miles === 1 ? 'MIL' : hasta999(miles) + ' MIL') + (resto? ' ' + hasta999(resto) : '');
   }
   return `${texto} CON ${String(cent).padStart(2,'0')}/100 SOLES`;
+}
+
+/* ===== Consentimiento informado =====
+   Documento para imprimir y firmar. Está redactado sobre las normas
+   peruanas vigentes; las citas legales van en el propio texto para que
+   quien lo firme sepa de dónde sale cada cosa.
+
+   NO reemplaza la revisión de un abogado. Es una plantilla completa y
+   cuidada, pero un consentimiento es un documento legal y conviene que lo
+   valide un profesional antes de usarlo con pacientes. El propio documento
+   lo dice al pie mientras no se marque como revisado.
+
+   Los datos del centro y del responsable salen de "Datos del centro": no
+   están escritos en el código, porque son datos personales. */
+function consentimientoInformado(patientId){
+  const ci = DB.centerInfo || DEFAULT_CENTER_INFO;
+  const p  = DB.patients.find(x=>x.id===patientId) || null;
+  const gs = (p && p.isMinor) ? guardiansFromPatient(p) : [];
+  const g0 = gs[0] || null;
+  const prof = p ? DB.professionals.find(x=>x.id===p.professionalId) : null;
+  const hoy = new Date();
+
+  const falta = [];
+  if(!ci.titular_nombre)    falta.push('el nombre del responsable');
+  if(!ci.titular_documento) falta.push('su DNI');
+  if(!ci.address)           falta.push('la dirección del centro');
+  if(!ci.ruc)               falta.push('el RUC');
+
+  const linea = (etiqueta, valor) =>
+    `<tr><td style="width:38%">${etiqueta}</td><td><b>${valor || '<span style="color:#A3341F">— falta —</span>'}</b></td></tr>`;
+
+  document.getElementById('receiptContent').innerHTML = `
+    <div style="text-align:center;border-bottom:2px solid var(--primary-dark);padding-bottom:12px;margin-bottom:16px">
+      <img src="${CENTER_LOGO_DATA_URL}" alt="" style="width:74px;height:auto;margin-bottom:6px">
+      <h2 style="margin:0 0 2px;font-size:17px">${ci.name || 'Centro Psicológico'}</h2>
+      <div class="sub" style="margin:0">${[ci.address, ci.ruc? 'RUC '+ci.ruc : '', ci.phone? 'Tel. '+ci.phone : '']
+        .filter(Boolean).join(' · ')}</div>
+      <div style="font-weight:700;font-size:15px;letter-spacing:.04em;margin-top:12px">
+        CONSENTIMIENTO INFORMADO PARA ATENCIÓN PSICOLÓGICA</div>
+    </div>
+
+    ${falta.length? `<p class="hint" style="color:var(--alert);border:1px solid var(--alert);
+        border-radius:8px;padding:9px 11px;margin-bottom:14px">
+        Antes de imprimirlo, completa en <b>Datos del centro</b>: ${falta.join(', ')}.</p>`:''}
+
+    <div style="font-weight:700;font-size:12px;margin:0 0 4px;letter-spacing:.03em">1. QUIÉNES SOMOS</div>
+    <table>
+      ${linea('Razón social', ci.name)}
+      ${linea('RUC', ci.ruc)}
+      ${linea('Domicilio', ci.address)}
+      ${linea('Responsable del centro y del tratamiento de datos', ci.titular_nombre)}
+      ${linea('Documento de identidad del responsable', ci.titular_documento? 'DNI '+ci.titular_documento : '')}
+      ${ci.titular_cargo? linea('Cargo', ci.titular_cargo) : ''}
+      ${ci.titular_colegiatura? linea('Colegiatura', 'C.Ps.P. N° '+ci.titular_colegiatura) : ''}
+      ${linea('Teléfono / correo de contacto', [ci.phone, ci.email].filter(Boolean).join(' · '))}
+    </table>
+
+    <div style="font-weight:700;font-size:12px;margin:16px 0 4px;letter-spacing:.03em">2. DATOS DE QUIEN RECIBE LA ATENCIÓN</div>
+    <table>
+      ${linea('Paciente', p? p.name : '')}
+      ${linea('Documento de identidad', p && p.dni? 'DNI '+p.dni : (p && p.isMinor? 'Menor de edad sin DNI' : ''))}
+      ${linea('Fecha de nacimiento', p? (fechaNacimientoDe(p) || '') : '')}
+      ${p && p.isMinor? `
+        ${linea('Apoderado / representante legal', g0? g0.name : '')}
+        ${linea('Documento del apoderado', g0 && g0.dni? 'DNI '+g0.dni : '')}
+        ${linea('Parentesco', g0? (g0.relationship||'') : '')}` : ''}
+      ${linea('Profesional que atiende', prof? professionalDisplayName(prof) : '')}
+      ${prof && prof.colegiatura? linea('Colegiatura del profesional', 'C.Ps.P. N° '+prof.colegiatura) : ''}
+      ${linea('Modalidad de atención', p? (p.modality||'') : '')}
+    </table>
+
+    <div style="font-weight:700;font-size:12px;margin:16px 0 4px;letter-spacing:.03em">3. EN QUÉ CONSISTE LA ATENCIÓN</div>
+    <p style="font-size:12.5px;line-height:1.55;margin:0 0 8px">
+      La atención psicológica comprende la evaluación, el diagnóstico y el tratamiento de dificultades
+      emocionales, conductuales o del desarrollo. Se realiza mediante entrevistas, aplicación de pruebas
+      psicológicas cuando corresponda, y sesiones de intervención acordadas con usted.
+      Las sesiones duran aproximadamente ${Number((ci.sessionMinutes)||60)} minutos.
+    </p>
+    <p style="font-size:12.5px;line-height:1.55;margin:0 0 8px">
+      <b>Beneficios esperados:</b> mejor comprensión y manejo de la dificultad que motiva la consulta.
+      <b>Riesgos:</b> durante el proceso pueden aparecer malestar emocional, recuerdos dolorosos o
+      cambios en las relaciones cercanas; son reacciones esperables y se trabajan dentro del proceso.
+      <b>No se garantizan resultados</b>: la psicología no ofrece curas garantizadas, y el avance depende
+      también de su participación.
+      <b>Alternativas:</b> puede optar por no iniciar el tratamiento, buscar otra opinión profesional o
+      una evaluación médica o psiquiátrica.
+    </p>
+
+    <div style="font-weight:700;font-size:12px;margin:16px 0 4px;letter-spacing:.03em">4. CONFIDENCIALIDAD Y SUS LÍMITES</div>
+    <p style="font-size:12.5px;line-height:1.55;margin:0 0 8px">
+      Todo lo que se converse está protegido por el <b>secreto profesional</b>, conforme al artículo 25
+      de la <b>Ley N° 26842, Ley General de Salud</b>, y al Código de Ética y Deontología del Colegio de
+      Psicólogos del Perú. La historia clínica es confidencial y se conserva según la
+      <b>NTS N° 139-MINSA/2018/DGAIN</b>.
+    </p>
+    <p style="font-size:12.5px;line-height:1.55;margin:0 0 8px">
+      La confidencialidad tiene <b>límites que la ley impone</b> y que usted debe conocer desde ahora.
+      Se levantará el secreto profesional únicamente cuando:
+    </p>
+    <ol style="font-size:12.5px;line-height:1.55;margin:0 0 8px;padding-left:20px">
+      <li>Exista <b>riesgo grave e inminente</b> para su vida o integridad, o para la de un tercero.</li>
+      <li>Se tome conocimiento de <b>violencia o abuso contra un niño, niña, adolescente, persona adulta
+        mayor o persona con discapacidad</b>, cuya comunicación a la autoridad es obligatoria
+        (<b>Ley N° 30364</b> y <b>Código de los Niños y Adolescentes, Ley N° 27337</b>).</li>
+      <li>Lo requiera una <b>autoridad judicial o fiscal competente</b> mediante mandato motivado.</li>
+    </ol>
+    <p style="font-size:12.5px;line-height:1.55;margin:0 0 8px">
+      Fuera de estos supuestos, ninguna información se comparte con terceros sin su autorización escrita.
+      ${p && p.isMinor? `<b>Tratándose de una persona menor de edad</b>, se informará al apoderado de la marcha
+        general del proceso, cuidando el espacio de confianza de la persona atendida en lo que no
+        comprometa su seguridad.` : ''}
+    </p>
+
+    <div style="font-weight:700;font-size:12px;margin:16px 0 4px;letter-spacing:.03em">5. TRATAMIENTO DE SUS DATOS PERSONALES</div>
+    <p style="font-size:12.5px;line-height:1.55;margin:0 0 8px">
+      Sus datos, incluidos los <b>datos sensibles de salud</b>, se tratan conforme a la
+      <b>Ley N° 29733, Ley de Protección de Datos Personales</b>, y su Reglamento aprobado por
+      <b>D.S. N° 003-2013-JUS</b>.
+    </p>
+    <ul style="font-size:12.5px;line-height:1.55;margin:0 0 8px;padding-left:20px">
+      <li><b>Finalidad:</b> prestar y documentar la atención psicológica, gestionar citas y pagos, y
+        cumplir obligaciones legales. No se usan con fines publicitarios ni se ceden a terceros.</li>
+      <li><b>Banco de datos:</b> historia clínica del ${ci.name || 'centro'}, bajo responsabilidad de
+        ${ci.titular_nombre || '(responsable)'}.</li>
+      <li><b>Conservación:</b> por el plazo que exige la normativa de historias clínicas y, vencido
+        este, se eliminan de forma segura.</li>
+      <li><b>Sus derechos:</b> puede solicitar en cualquier momento el <b>acceso, rectificación,
+        cancelación u oposición</b> respecto de sus datos, escribiendo a
+        ${ci.email || '(correo del centro)'} o acercándose al domicilio indicado. También puede
+        reclamar ante la Autoridad Nacional de Protección de Datos Personales.</li>
+    </ul>
+
+    <div style="font-weight:700;font-size:12px;margin:16px 0 4px;letter-spacing:.03em">6. ATENCIÓN A DISTANCIA (TELEPSICOLOGÍA)</div>
+    <p style="font-size:12.5px;line-height:1.55;margin:0 0 8px">
+      Si la atención se realiza por videollamada, se ampara en la <b>Ley N° 30421, Ley Marco de
+      Telesalud</b>, y el <b>Decreto Legislativo N° 1490</b>. Usted se compromete a conectarse desde un
+      lugar privado donde pueda hablar con tranquilidad. <b>Está prohibido grabar</b> la sesión, por
+      cualquiera de las partes, salvo acuerdo escrito. Si la conexión falla, se retomará por teléfono o
+      se reprogramará sin costo. La atención a distancia puede no ser adecuada en situaciones de crisis
+      o riesgo, en cuyo caso se le indicará atención presencial o de emergencia.
+    </p>
+
+    <div style="font-weight:700;font-size:12px;margin:16px 0 4px;letter-spacing:.03em">7. CONDICIONES DE LA ATENCIÓN</div>
+    <ul style="font-size:12.5px;line-height:1.55;margin:0 0 8px;padding-left:20px">
+      <li><b>Honorarios:</b> ${p && p.pricePerSession? fmtMoney(p.pricePerSession)+' por sesión' : 'según la tarifa vigente informada al inicio'}.
+        Cualquier cambio se le comunicará con anticipación.</li>
+      <li><b>Cancelaciones:</b> avise con al menos ${Number(ci.rescheduleHours||24)} horas de anticipación.
+        ${Number(ci.latePenaltyPercent||0)>0? `Las cancelaciones fuera de ese plazo o las inasistencias sin aviso
+          pueden generar un cargo del ${Number(ci.latePenaltyPercent)}% de la sesión.` : ''}</li>
+      <li><b>Voluntariedad:</b> su participación es libre. Puede <b>retirarse del proceso en cualquier
+        momento</b>, sin necesidad de justificarse y sin que ello afecte futuras atenciones.</li>
+      <li><b>Preguntas:</b> puede pedir en cualquier momento explicaciones sobre el proceso, las pruebas
+        aplicadas o los resultados, en lenguaje que entienda.</li>
+    </ul>
+
+    <div style="font-weight:700;font-size:12px;margin:16px 0 4px;letter-spacing:.03em">8. DECLARACIÓN Y FIRMA</div>
+    <p style="font-size:12.5px;line-height:1.55;margin:0 0 10px">
+      Declaro que he leído este documento, que se me explicó su contenido en lenguaje claro, que pude
+      hacer preguntas y que fueron respondidas. <b>Otorgo libremente mi consentimiento</b> para recibir
+      atención psicológica en los términos descritos, y de forma <b>expresa</b> para el tratamiento de
+      mis datos personales de salud con las finalidades indicadas en el punto 5.
+    </p>
+
+    <div style="display:flex;gap:24px;margin-top:34px;text-align:center;font-size:11px;color:#5B685F">
+      <div style="flex:1;border-top:1px solid #22302A;padding-top:5px">
+        ${p && p.isMinor? 'Firma del apoderado o representante legal' : 'Firma del paciente'}<br>
+        <b style="color:#22302A">${p? (p.isMinor? (g0? g0.name : '') : p.name) : ''}</b><br>
+        ${p && p.isMinor
+          ? (g0 && g0.dni? 'DNI '+g0.dni : 'DNI ____________')
+          : (p && p.dni? 'DNI '+p.dni : 'DNI ____________')}
+      </div>
+      <div style="flex:1;border-top:1px solid #22302A;padding-top:5px">
+        Firma del profesional<br>
+        <b style="color:#22302A">${prof? professionalDisplayName(prof) : ''}</b><br>
+        ${prof && prof.colegiatura? 'C.Ps.P. N° '+prof.colegiatura : 'C.Ps.P. N° ____________'}
+      </div>
+    </div>
+
+    ${p && p.isMinor? `
+    <div style="margin-top:22px;border-top:1px dashed var(--border);padding-top:12px">
+      <div style="font-weight:700;font-size:12px;margin-bottom:4px;letter-spacing:.03em">ASENTIMIENTO DE LA PERSONA MENOR DE EDAD</div>
+      <p style="font-size:12px;line-height:1.5;margin:0 0 26px">
+        Me explicaron para qué vengo, qué vamos a hacer y que puedo preguntar lo que quiera. Estoy de
+        acuerdo en participar. <span class="hint">(Se recoge según la edad y madurez, conforme al
+        Código de los Niños y Adolescentes.)</span>
+      </p>
+      <div style="width:58%;border-top:1px solid #22302A;padding-top:5px;text-align:center;font-size:11px;color:#5B685F">
+        Firma de <b style="color:#22302A">${p.name}</b>
+      </div>
+    </div>`:''}
+
+    <div style="display:flex;gap:24px;margin-top:20px;font-size:11.5px">
+      <div>Lugar y fecha: <b>${(ci.address||'').split(',')[0] || '____________'},
+        ${hoy.toLocaleDateString('es-PE',{day:'numeric',month:'long',year:'numeric'})}</b></div>
+    </div>
+
+    <div class="receiptFooter" style="margin-top:16px">
+      Documento elaborado sobre la normativa peruana vigente: Ley N° 26842 (General de Salud),
+      Ley N° 29733 y D.S. N° 003-2013-JUS (Protección de Datos Personales), Ley N° 30947 y
+      D.S. N° 007-2020-SA (Salud Mental), Ley N° 30421 y D.L. N° 1490 (Telesalud),
+      Ley N° 30364, Ley N° 27337 y NTS N° 139-MINSA/2018/DGAIN.<br>
+      <b>Antes de usarlo con pacientes, hazlo revisar por un abogado:</b> esto es una plantilla
+      cuidada, no una asesoría legal.<br>
+      Se firma en dos ejemplares: uno para el paciente y otro para la historia clínica.
+    </div>`;
+
+  const btnWa = document.getElementById('reciboWhatsApp');
+  if(btnWa) btnWa.style.display = 'none';
+  const btnWaPdf = document.getElementById('reciboPdfWhatsApp');
+  if(btnWaPdf) btnWaPdf.style.display = 'none';
+  const btnFirmado = document.getElementById('reciboFirmado');
+  if(btnFirmado){
+    btnFirmado.style.display = p? '' : 'none';
+    btnFirmado.onclick = () => marcarConsentimientoFirmado(patientId);
+    btnFirmado.textContent = (p && p.consentimientoFecha)
+      ? `Firmado el ${p.consentimientoFecha}` : 'Marcar como firmado';
+  }
+  document.getElementById('receiptModal').classList.add('open');
+}
+
+async function marcarConsentimientoFirmado(patientId){
+  const p = DB.patients.find(x=>x.id===patientId);
+  if(!p) return;
+  const gs = p.isMinor? guardiansFromPatient(p) : [];
+  const quien = p.isMinor ? ((gs[0] && gs[0].name) || 'Apoderado') : p.name;
+  const fecha = prompt(
+      `¿Qué día firmó el consentimiento?\n\nFirma: ${quien}`,
+    p.consentimientoFecha || todayISO());
+  if(fecha === null) return;
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(fecha)){ alert('Escribe la fecha como 2026-09-13.'); return; }
+  DB.patients = DB.patients.map(x=>x.id!==patientId? x
+    : {...x, consentimientoFecha: fecha, consentimientoFirmante: quien});
+  const ok = await setColl('patients', DB.patients);
+  showToast(ok? `Consentimiento de ${p.name} registrado (${fecha}).`
+              : 'No se pudo guardar, reintentando…', ok);
+  renderPanel();
+  consentimientoInformado(patientId);
 }
 
 /* ===== Recibo del pago a un profesional =====

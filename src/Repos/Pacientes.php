@@ -36,6 +36,7 @@ final class Pacientes extends Repositorio
                     pa.enlace_default, pa.direccion_default, pa.referencia_default,
                     pa.estado_informe, pa.fecha_limite_informe, pa.estado_pago_manual,
                     pa.avisar_paciente,
+                    pa.consentimiento_fecha, pa.consentimiento_firmante,
                     prof.uid AS profesional_uid
                FROM pacientes pa
                JOIN personas p    ON p.id = pa.persona_id
@@ -78,6 +79,9 @@ final class Pacientes extends Repositorio
                 'paquetesHistorial'  => $pk['historial'],
                 'paymentStatus'      => (string) $f['estado_pago_manual'],
                 'reportStatus'       => (string) $f['estado_informe'],
+                // Cuándo firmó su consentimiento informado y quién lo firmó.
+                'consentimientoFecha'    => (string) ($f['consentimiento_fecha'] ?? ''),
+                'consentimientoFirmante' => (string) ($f['consentimiento_firmante'] ?? ''),
                 'reportDueDate'      => (string) ($f['fecha_limite_informe'] ?? ''),
                 'birthday'           => (string) ($f['dia_cumple'] ?? ''),
                 'birthDate'          => (string) ($f['fecha_nacimiento'] ?? ''),
@@ -221,8 +225,8 @@ final class Pacientes extends Repositorio
                     (persona_id, tipo_atencion, modalidad_default, profesional_id, es_menor,
                      enlace_default, direccion_default, referencia_default,
                      estado_informe, fecha_limite_informe, estado_pago_manual,
-                     avisar_paciente)
-                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                     avisar_paciente, consentimiento_fecha, consentimiento_firmante)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                  ON DUPLICATE KEY UPDATE
                     tipo_atencion        = VALUES(tipo_atencion),
                     modalidad_default    = VALUES(modalidad_default),
@@ -234,7 +238,9 @@ final class Pacientes extends Repositorio
                     estado_informe       = VALUES(estado_informe),
                     fecha_limite_informe = VALUES(fecha_limite_informe),
                     estado_pago_manual   = VALUES(estado_pago_manual),
-                    avisar_paciente      = VALUES(avisar_paciente)',
+                    avisar_paciente      = VALUES(avisar_paciente),
+                    consentimiento_fecha    = VALUES(consentimiento_fecha),
+                    consentimiento_firmante = VALUES(consentimiento_firmante)',
                 [
                     $personaId,
                     self::enum($item['type'] ?? null, self::TIPOS, 'Individual'),
@@ -248,6 +254,8 @@ final class Pacientes extends Repositorio
                     self::fecha($item['reportDueDate'] ?? null),
                     self::enum($item['paymentStatus'] ?? null, self::ESTADOS_PAGO, 'Pendiente'),
                     self::avisoDe($item, 'patient'),
+                    self::fecha($item['consentimientoFecha'] ?? null),
+                    self::nz($item['consentimientoFirmante'] ?? null),
                 ]
             );
 

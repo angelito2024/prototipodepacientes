@@ -30,6 +30,13 @@ final class CentroInfo extends Repositorio
             'phone'               => (string) ($c['telefono'] ?? ''),
             'ruc'                 => (string) ($c['ruc'] ?? ''),
             'slogan'              => (string) ($c['lema'] ?? ''),
+            // Quién responde por el centro y por los datos de los pacientes.
+            // Va en el consentimiento informado, que debe identificarlo con
+            // nombre y documento (Ley 29733 y su Reglamento).
+            'titular_nombre'      => (string) ($c['titular_nombre'] ?? ''),
+            'titular_documento'   => (string) ($c['titular_documento'] ?? ''),
+            'titular_cargo'       => (string) ($c['titular_cargo'] ?? ''),
+            'titular_colegiatura' => (string) ($c['titular_colegiatura'] ?? ''),
             'paymentMethods'      => (string) ($c['medios_pago'] ?? ''),
             // Salas fijas de videollamada: se guardan una vez y se reúsan en
             // cada cita virtual, sin tener que crearlas de nuevo cada vez.
@@ -57,14 +64,19 @@ final class CentroInfo extends Repositorio
         Database::query(
             'INSERT INTO centro_config
                 (id, razon_social, direccion, telefono, ruc, lema, medios_pago,
+                 titular_nombre, titular_documento, titular_cargo, titular_colegiatura,
                  sala_zoom, sala_meet,
                  minutos_recordatorio, minutos_sesion, horas_reprogramacion,
                  porcentaje_penalidad, incluir_politica)
-             VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?)
+             VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
              ON DUPLICATE KEY UPDATE
                 razon_social=VALUES(razon_social), direccion=VALUES(direccion),
                 telefono=VALUES(telefono), ruc=VALUES(ruc), lema=VALUES(lema),
                 medios_pago=VALUES(medios_pago),
+                titular_nombre=VALUES(titular_nombre),
+                titular_documento=VALUES(titular_documento),
+                titular_cargo=VALUES(titular_cargo),
+                titular_colegiatura=VALUES(titular_colegiatura),
                 sala_zoom=VALUES(sala_zoom), sala_meet=VALUES(sala_meet),
                 minutos_recordatorio=VALUES(minutos_recordatorio),
                 minutos_sesion=VALUES(minutos_sesion),
@@ -78,6 +90,10 @@ final class CentroInfo extends Repositorio
                 self::nz($valor['ruc'] ?? null),
                 self::nz($valor['slogan'] ?? null),
                 self::nz($valor['paymentMethods'] ?? null),
+                self::nz($valor['titular_nombre'] ?? null),
+                self::nz($valor['titular_documento'] ?? null),
+                self::nz($valor['titular_cargo'] ?? null),
+                self::nz($valor['titular_colegiatura'] ?? null),
                 self::nz($valor['zoomSala'] ?? null),
                 self::nz($valor['meetSala'] ?? null),
                 self::ent($valor['reminderMinutes'] ?? 10) ?: 10,
