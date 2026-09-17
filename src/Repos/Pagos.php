@@ -41,10 +41,11 @@ final class Pagos extends Repositorio
         $salida = [];
         foreach (Database::todos(
             'SELECT pg.uid, pg.fecha, pg.hora, pg.monto, pg.concepto, pg.tipo_pago,
-                    mp.nombre AS metodo, pac.uid AS paciente_uid
+                    mp.nombre AS metodo, pac.uid AS paciente_uid, cit.uid AS cita_uid
                FROM pagos pg
                LEFT JOIN personas pac    ON pac.id = pg.paciente_id
                LEFT JOIN metodos_pago mp ON mp.id = pg.metodo_pago_id
+               LEFT JOIN citas cit       ON cit.id = pg.cita_id
               WHERE pg.anulado_en IS NULL
               ORDER BY pg.fecha, pg.id'
         ) as $f) {
@@ -57,6 +58,9 @@ final class Pagos extends Repositorio
                 'concept'     => (string) ($f['concepto'] ?? ''),
                 'method'      => (string) ($f['metodo'] ?? 'Efectivo'),
                 'paymentType' => $inverso[(string) $f['tipo_pago']] ?? 'otro',
+                // Si el cobro se hizo desde una cita, queda atado a ella: así
+                // la agenda sabe qué sesión está pagada y cuál no.
+                'citaId'      => self::nz($f['cita_uid'] ?? null),
             ];
         }
         return $salida;
@@ -68,6 +72,11 @@ final class Pagos extends Repositorio
             return;
         }
         $pacientes = self::mapaPersonas('pacientes');
+        // uid de la cita -> su id, para atar el cobro a la sesión que lo generó.
+        $citas = [];
+        foreach (Database::todos('SELECT id, uid FROM citas WHERE uid IS NOT NULL') as $c) {
+            $citas[(string) $c['uid']] = (int) $c['id'];
+        }
         $metodos   = $this->metodos();
         $paquetes  = $this->paquetesActivos();
         $usuarioId = Auth::usuarioId();
@@ -95,13 +104,14 @@ final class Pagos extends Repositorio
             Database::query(
                 'INSERT INTO pagos
                     (uid, categoria, paciente_id, paquete_id, tipo_pago, monto,
-                     metodo_pago_id, concepto, fecha, hora, registrado_por, anulado_en)
-                 VALUES (?,?,?,?,?,?,?,?,?,?,?,NULL)
+                     metodo_pago_id, concepto, fecha, hora, cita_id, registrado_por, anulado_en)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NULL)
                  ON DUPLICATE KEY UPDATE
                     categoria=VALUES(categoria), paciente_id=VALUES(paciente_id),
                     paquete_id=VALUES(paquete_id), tipo_pago=VALUES(tipo_pago),
                     monto=VALUES(monto), metodo_pago_id=VALUES(metodo_pago_id),
                     concepto=VALUES(concepto), fecha=VALUES(fecha), hora=VALUES(hora),
+                    cita_id=VALUES(cita_id),
                     anulado_en=NULL',
                 [
                     $uid,
@@ -114,6 +124,7 @@ final class Pagos extends Repositorio
                     self::nz($item['concept'] ?? null),
                     $fecha,
                     self::hora($item['time'] ?? null),
+                    $citas[self::txt($item['citaId'] ?? '')] ?? null,
                     $usuarioId,
                 ]
             );

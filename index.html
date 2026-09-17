@@ -2619,6 +2619,75 @@ function sesionesQueCubreElPago(pm, patient){
   // de S/50 cubre 3 sesiones, y al centro le toca su parte por cada una.
   return Math.max(1, Math.round(Number(pm.amount||0) / precio));
 }
+/* ===== Cuánto se cobró por CADA sesión =====
+   Hasta ahora los pagos colgaban del paciente y no de la sesión: se sabía
+   cuánto debía en total, pero no qué sesión estaba pagada y cuál no. Ahora
+   cada pago puede quedar atado a su cita, y la agenda muestra sesión por
+   sesión si está cobrada, si hubo un adelanto o si está por cobrar. */
+
+function pagosDeCita(citaId){
+  return DB.payments.filter(pm => pm.citaId === citaId && !pm.anulado);
+}
+/* Las sesiones del paquete vigente, en el orden en que se atendieron. */
+function sesionesDelPaqueteVigente(paciente){
+  const desde = inicioDelPaqueteVigente(paciente);
+  return DB.appointments
+    .filter(a => a.patientId === paciente.id && a.status !== 'Cancelada'
+                 && (!desde || a.date > desde))
+    .sort((a,b)=>((a.date||'')+(a.time||'')).localeCompare((b.date||'')+(b.time||'')));
+}
+/* Cuántas sesiones tiene ya cubiertas el paciente con lo que pagó de su
+   paquete. Un cobro de S/450 con sesiones de S/45 cubre diez. */
+function sesionesCubiertasPorElPaquete(paciente){
+  if(!paciente || paciente.billingType !== 'Paquete') return 0;
+  const desde = inicioDelPaqueteVigente(paciente);
+  return DB.payments
+    .filter(pm => pm.patientId === paciente.id && !pm.anulado && !pm.citaId
+                  && (!desde || String(pm.date||'') > desde))
+    .reduce((s,pm)=>s + sesionesQueCubreElPago(pm, paciente), 0);
+}
+
+/* El estado de cobro de una sesión. Devuelve lo que hay que mostrar en la
+   agenda y lo que falta cobrar, si falta algo. */
+function estadoCobroDeCita(a){
+  const paciente = DB.patients.find(x=>x.id===a.patientId);
+  const vacio = {estado:'sinDato', etiqueta:'—', chip:'neutral', tarifa:0, pagado:0, saldo:0};
+  if(!paciente) return vacio;
+  if(a.status === 'Cancelada') return {...vacio, estado:'cancelada', etiqueta:'Cancelada'};
+
+  const tarifa = redondear(Number(paciente.pricePerSession||0));
+  const propios = redondear(pagosDeCita(a.id).reduce((s,pm)=>s+Number(pm.amount||0), 0));
+
+  // Con paquete, las primeras sesiones ya vienen pagadas por adelantado.
+  if(paciente.billingType === 'Paquete'){
+    const orden = sesionesDelPaqueteVigente(paciente).findIndex(x=>x.id===a.id) + 1;
+    const cubiertas = sesionesCubiertasPorElPaquete(paciente);
+    if(orden > 0 && orden <= cubiertas){
+      return {estado:'paquete', etiqueta:`Cubierta por el paquete (${orden} de ${cubiertas})`,
+              chip:'ok', tarifa, pagado:tarifa, saldo:0};
+    }
+    // Pasadas las que cubre el paquete, la sesión se cobra aparte.
+  }
+
+  const saldo = Math.max(0, redondear(tarifa - propios));
+  if(tarifa <= 0)  return {...vacio, estado:'sinTarifa', etiqueta:'Sin tarifa'};
+  if(saldo <= 0)   return {estado:'pagada',   etiqueta:'Pagada',   chip:'ok',
+                           tarifa, pagado:propios, saldo:0};
+  if(propios > 0)  return {estado:'adelanto', etiqueta:`Adelanto · falta ${fmtMoney(saldo)}`,
+                           chip:'warn', tarifa, pagado:propios, saldo};
+  return {estado:'porCobrar', etiqueta:`Por cobrar ${fmtMoney(tarifa)}`, chip:'alert',
+          tarifa, pagado:0, saldo:tarifa};
+}
+
+/* Todas las sesiones atendidas con algo pendiente de cobro. */
+function sesionesPorCobrar(){
+  return DB.appointments
+    .filter(a => a.status === 'Completada')
+    .map(a => ({cita:a, paciente: DB.patients.find(p=>p.id===a.patientId), cobro: estadoCobroDeCita(a)}))
+    .filter(x => x.paciente && x.cobro.saldo > 0)
+    .sort((a,b)=>((a.cita.date||'')).localeCompare(b.cita.date||''));
+}
+
 function centerIncomeByProfessional(fromDate, toDate){
   const byProf = {};
   DB.professionals.forEach(pr=>{ byProf[pr.id] = {professional:pr, sessions:0, income:0}; });
@@ -3721,7 +3790,52 @@ function irAAgendarPaciente(patientId){
 let agendarEnCadenaPara = null;
 
 /* Abre Pagos con el paciente ya elegido y el monto calculado de su tarifa. */
+/* Cobrar una sesión concreta: el pago queda atado a esa cita, así la agenda
+   sabe cuál está pagada y cuál no. */
+function cobrarCita(citaId){
+  const a = DB.appointments.find(x=>x.id===citaId);
+  if(!a) return;
+  const cobro = estadoCobroDeCita(a);
+  goTab('pagos');
+  setTimeout(()=>{
+    const form = document.getElementById('payForm');
+    if(form && !form.classList.contains('open')) toggleForm('payForm');
+    const cat = document.getElementById('pyf_category');
+    if(cat){ cat.value = 'paciente'; togglePaymentCategory(); }
+    const sel = document.getElementById('pyf_patient');
+    if(sel){ sel.value = a.patientId; fillPaymentFromPatient(); }
+
+    cobrandoCitaId = citaId;
+    const fecha = document.getElementById('pyf_date');
+    if(fecha) fecha.value = todayISO();
+    const monto = document.getElementById('pyf_amount');
+    if(monto) monto.value = cobro.saldo > 0 ? cobro.saldo.toFixed(2) : '';
+    const concepto = document.getElementById('pyf_concept');
+    const pac = DB.patients.find(p=>p.id===a.patientId);
+    if(concepto) concepto.value = `Sesión del ${a.date}${a.time? ' '+a.time : ''}`;
+    mostrarCitaQueSeCobra();
+    if(pac) showToast(`Cobrando la sesión del ${a.date} de ${pac.name}.`);
+    if(monto){ monto.focus(); monto.scrollIntoView({block:'center', behavior:'smooth'}); }
+  }, 120);
+}
+/* Qué cita se está cobrando, para atarle el pago al guardarlo. */
+let cobrandoCitaId = null;
+function mostrarCitaQueSeCobra(){
+  const caja = document.getElementById('pyf_citaAviso');
+  if(!caja) return;
+  const a = cobrandoCitaId? DB.appointments.find(x=>x.id===cobrandoCitaId) : null;
+  if(!a){ caja.innerHTML = ''; return; }
+  const pac = DB.patients.find(p=>p.id===a.patientId);
+  const cobro = estadoCobroDeCita(a);
+  caja.innerHTML = `<p class="hint" style="color:var(--accent);margin:0 0 8px">
+    💰 Este pago se va a guardar como cobro de la <b>sesión del ${a.date}${a.time? ' a las '+a.time : ''}</b>
+    de <b>${pac? pac.name : ''}</b>${cobro.saldo>0? ` — falta ${fmtMoney(cobro.saldo)}` : ''}.
+    <button type="button" class="linkbtn" onclick="cobrandoCitaId=null; mostrarCitaQueSeCobra();">
+      Cobrar sin atarlo a esa sesión</button></p>`;
+}
+
 function irACobrarPaciente(patientId){
+  cobrandoCitaId = null;
   goTab('pagos');
   setTimeout(()=>{
     const form = document.getElementById('payForm');
@@ -3857,7 +3971,7 @@ function viewCitas(){
     if(g !== grupoActual){
       grupoActual = g;
       const info = GRUPOS_CITA[g];
-      cabecera = `<tr><td colspan="7" style="background:var(--bg-soft);padding:9px 12px;
+      cabecera = `<tr><td colspan="8" style="background:var(--bg-soft);padding:9px 12px;
         border-left:4px solid ${info.color};font-weight:700;font-size:13px;letter-spacing:.02em">
         ${info.titulo} <span class="hint" style="font-weight:400">· ${cuantas[g]}</span></td></tr>`;
     }
@@ -3904,6 +4018,7 @@ function nombreCortoProfesional(pr){
 /* La fila de una cita. Se separó de la vista para poder agruparlas. */
 function filaDeCita(a, grupo){
     const {patient, professional} = mensajesDeCita(a);
+    const cobro = estadoCobroDeCita(a);
     const avisar = aQuienesAvisar(a);
     // La de ahora se resalta; las cerradas se apagan para que no compitan.
     const realce = grupo===0? 'background:#e8f5e9;'
@@ -3917,6 +4032,13 @@ function filaDeCita(a, grupo){
     <td>${nombreCortoProfesional(professional)}</td>
     <td>${a.modality}${a.modality==='Presencial'&&a.room? `<br><span class="hint">🏠 ${a.room}</span>`:''}${a.modality==='Virtual'&&a.room? `<br><span class="sub" style="color:var(--alert)">Dice virtual pero tiene ${a.room}. Al profesional se le paga distinto según cuál sea.</span>`:''}${a.modality==='Virtual'? (a.meetingLink? `<br><a href="${a.meetingLink}" target="_blank" rel="noopener" class="hint">🔗 Enlace</a>` : `<br><button class="btn small secondary" onclick="editMeetingLink('${a.id}')">+ Enlace</button>`):''}${a.modality==='Domicilio'? (a.address? `<br><span class="hint">📍 ${a.address}${a.reference?` (${a.reference})`:''}</span>` : `<br><button class="btn small secondary" onclick="editAppt('${a.id}')">+ Dirección</button>`):''}</td>
     <td>${statusChip(a.status)}</td>
+    <td style="white-space:nowrap">
+      <span class="chip ${cobro.chip}">${cobro.etiqueta}</span>
+      ${cobro.saldo>0? `<br><button class="btn small" style="margin-top:4px" onclick="cobrarCita('${a.id}')">
+          💰 ${cobro.pagado>0? 'Cobrar el saldo' : 'Registrar pago'}</button>`
+        : (cobro.estado==='pagada'
+            ? `<span class="sub">${fmtMoney(cobro.pagado)} cobrados</span>` : '')}
+    </td>
     <td style="white-space:nowrap">
       <button class="btn small ${a.reminderSent?'secondary':''}" onclick="abrirRecordatorio('${a.id}')">
         ${a.reminderSent? '✓ Avisado' : '💬 Avisar'}</button>
@@ -4025,7 +4147,7 @@ function viewCitasHtml(rows){
       <button class="btn secondary" onclick="toggleForm('apptForm')">Cancelar</button>
     </div>
     <div class="tablewrap">
-      ${DB.appointments.length? `<table><tr><th>Fecha/Hora</th><th>Paciente</th><th>Profesional</th><th>Modalidad</th><th>Estado</th><th>Recordatorio</th><th></th></tr>${rows}</table>`
+      ${DB.appointments.length? `<table><tr><th>Fecha/Hora</th><th>Paciente</th><th>Profesional</th><th>Modalidad</th><th>Estado</th><th>Cobro</th><th>Recordatorio</th><th></th></tr>${rows}</table>`
       : `<div class="empty">${DB.patients.length? 'Aún no hay citas registradas.' : 'Primero agrega pacientes para poder crear citas.'}</div>`}
     </div>
   `;
@@ -6157,7 +6279,34 @@ function viewPagos(){
 
   /* Los saldos y los cuadros de control van DESPUÉS del registro: al entrar a Pagos lo
      primero que se necesita es registrar el pago, no leer reportes. */
+  // Sesión por sesión: cuáles se atendieron y todavía no se cobraron.
+  const porCobrar = sesionesPorCobrar();
+  const totalPorCobrar = redondear(porCobrar.reduce((s,x)=>s+x.cobro.saldo, 0));
+  const bloqueSesionesPorCobrar = `
+    <h3 style="margin-top:30px">Sesiones atendidas que faltan cobrar
+      ${porCobrar.length? `<span class="hint" style="font-weight:400">— ${porCobrar.length} sesión(es), ${fmtMoney(totalPorCobrar)}</span>`:''}</h3>
+    <p class="hint">Una por una, no por paciente: así se ve exactamente qué sesión quedó sin cobrar.
+      Las que cubre un paquete pagado por adelantado no salen acá.</p>
+    <div class="tablewrap" style="margin-bottom:20px">
+      ${porCobrar.length? `<table>
+        <tr><th>Fecha</th><th>Paciente</th><th>Modalidad</th><th style="text-align:right">Tarifa</th>
+            <th style="text-align:right">Pagado</th><th style="text-align:right">Falta</th><th></th></tr>
+        ${porCobrar.map(x=>`<tr>
+          <td style="white-space:nowrap">${x.cita.date}<span class="sub">${x.cita.time||''}</span></td>
+          <td><span class="nom corto" title="${x.paciente.name}">${x.paciente.name}</span></td>
+          <td>${x.cita.modality||''}</td>
+          <td style="text-align:right">${fmtMoney(x.cobro.tarifa)}</td>
+          <td style="text-align:right">${x.cobro.pagado>0? fmtMoney(x.cobro.pagado) : '—'}</td>
+          <td style="text-align:right"><b style="color:var(--alert)">${fmtMoney(x.cobro.saldo)}</b></td>
+          <td><button class="btn small" onclick="cobrarCita('${x.cita.id}')">💰 Cobrar</button></td>
+        </tr>`).join('')}
+        <tr style="background:var(--bg-soft)"><td colspan="5"><b>Total por cobrar</b></td>
+          <td style="text-align:right"><b>${fmtMoney(totalPorCobrar)}</b></td><td></td></tr>
+      </table>` : `<div class="empty">No hay sesiones atendidas pendientes de cobro.</div>`}
+    </div>`;
+
   const bloqueSaldosYControl = `
+    ${bloqueSesionesPorCobrar}
     <h3 style="margin-top:30px">Saldos — Sesión individual</h3>
     <p class="hint">Todos los pacientes que se atienden sesión por sesión. Arriba los que deben, luego los que aún no tienen tarifa asignada, y al final los que están al día.</p>
     <div class="tablewrap" style="margin-bottom:20px">
@@ -6223,6 +6372,7 @@ function viewPagos(){
     </div>
 
     <div class="formpanel" id="payForm">
+      <div id="pyf_citaAviso"></div>
       <div class="field" style="max-width:340px;margin-bottom:12px">
         <label>Categoría</label>
         <select id="pyf_category" onchange="togglePaymentCategory()">
@@ -6618,8 +6768,14 @@ async function savePayment(){
     amount:Number(document.getElementById('pyf_amount').value)||0,
     concept:document.getElementById('pyf_concept').value.trim(),
     method:document.getElementById('pyf_method').value,
+    // Si se llegó aquí desde una cita, el pago queda atado a ella: así la
+    // agenda sabe qué sesión está cobrada y cuál sigue pendiente.
+    citaId: (cobrandoCitaId && DB.appointments.some(a=>a.id===cobrandoCitaId
+             && a.patientId===patientId)) ? cobrandoCitaId : undefined,
     paymentType};
   DB.payments.push(pm);
+  cobrandoCitaId = null;
+  mostrarCitaQueSeCobra();
   const patient = DB.patients.find(p=>p.id===patientId);
   if(patient){
     let patientChanged = false;
