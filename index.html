@@ -1011,6 +1011,19 @@
   </div>
 </div>
 
+<div class="modalOverlay" id="rolModal">
+  <div class="receiptCard" style="max-width:620px">
+    <div style="padding:24px 26px">
+      <h2 style="margin-top:0" id="rolTitulo">Rol de atenciones</h2>
+      <p class="hint" id="rolSub" style="margin:0 0 14px"></p>
+      <div id="rolContenido"></div>
+    </div>
+    <div class="receiptActions">
+      <button class="btn secondary" onclick="cerrarRol()">Cerrar</button>
+    </div>
+  </div>
+</div>
+
 <div class="modalOverlay" id="pagoProfModal">
   <div class="receiptCard" style="max-width:680px">
     <div style="padding:24px 26px">
@@ -2688,6 +2701,17 @@ function sesionesPorCobrar(){
     .sort((a,b)=>((a.cita.date||'')).localeCompare(b.cita.date||''));
 }
 
+/* Lo que entró al centro sin venir de un paciente: charlas, talleres a
+   empresas, venta de material. Son los pagos de tipo "otro" sin paciente. */
+function otrosIngresosDelMes(mes){
+  return DB.payments.filter(pm =>
+    !pm.anulado && (pm.paymentType||'') === 'otro' && !pm.patientId
+    && String(pm.date||'').slice(0,7) === mes);
+}
+function totalOtrosIngresos(mes){
+  return redondear(otrosIngresosDelMes(mes).reduce((s,pm)=>s+Number(pm.amount||0), 0));
+}
+
 function centerIncomeByProfessional(fromDate, toDate){
   const byProf = {};
   DB.professionals.forEach(pr=>{ byProf[pr.id] = {professional:pr, sessions:0, income:0}; });
@@ -2773,7 +2797,8 @@ function viewResumen(){
   const ingresoProductos = DB.products.filter(pr=>true).reduce((s,pr)=>s+((Number(pr.price||0)-Number(pr.cost||0))*Number(pr.monthlyUnits||0)),0);
   const gastos = gastosDelMes(mesActual);
   const gastosFijos = gastos.total;
-  const ingresoTotal = ingresoProfesionales+ingresoProductos;
+  const otrosIngresos = totalOtrosIngresos(mesActual);
+  const ingresoTotal = ingresoProfesionales+ingresoProductos+otrosIngresos;
   const margen = ingresoTotal-gastosFijos;
   const informesPendientes = DB.patients.filter(p=>p.reportStatus==='Pendiente').length;
 
@@ -2903,6 +2928,7 @@ function viewResumen(){
         <table>
           <tr><td>Ingreso por profesionales (alquiler de espacio + comisiones)</td><td style="text-align:right">${fmtMoney(ingresoProfesionales)}</td></tr>
           <tr><td>Productos adicionales (estimado)</td><td style="text-align:right">${fmtMoney(ingresoProductos)}</td></tr>
+          ${otrosIngresos>0? `<tr><td>Otros ingresos (charlas, talleres)</td><td style="text-align:right">${fmtMoney(otrosIngresos)}</td></tr>`:""}
           <tr><td><b>Total ingresos</b></td><td style="text-align:right"><b>${fmtMoney(ingresoTotal)}</b></td></tr>
           <tr><td>Gastos fijos</td><td style="text-align:right">-${fmtMoney(gastos.fijos)}</td></tr>
           <tr><td>Gastos variables del mes</td><td style="text-align:right">-${fmtMoney(gastos.variables)}</td></tr>
@@ -4056,6 +4082,131 @@ function filaDeCita(a, grupo){
   </tr>`;
 }
 
+/* ===== El rol de pacientes de un profesional =====
+   Lo que pidió Luis: mandarle de un clic su agenda del día, de la semana o
+   del mes, para que sepa a quién atiende y a qué hora sin tener que
+   preguntar cita por cita. */
+function rangoDeAgenda(periodo){
+  const hoy = new Date();
+  const iso = d => fechaLocalISO(d);
+  if(periodo === 'dia'){
+    return {desde: todayISO(), hasta: todayISO(), titulo: 'de hoy'};
+  }
+  if(periodo === 'semana'){
+    // De lunes a domingo de la semana en curso.
+    const d = new Date(hoy);
+    const diaSemana = (d.getDay() + 6) % 7;          // 0 = lunes
+    const lunes = new Date(d); lunes.setDate(d.getDate() - diaSemana);
+    const domingo = new Date(lunes); domingo.setDate(lunes.getDate() + 6);
+    return {desde: iso(lunes), hasta: iso(domingo), titulo: 'de esta semana'};
+  }
+  const primero = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+  const ultimo  = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0);
+  return {desde: iso(primero), hasta: iso(ultimo),
+          titulo: 'de ' + hoy.toLocaleDateString('es-PE',{month:'long', year:'numeric'})};
+}
+
+function citasDelProfesional(profId, desde, hasta){
+  return DB.appointments
+    .filter(a => a.professionalId === profId && a.status !== 'Cancelada'
+                 && a.date >= desde && a.date <= hasta)
+    .sort((a,b)=>((a.date||'')+(a.time||'')).localeCompare((b.date||'')+(b.time||'')));
+}
+
+/* El texto que se le manda. Va agrupado por día porque así se lee: "el
+   lunes tengo tres, el martes ninguna". */
+function textoDelRol(profId, periodo){
+  const pr = DB.professionals.find(p=>p.id===profId);
+  const {desde, hasta, titulo} = rangoDeAgenda(periodo);
+  const citas = citasDelProfesional(profId, desde, hasta);
+  if(!pr) return '';
+
+  let texto = `Hola ${nombreDePila(pr.name)}, te paso tu rol de atenciones ${titulo}`
+            + ` en el ${nombreDelCentro()}.\n`;
+  if(citas.length === 0){
+    return texto + `\nNo tienes atenciones programadas en ese periodo.`;
+  }
+
+  const porDia = {};
+  citas.forEach(a=>{ (porDia[a.date] = porDia[a.date] || []).push(a); });
+  Object.keys(porDia).sort().forEach(fecha=>{
+    texto += `\n${fechaEnPalabras(fecha).toUpperCase()}\n`;
+    porDia[fecha].forEach(a=>{
+      const pac = DB.patients.find(p=>p.id===a.patientId);
+      const donde = a.modality === 'Virtual' ? 'virtual'
+                  : (a.room || a.modality || 'presencial');
+      texto += `  ${a.time || '--:--'}  ${pac? pac.name : 'paciente'}  (${donde})`;
+      if(a.modality === 'Virtual' && a.meetingLink) texto += `\n         ${a.meetingLink}`;
+      texto += `\n`;
+    });
+  });
+  texto += `\nTotal: ${citas.length} atención(es).`;
+  return texto;
+}
+
+let rolProfId = null, rolPeriodo = 'semana';
+function abrirRolProfesional(profId){
+  rolProfId = profId;
+  rolPeriodo = 'semana';
+  document.getElementById('rolModal').classList.add('open');
+  renderRolModal();
+}
+function cerrarRol(){
+  document.getElementById('rolModal').classList.remove('open');
+  rolProfId = null;
+}
+function cambiarPeriodoRol(p){ rolPeriodo = p; renderRolModal(); }
+
+function renderRolModal(){
+  const pr = DB.professionals.find(p=>p.id===rolProfId);
+  const caja = document.getElementById('rolContenido');
+  if(!pr || !caja) return;
+  const {desde, hasta, titulo} = rangoDeAgenda(rolPeriodo);
+  const citas = citasDelProfesional(pr.id, desde, hasta);
+  const texto = textoDelRol(pr.id, rolPeriodo);
+
+  document.getElementById('rolTitulo').textContent = `Rol de ${professionalDisplayName(pr)}`;
+  document.getElementById('rolSub').textContent =
+    `${citas.length} atención(es) ${titulo} · del ${desde} al ${hasta}`;
+
+  const boton = (p, etiqueta) => `<button class="btn small ${rolPeriodo===p?'':'secondary'}"
+      onclick="cambiarPeriodoRol('${p}')">${etiqueta}</button>`;
+
+  const porDia = {};
+  citas.forEach(a=>{ (porDia[a.date] = porDia[a.date] || []).push(a); });
+
+  caja.innerHTML = `
+    <div style="display:flex;gap:6px;margin-bottom:14px">
+      ${boton('dia','Hoy')} ${boton('semana','Esta semana')} ${boton('mes','Este mes')}
+    </div>
+    ${citas.length? Object.keys(porDia).sort().map(fecha=>`
+      <div style="font-weight:700;font-size:12.5px;margin:14px 0 4px;letter-spacing:.02em;
+                  text-transform:capitalize">${fechaEnPalabras(fecha)}</div>
+      <table>${porDia[fecha].map(a=>{
+        const pac = DB.patients.find(p=>p.id===a.patientId);
+        return `<tr>
+          <td style="width:58px;font-weight:700;white-space:nowrap">${a.time||'--:--'}</td>
+          <td>${pac? pac.name : '—'}
+            <span class="sub">${a.modality||''}${a.room? ' · '+a.room : ''}</span></td>
+          <td style="text-align:right">${statusChip(a.status)}</td>
+        </tr>`;}).join('')}</table>`).join('')
+      : `<p class="hint">No tiene atenciones programadas en ese periodo.</p>`}
+
+    <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--line)">
+      <div style="font-weight:700;font-size:12.5px;margin-bottom:6px">Lo que se le va a enviar</div>
+      <textarea id="rolTexto" rows="8" style="width:100%;font-size:12.5px;font-family:inherit"
+        readonly>${texto}</textarea>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+        ${waLink(pr.phone, texto)
+          ? `<a class="btn" href="${waLink(pr.phone, texto)}" target="_blank" rel="noopener">Enviar por WhatsApp</a>`
+          : `<span class="chip alert">Sin teléfono válido en su ficha</span>`}
+        ${mailLink(pr.email, 'Tu rol de atenciones', texto)
+          ? `<a class="btn secondary" href="${mailLink(pr.email, 'Tu rol de atenciones ' + titulo, texto)}">Enviar por correo</a>` : ''}
+        <button class="btn secondary" onclick="copyToClipboard(document.getElementById('rolTexto').value, this)">Copiar</button>
+      </div>
+    </div>`;
+}
+
 /* ===== Ventana de avisos de una cita =====
    Antes cada fila desplegaba los teléfonos, los botones de WhatsApp y los de
    copiar de todos los contactos: una sola cita ocupaba la pantalla entera.
@@ -4608,6 +4759,7 @@ function viewProfesionales(){
       </td>
       <td>${pr.birthday? fmtBirthday(pr.birthday):'—'}</td>
       <td>
+        <button class="btn small" onclick="abrirRolProfesional('${pr.id}')">📋 Enviarle su rol</button>
         <button class="btn small secondary" onclick="showAvailability('${pr.id}')">📅 Ver disponibilidad</button>
         <button class="btn small secondary" onclick="editProf('${pr.id}')">Editar</button>
         <button class="btn small secondary" onclick="toggleActive('professionals','${pr.id}')">${pr.active===false?'Habilitar':'Inhabilitar'}</button>
@@ -6379,6 +6531,7 @@ function viewPagos(){
           <option value="paciente">Paciente (sesión / paquete)</option>
           <option value="colegio">Colegio (mensualidad)</option>
           <option value="alquiler">Alquiler de consultorio (profesional)</option>
+          <option value="otro">Otro ingreso del centro (charla, taller, empresa…)</option>
         </select>
       </div>
       <div id="pyf_patientSection">
@@ -6415,6 +6568,28 @@ function viewPagos(){
       <button class="btn" id="pyf_saveBtn" onclick="savePayment()">Guardar pago</button>
       <button class="btn secondary" onclick="cancelPaymentEdit(); toggleForm('payForm')">Cancelar</button>
       </div>
+      <div id="pyf_otroSection" style="display:none">
+        <div class="formgrid">
+          <div class="field" style="grid-column:1/-1"><label>¿De qué es este ingreso?</label>
+            <input type="text" id="pyf_otroConcepto"
+                   placeholder="Charla en el colegio San Juan · Taller para la empresa X · Venta de material…">
+            <p class="hint" style="margin-top:3px">Para lo que entra al centro y no viene de un paciente
+              ni del alquiler del consultorio. Suma al ingreso del mes en Finanzas.</p>
+          </div>
+          <div class="field"><label>Monto (S/)</label>
+            <input type="number" step="0.01" min="0" id="pyf_otroMonto"></div>
+          <div class="field"><label>Fecha</label>
+            <input type="date" id="pyf_otroFecha" value="${todayISO()}"></div>
+          <div class="field"><label>Cómo te pagaron</label>
+            <select id="pyf_otroMetodo">
+              <option>Efectivo</option><option>Yape</option><option>Plin</option>
+              <option>Transferencia</option><option>Tarjeta</option><option>Otro</option>
+            </select></div>
+        </div>
+        <button class="btn" onclick="guardarOtroIngreso()">Registrar ingreso</button>
+        <button class="btn secondary" onclick="toggleForm('payForm')">Cancelar</button>
+      </div>
+
       <div id="pyf_rentalSection" style="display:none">
         <div class="formgrid">
           <div class="field"><label>Profesional (alquiler de espacio)</label>
@@ -6588,8 +6763,19 @@ function refreshPaymentTypeOptions(){
 }
 function togglePaymentCategory(){
   const cat = document.getElementById('pyf_category').value;
-  document.getElementById('pyf_patientSection').style.display = cat==='alquiler'? 'none':'block';
+  // "Otro ingreso" no cuelga de nadie: una charla, un taller a una empresa o
+  // cualquier entrada que no venga de un paciente ni de un profesional. Antes
+  // no había dónde anotarla y el formulario exigía elegir un paciente.
+  const esOtro = cat === 'otro';
+  document.getElementById('pyf_patientSection').style.display =
+    (cat==='alquiler' || esOtro)? 'none':'block';
   document.getElementById('pyf_rentalSection').style.display = cat==='alquiler'? 'block':'none';
+  const otroWrap = document.getElementById('pyf_otroSection');
+  if(otroWrap) otroWrap.style.display = esOtro? 'block':'none';
+  if(esOtro){
+    const c = document.getElementById('pyf_otroConcepto');
+    if(c && !c.value) c.focus();
+  }
   if(cat==='colegio'){
     document.getElementById('pyf_patientFilter').placeholder = 'Buscar paciente de colegio por nombre o DNI…';
     document.getElementById('pyf_patientFilter').value = '';
@@ -6600,6 +6786,32 @@ function togglePaymentCategory(){
   }
   refreshPaymentTypeOptions();
 }
+/* Un ingreso del centro que no viene de un paciente: una charla, un taller a
+   una empresa, la venta de un material. No cuelga de nadie, así que no pide
+   elegir paciente ni profesional. */
+async function guardarOtroIngreso(){
+  const concepto = (document.getElementById('pyf_otroConcepto')||{}).value?.trim() || '';
+  const monto    = redondear(Number((document.getElementById('pyf_otroMonto')||{}).value) || 0);
+  const fecha    = (document.getElementById('pyf_otroFecha')||{}).value || todayISO();
+  const metodo   = (document.getElementById('pyf_otroMetodo')||{}).value || 'Efectivo';
+
+  if(!concepto){ alert('Escribe de qué es el ingreso.'); return; }
+  if(!(monto > 0)){ alert('El monto tiene que ser mayor que cero.'); return; }
+
+  DB.payments.push({
+    id: uid(), patientId: '', date: fecha,
+    time: new Date().toLocaleTimeString('es-PE',{hour:'2-digit',minute:'2-digit'}),
+    amount: monto, concept: concepto, method: metodo, paymentType: 'otro',
+  });
+  const ok = await setColl('payments', DB.payments);
+  showToast(ok? `Ingreso de ${fmtMoney(monto)} registrado: ${concepto}.`
+              : 'No se pudo guardar, reintentando…', ok);
+  ['pyf_otroConcepto','pyf_otroMonto'].forEach(i=>{
+    const el = document.getElementById(i); if(el) el.value = '';
+  });
+  renderPanel();
+}
+
 function fillRentalFromProfessional(){
   const sel = document.getElementById('pyf_rentalProf');
   const opt = sel.options[sel.selectedIndex];
@@ -7562,7 +7774,8 @@ function viewFinanzas(){
     Math.round((cobradoPacientesMes - ingresoProfesionales)*100)/100);
   const gastos = gastosDelMes(mesActual);
   const gastosFijos = gastos.total;
-  const ingresoTotal = ingresoProfesionales+ingresoProductos;
+  const otrosIngresos = totalOtrosIngresos(mesActual);
+  const ingresoTotal = ingresoProfesionales+ingresoProductos+otrosIngresos;
   const margen = ingresoTotal-gastosFijos;
   const maxBar = Math.max(ingresoTotal, gastosFijos, 1);
 
@@ -7610,6 +7823,7 @@ function viewFinanzas(){
           <tr><td style="color:var(--muted)">− Parte de los profesionales</td><td style="text-align:right;color:var(--muted)">−${fmtMoney(parteProfesionales)}</td></tr>
           <tr style="border-top:2px solid var(--line)"><td><b>= Ingreso del centro</b></td><td style="text-align:right"><b>${fmtMoney(ingresoProfesionales)}</b></td></tr>
           <tr><td>+ Productos adicionales</td><td style="text-align:right">${fmtMoney(ingresoProductos)}</td></tr>
+          ${otrosIngresos>0? `<tr><td>+ Otros ingresos (charlas, talleres, empresas)</td><td style="text-align:right">${fmtMoney(otrosIngresos)}</td></tr>`:""}
         </table>
         <p class="hint"><b>Por eso Pagos y Finanzas dan números distintos, y los dos están bien:</b>
           en <b>Pagos</b> ves todo el dinero que entró por recepción (${fmtMoney(cobradoPacientesMes)} este mes);
@@ -9876,7 +10090,8 @@ function cascadaDelMes(mes){
   const ingresoCentro = sumCenterIncome(porProf);
   const ingresoProductos = DB.products.reduce(
     (s,pr)=>s+((Number(pr.price||0)-Number(pr.cost||0))*Number(pr.monthlyUnits||0)), 0);
-  const entra = redondear(ingresoCentro + ingresoProductos);
+  const otrosIngresos = totalOtrosIngresos(mes);
+  const entra = redondear(ingresoCentro + ingresoProductos + otrosIngresos);
   const g = gastosDelMes(mes);
   const deudasCentro = cuotasDePrestamosEnMes(mes, esDelConsultorio);
   const queda = redondear(entra - g.total - deudasCentro.total);
@@ -9896,7 +10111,7 @@ function cascadaDelMes(mes){
   const apoyo = redondear(extras + cobros.pendiente + junta.recibo);
 
   return {
-    mes, entra, ingresoCentro, ingresoProductos, gastosCentro: g,
+    mes, entra, ingresoCentro, ingresoProductos, otrosIngresos, gastosCentro: g,
     deudasCentro, queda,
     gastosCasa, porPagarCasa: r.porPagar, deudasCasa, junta,
     compromisoCasa, disponible, libre,
@@ -10294,7 +10509,9 @@ function bloqueCascada(mes, verPersonal){
         <h4 style="margin:0 0 6px">1 · El consultorio</h4>
         <table>
           ${fila('Ingreso del centro este mes', c.ingresoCentro)}
-          ${c.ingresoProductos>0? fila('Productos adicionales', c.ingresoProductos) : ''}
+          ${c.ingresoProductos>0? fila("Productos adicionales", c.ingresoProductos) : ""}
+          ${c.otrosIngresos>0? fila("Otros ingresos (charlas, talleres)", c.otrosIngresos) : ""}
+          ${c.otrosIngresos>0? fila("Otros ingresos (charlas, talleres)", c.otrosIngresos) : ""}
           ${fila('Gastos fijos del centro', c.gastosCentro.fijos, '−', true)}
           ${fila('Gastos variables del mes', c.gastosCentro.variables, '−', true)}
           ${fila('Cuotas de deudas del consultorio', c.deudasCentro.total, '−', true)}
