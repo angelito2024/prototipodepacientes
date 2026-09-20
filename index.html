@@ -2102,6 +2102,17 @@ function toggleForm(id){
       if(typeof toggleTallerBilling==='function') toggleTallerBilling();
     }
   }
+
+  // Al abrir un formulario hay que VERLO. Varios viven debajo de avisos y
+  // cuadros de control, así que el botón parecía no hacer nada: se abría
+  // fuera de la pantalla. Al cerrarlo no se mueve nada.
+  if(el.classList.contains('open')){
+    setTimeout(()=>{
+      el.scrollIntoView({block:'start', behavior:'smooth'});
+      const primero = el.querySelector('input:not([type=hidden]), select, textarea');
+      if(primero) primero.focus({preventScroll:true});
+    }, 40);
+  }
 }
 
 /* ===================== UTIL ===================== */
@@ -7816,7 +7827,25 @@ function viewFinanzas(){
 
   return `
     <div class="sectiontitle"><h2>Finanzas — ${mesActual}</h2>
-      <button class="btn secondary" onclick="exportExpensesCSV()">Exportar gastos CSV</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn" onclick="toggleForm('expForm')">+ Agregar gasto</button>
+        <button class="btn secondary" onclick="exportExpensesCSV()">Exportar gastos CSV</button>
+      </div>
+    </div>
+    <div class="formpanel" id="expForm">
+      <div class="formgrid">
+        <div class="field"><label>Nombre del gasto</label><input id="ef_name" placeholder="Alquiler, papel higiénico, jabón, prueba WISC…"></div>
+        <div class="field"><label>Categoría</label>
+          <select id="ef_category">
+            <option>Alquiler</option><option>Servicios</option><option>Insumos y limpieza</option><option>Útiles de oficina</option><option>Materiales / pruebas psicológicas</option><option>Publicidad</option><option>Mantenimiento</option><option>Pago a profesionales</option><option>Otro</option>
+          </select>
+        </div>
+        <div class="field"><label>Monto (S/)</label><input type="number" id="ef_amount"></div>
+        <div class="field"><label>Fecha de pago</label><input type="date" id="ef_date" value="${todayISO()}"></div>
+        <div class="field"><label>Tipo</label><select id="ef_recurring"><option value="true">Mensual fijo</option><option value="false">Variable / único</option></select></div>
+      </div>
+      <button class="btn" onclick="saveExpense()">Guardar gasto</button>
+      <button class="btn secondary" onclick="toggleForm('expForm')">Cancelar</button>
     </div>
     ${(!personalConfig().pinEnabled || personalDesbloqueado)? bloqueDuplicadosInternos()+bloqueDuplicados(mesActual) : ""}
     ${bloqueCascada(mesActual, !personalConfig().pinEnabled || personalDesbloqueado)}
@@ -7855,21 +7884,6 @@ function viewFinanzas(){
       <button class="btn" onclick="toggleForm('expForm')">+ Agregar gasto</button>
     </div>
     <p class="hint">Los pagos a profesionales por comisión se registran aquí como referencia, pero no se restan del margen porque el ingreso del centro ya se calculó neto (solo su parte). Sí se restan el alquiler, servicios, materiales y otros gastos reales del centro.</p>
-    <div class="formpanel" id="expForm">
-      <div class="formgrid">
-        <div class="field"><label>Nombre del gasto</label><input id="ef_name" placeholder="Alquiler, papel higiénico, jabón, prueba WISC…"></div>
-        <div class="field"><label>Categoría</label>
-          <select id="ef_category">
-            <option>Alquiler</option><option>Servicios</option><option>Insumos y limpieza</option><option>Útiles de oficina</option><option>Materiales / pruebas psicológicas</option><option>Publicidad</option><option>Mantenimiento</option><option>Pago a profesionales</option><option>Otro</option>
-          </select>
-        </div>
-        <div class="field"><label>Monto (S/)</label><input type="number" id="ef_amount"></div>
-        <div class="field"><label>Fecha de pago</label><input type="date" id="ef_date" value="${todayISO()}"></div>
-        <div class="field"><label>Tipo</label><select id="ef_recurring"><option value="true">Mensual fijo</option><option value="false">Variable / único</option></select></div>
-      </div>
-      <button class="btn" onclick="saveExpense()">Guardar gasto</button>
-      <button class="btn secondary" onclick="toggleForm('expForm')">Cancelar</button>
-    </div>
     <h3 style="margin-top:22px">Gastos fijos <span class="hint" style="font-weight:400">— ${fmtMoney(gastos.fijos)} al mes</span></h3>
     <p class="hint">Los que se repiten todos los meses: alquiler, internet, luz y agua. Pesan en el margen de cada mes.</p>
     <div class="tablewrap" style="margin-bottom:18px">
@@ -10748,6 +10762,46 @@ function chipVinculo(e){
   return '';
 }
 
+/* El formulario de un movimiento personal. Se separó de la vista para
+   poder ponerlo ARRIBA, antes de los avisos: al entrar a la pestaña lo
+   primero que se necesita es anotar, no leer. */
+function formularioPersonal(){
+  return `
+      <div class="formgrid">
+        <div class="field"><label>Tipo</label>
+          <select id="pn_tipo" onchange="togglePersonalCampos()">
+            <option value="gasto">Gasto</option><option value="ingreso">Ingreso</option>
+          </select>
+        </div>
+        <div class="field"><label>¿Fijo o variable?</label>
+          <select id="pn_clase" onchange="togglePersonalCampos()">
+            <option value="fijo">Fijo (se repite cada mes)</option>
+            <option value="variable">Variable (una vez)</option>
+          </select>
+        </div>
+        <div class="field" id="pn_prestamoWrap" style="display:none;grid-column:1/-1">
+          <label>¿Este dinero es tuyo o te lo prestaron?</label>
+          <select id="pn_origen" onchange="togglePersonalCampos()">
+            <option value="propio">Es mío — sueldo, honorarios, un trabajo</option>
+            <option value="prestamo">Me lo prestaron — lo tengo que devolver</option>
+          </select>
+          <p class="hint" style="margin-top:3px" id="pn_origenHint"></p>
+        </div>
+        <div class="field"><label>Nombre</label><input id="pn_name" placeholder="Alquiler, luz, mercado, sueldo…"></div>
+        <div class="field"><label>Categoría</label><select id="pn_category"></select></div>
+        <div class="field"><label>Monto (S/)</label><input type="number" id="pn_amount"></div>
+        <div class="field" id="pn_paidWrap"><label id="pn_paidLabel">Fecha de pago</label><input type="date" id="pn_paidDate">
+          <p class="hint" style="margin-top:3px" id="pn_paidHint"></p>
+        </div>
+        <div class="field" id="pn_dateWrap" style="display:none"><label id="pn_dateLabel">Fecha</label><input type="date" id="pn_date" value="${todayISO()}">
+          <p class="hint" style="margin-top:3px" id="pn_dateHint"></p>
+        </div>
+        <div class="field" style="grid-column:1/-1"><label>Nota (opcional)</label><input id="pn_notes" placeholder="Detalle, número de cuenta, a quién se le paga…"></div>
+      </div>
+      <button class="btn" onclick="savePersonal()">Guardar</button>
+      <button class="btn secondary" onclick="cancelPersonalEdit()">Cancelar</button>
+`;
+}
 function viewPersonal(){
   const cfg = personalConfig();
   if(cfg.pinEnabled && !personalDesbloqueado) return vistaPersonalBloqueada();
@@ -10817,6 +10871,14 @@ function viewPersonal(){
     </div>
     <p class="hint" style="margin-bottom:14px">Tu dinero personal, separado del dinero del centro. Nada de lo que registres aquí entra en Finanzas ni en los reportes del centro.</p>
 
+    <!-- El formulario va ARRIBA: al entrar a esta pestaña lo primero que se
+         necesita es anotar un movimiento, no leer avisos. Antes quedaba
+         debajo de la cascada y los duplicados, y el botón parecía no hacer
+         nada porque el formulario se abría fuera de la pantalla. -->
+    <div class="formpanel" id="personalForm">
+      ${formularioPersonal()}
+    </div>
+
     ${bloqueAvisos}
     ${bloqueAvisosPersonales()}
     ${bloqueDuplicadosInternos()}
@@ -10831,41 +10893,6 @@ function viewPersonal(){
       <div class="kpi ${r.porPagar>0?'alert':'ok'}"><div class="num">${fmtMoney(r.porPagar)}</div><div class="label">Aún por pagar${r.pagadoGastoFijo>0? ` (ya diste ${fmtMoney(r.pagadoGastoFijo)})`:''}</div></div>
     </div>
 
-    <div class="formpanel" id="personalForm">
-      <div class="formgrid">
-        <div class="field"><label>Tipo</label>
-          <select id="pn_tipo" onchange="togglePersonalCampos()">
-            <option value="gasto">Gasto</option><option value="ingreso">Ingreso</option>
-          </select>
-        </div>
-        <div class="field"><label>¿Fijo o variable?</label>
-          <select id="pn_clase" onchange="togglePersonalCampos()">
-            <option value="fijo">Fijo (se repite cada mes)</option>
-            <option value="variable">Variable (una vez)</option>
-          </select>
-        </div>
-        <div class="field" id="pn_prestamoWrap" style="display:none;grid-column:1/-1">
-          <label>¿Este dinero es tuyo o te lo prestaron?</label>
-          <select id="pn_origen" onchange="togglePersonalCampos()">
-            <option value="propio">Es mío — sueldo, honorarios, un trabajo</option>
-            <option value="prestamo">Me lo prestaron — lo tengo que devolver</option>
-          </select>
-          <p class="hint" style="margin-top:3px" id="pn_origenHint"></p>
-        </div>
-        <div class="field"><label>Nombre</label><input id="pn_name" placeholder="Alquiler, luz, mercado, sueldo…"></div>
-        <div class="field"><label>Categoría</label><select id="pn_category"></select></div>
-        <div class="field"><label>Monto (S/)</label><input type="number" id="pn_amount"></div>
-        <div class="field" id="pn_paidWrap"><label id="pn_paidLabel">Fecha de pago</label><input type="date" id="pn_paidDate">
-          <p class="hint" style="margin-top:3px" id="pn_paidHint"></p>
-        </div>
-        <div class="field" id="pn_dateWrap" style="display:none"><label id="pn_dateLabel">Fecha</label><input type="date" id="pn_date" value="${todayISO()}">
-          <p class="hint" style="margin-top:3px" id="pn_dateHint"></p>
-        </div>
-        <div class="field" style="grid-column:1/-1"><label>Nota (opcional)</label><input id="pn_notes" placeholder="Detalle, número de cuenta, a quién se le paga…"></div>
-      </div>
-      <button class="btn" onclick="savePersonal()">Guardar</button>
-      <button class="btn secondary" onclick="cancelPersonalEdit()">Cancelar</button>
-    </div>
 
     <h3 style="margin-top:22px">Gastos fijos <span class="hint" style="font-weight:400">— ${fmtMoney(r.totalGastoFijo)} al mes</span></h3>
     <p class="hint">Se repiten cada mes. Puedes pagarlos de una vez o ir dando adelantos: la columna <b>Falta</b> dice cuánto queda por pagar. El mes que viene vuelven a aparecer en cero.</p>
