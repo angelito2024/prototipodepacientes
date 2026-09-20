@@ -42,6 +42,31 @@ final class PersonalConfig extends Repositorio
         ];
     }
 
+    /**
+     * Quita la clave de las cuentas personales.
+     *
+     * Hace falta porque esta clave no se puede recuperar: se guarda con hash
+     * y no hay forma de leerla. Quien olvida la suya se queda fuera de sus
+     * propias cuentas para siempre.
+     *
+     * Solo la puede quitar quien ya entró al panel con su usuario y
+     * contraseña, que es la puerta de verdad; esta es una segunda tranca
+     * para que alguien que pasa frente a la pantalla no vea sus finanzas.
+     */
+    public static function quitarPin(): bool
+    {
+        $usuarioId = Auth::duenioDeLoPersonal();
+        if ($usuarioId === null) {
+            return false;
+        }
+        Database::query(
+            'UPDATE personal_config SET pin_activo = 0, pin_hash = NULL WHERE usuario_id = ?',
+            [$usuarioId]
+        );
+        Auth::auditar('QUITAR_PIN_PERSONAL', $usuarioId, ['resultado' => 'ok'], 'personal_config');
+        return true;
+    }
+
     public function guardar(mixed $valor): void
     {
         if (!is_array($valor)) {

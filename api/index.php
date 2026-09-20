@@ -94,6 +94,17 @@ try {
                 Auth::exigir();
             }
             $c = Http::cuerpo();
+            // Quitar la clave olvidada. Solo puede hacerlo quien ya entró al
+            // panel con su usuario y contraseña: esa es la puerta de verdad,
+            // esta es una segunda tranca. Sin esto, olvidar la clave deja a
+            // alguien fuera de sus propias cuentas para siempre.
+            if (($c['quitar'] ?? false) === true) {
+                Auth::exigir();
+                if (!\Centro\Repos\PersonalConfig::quitarPin()) {
+                    Http::error('No se pudo quitar la clave.', 400);
+                }
+                Http::ok(['quitada' => true]);
+            }
             if (!\Centro\Repos\PersonalConfig::verificar((string) ($c['pin'] ?? ''))) {
                 Http::error('Clave incorrecta.', 401);
             }

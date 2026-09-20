@@ -9379,8 +9379,46 @@ function vistaPersonalBloqueada(){
       </div>
       <p id="personal_pin_error" class="hint" style="color:var(--alert);display:none">Clave incorrecta.</p>
       <button class="btn" style="margin-top:10px" onclick="desbloquearPersonal()">Entrar</button>
+      <p class="hint" style="margin-top:14px;padding-top:10px;border-top:1px solid var(--line)">
+        ¿No la recuerdas? No se puede recuperar: se guarda cifrada y nadie puede leerla.
+        Pero como ya entraste al panel con tu usuario y contraseña, puedes
+        <button type="button" class="linkbtn" onclick="quitarClavePersonal()">quitar esta clave</button>
+        y volver a ponerla después. <b>No se pierde ningún dato.</b></p>
     </div>`;
 }
+/* Quitar la clave de cuentas personales cuando se olvidó. No se puede
+   recuperar —está cifrada— así que la única salida es quitarla. Lo permite
+   solo quien ya entró al panel con su usuario y contraseña. */
+async function quitarClavePersonal(){
+  if(!confirm('Se va a quitar la clave de Cuentas personales.\n\n'
+    + 'No se borra ningún dato: tus ingresos, gastos, préstamos y juntas quedan como están.\n'
+    + 'Después puedes poner una nueva desde el botón 🔒 Clave.\n\n¿Continuar?')) return;
+
+  if(STORAGE_MODE === 'api'){
+    try{
+      const r = await fetch(`${API_URL}?accion=personal_pin`, {
+        method:'POST', credentials:'same-origin',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({quitar: true}),
+      });
+      const d = await r.json();
+      if(!r.ok || !d.ok){
+        alert(d.error || 'No se pudo quitar la clave.');
+        return;
+      }
+    }catch(e){
+      alert('No se pudo contactar con el servidor.');
+      return;
+    }
+  }
+  DB.personalConfig = {pinEnabled:false, pin:''};
+  if(STORAGE_MODE !== 'api') await setColl('personalConfig', DB.personalConfig);
+  personalDesbloqueado = true;
+  showToast('Clave quitada. Ponle una nueva cuando quieras, desde 🔒 Clave.');
+  renderTabs();
+  renderPanel();
+}
+
 async function desbloquearPersonal(){
   const val = document.getElementById('personal_pin_input').value;
   const errEl = document.getElementById('personal_pin_error');
