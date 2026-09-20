@@ -4725,7 +4725,15 @@ function viewProfesionales(){
   const filteredProfs = filterByActive(DB.professionals, 'profesionales');
   const rows = filteredProfs.map(pr=>{
     const proxCitas = DB.appointments.filter(a=>a.professionalId===pr.id && a.date>=todayISO() && a.date<=fechaLocalISO(in7) && a.status!=='Cancelada');
-    const carga = proxCitas.length>=15? '<span class="chip alert">Sobrecargada</span>' : (proxCitas.length>=8? '<span class="chip warn">Ocupada</span>' : '<span class="chip ok">Disponible</span>');
+    // La carga se mide contra SU horario, no contra un número fijo: ocho
+    // citas son muchas para quien atiende dos días y pocas para quien
+    // atiende todos.
+    const ocup = ocupacionDe(pr.id, todayISO(), fechaLocalISO(in7));
+    const carga = ocup.cupos === 0
+      ? '<span class="chip neutral">Sin horario cargado</span>'
+      : (ocup.pct >= 85 ? '<span class="chip alert">Sobrecargada</span>'
+        : (ocup.pct >= 60 ? '<span class="chip warn">Ocupada</span>'
+                          : '<span class="chip ok">Disponible</span>'));
     const rentalModeLabel = {'Por paciente':'por paciente', 'Por dia':'por día', 'Mensual':'mensual'}[pr.roomRentalMode||'Por paciente'];
     const rentalRate = Number(pr.roomRentalRate ?? 10);
     const modelChip = pr.paymentModel==='Comisión'
@@ -4749,7 +4757,7 @@ function viewProfesionales(){
       </td>
       <td>${modelChip}${pr.paymentModel==='Alquiler de espacio'?`<span class="sub">Este mes: ${usosMesRegistros.length} registro(s) — ${fmtMoney(usosMesMonto)}</span>`:''}</td>
       <td>${pr.schedule||'—'}${pr.weeklySchedule? `<span class="sub">${diasDeAtencionResumidos(pr)}</span>`:''}</td>
-      <td style="white-space:nowrap">${proxCitas.length} citas<span class="sub">${carga}</span></td>
+      <td style="white-space:nowrap">${proxCitas.length} citas<span class="sub">${carga}</span>${ocup.cupos>0? `<span class="sub">${ocup.libres} de ${ocup.cupos} horas libres</span>`:""}</td>
       <td style="white-space:nowrap">
         ${deudaProf>0? `<b style="color:var(--alert)">Le debes ${fmtMoney(deudaProf)}</b>` : '<span class="chip ok">Al día</span>'}
         ${pr.paymentModel==='Comisión'
@@ -4783,7 +4791,12 @@ function viewProfesionales(){
         <button class="btn" onclick="toggleForm('profForm')">+ Nuevo profesional</button>
       </div>
     </div>
-    <p class="hint">La disponibilidad se calcula según sus citas en los próximos 7 días: menos de 8 = disponible, 8-14 = ocupada, 15+ = sobrecargada. El monto "sugerido" se calcula automáticamente sumando sus atenciones completadas desde la última vez que se le pagó.</p>
+    <p class="hint">La disponibilidad se mide contra <b>su propio horario</b> de los próximos 7 días, no
+      contra un número fijo: cuenta las horas que tiene cargadas en su ficha, divide entre la duración
+      de la sesión y compara con las citas ya agendadas. Menos del 60% ocupado = disponible, 60–85% =
+      ocupada, más de 85% = sobrecargada. Cuentan <b>todas</b> las citas que no estén canceladas —
+      atendidas y por venir—, porque una hora reservada no está libre aunque la sesión todavía no ocurra.
+      Si un profesional no tiene horario cargado, no se puede calcular y se avisa.</p>
     <div class="formpanel" id="profForm">
       <div class="formgrid">
         <div class="field" style="grid-column:1/-1"><label>Nombre</label><input id="prf_name"></div>
@@ -11618,11 +11631,84 @@ function tarifaTipicaDePaciente(){
   return n>0? n : 50;
 }
 
+/* ===== Cuántas sesiones caben de verdad =====
+   Antes el panel daba por libre cualquier día de lunes a sábado y contaba
+   la carga con umbrales fijos (8 citas = ocupada, 15 = sobrecargada), sin
+   mirar el horario real del profesional ni cuánto dura una sesión. Con eso
+   no se puede saber cuántas horas quedan libres, que es justo lo que hace
+   falta para decidir si alquilar el consultorio.
+
+   El horario semanal ya estaba guardado —día, hora de inicio y de fin—;
+   solo no se usaba para esto. */
+function minutosDelDia(horario){
+  if(!horario || !horario.active) return 0;
+  const aMin = h => {
+    const [hh, mm] = String(h||'').split(':').map(Number);
+    return (isFinite(hh)? hh : 0) * 60 + (isFinite(mm)? mm : 0);
+  };
+  return Math.max(0, aMin(horario.end || '18:00') - aMin(horario.start || '09:00'));
+}
+/* Los cupos que entran en un rango, según el horario del profesional. */
+function capacidadDe(pr, desde, hasta){
+  const dura = Math.max(15, Number((DB.centerInfo||{}).sessionMinutes || 60));
+  const sched = pr && pr.weeklySchedule;
+  let minutos = 0, dias = 0;
+  const d = new Date(desde + 'T00:00:00');
+  const fin = new Date(hasta + 'T00:00:00');
+  while(d <= fin){
+    const clave = JS_DAY_TO_KEY[d.getDay()];
+    // Sin horario configurado se asume de lunes a sábado, como antes; con
+    // horario, manda el horario.
+    const m = sched ? minutosDelDia(sched[clave])
+                    : (d.getDay() !== 0 ? 8*60 : 0);
+    if(m > 0) dias++;
+    minutos += m;
+    d.setDate(d.getDate() + 1);
+  }
+  return {dias, horas: redondear(minutos/60), cupos: Math.floor(minutos/dura), duracion: dura};
+}
+
+/* Cómo está de lleno el consultorio en un rango: cuántas citas hay agendadas
+   contra cuántas caben. Cuenta TODAS las que ocupan una hora —atendidas y
+   por venir—, porque una hora reservada no está libre aunque falte. */
+function ocupacionDe(prId, desde, hasta){
+  const pr = DB.professionals.find(p=>p.id===prId);
+  const cap = capacidadDe(pr, desde, hasta);
+  const citas = DB.appointments.filter(a=>
+    a.professionalId===prId && a.date>=desde && a.date<=hasta && a.status!=='Cancelada');
+  const atendidas = citas.filter(a=>a.status==='Completada').length;
+  const porVenir  = citas.length - atendidas;
+  const pct = cap.cupos>0 ? Math.round(citas.length / cap.cupos * 100) : 0;
+  return {...cap, ocupadas: citas.length, atendidas, porVenir,
+          libres: Math.max(0, cap.cupos - citas.length), pct};
+}
+
 function equilibrioDelMes(mes){
   const casc = cascadaDelMes(mes);
   const porProf = centerIncomeByProfessional(mes+'-01', mes+'-31');
+  // OJO: esto son las sesiones que CUBREN LOS PAGOS del mes, no las que se
+  // atendieron. Un paquete pagado por adelantado suma sus diez el día que se
+  // cobra. Es lo correcto para el dinero, pero no para la agenda; por eso
+  // abajo se cuentan aparte las atendidas y las que están por venir.
   let sesiones = 0;
   Object.values(porProf).forEach(x=> sesiones += x.sessions);
+
+  const desdeMes = mes+'-01';
+  const hastaMes = fechaLocalISO(new Date(Number(mes.slice(0,4)), Number(mes.slice(5,7)), 0));
+  const citasMes = DB.appointments.filter(a=>
+    a.date>=desdeMes && a.date<=hastaMes && a.status!=='Cancelada');
+  const atendidas = citasMes.filter(a=>a.status==='Completada').length;
+  const agendadas = citasMes.length;
+
+  // La capacidad real del centro: la suma de lo que cabe en el horario de
+  // cada profesional activo.
+  const activos = DB.professionals.filter(p=>p.active!==false);
+  const cap = activos.reduce((acc,pr)=>{
+    const o = ocupacionDe(pr.id, desdeMes, hastaMes);
+    return {cupos: acc.cupos+o.cupos, horas: acc.horas+o.horas,
+            ocupadas: acc.ocupadas+o.ocupadas, libres: acc.libres+o.libres};
+  }, {cupos:0, horas:0, ocupadas:0, libres:0});
+  cap.pct = cap.cupos>0? Math.round(cap.ocupadas/cap.cupos*100) : 0;
 
   const ingreso = casc.entra;
   // El consultorio tiene que cubrir sus gastos Y las deudas que se pidieron
@@ -11654,6 +11740,7 @@ function equilibrioDelMes(mes){
 
   return {
     mes, sesiones, ingreso, gasto, porSesion, dias, tarifa, alquiler,
+    atendidas, agendadas, cap,
     necesarias,
     faltan: Math.max(0, necesarias - sesiones),
     resultado,
@@ -11795,6 +11882,43 @@ function bloqueEquilibrio(mes, verPersonal){
       <div class="kpi"><div class="num">${e.necesarias}</div><div class="label">Sesiones al mes para no perder</div></div>
       <div class="kpi ${e.porDiaActual>=e.porDia?'ok':'alert'}">
         <div class="num">${e.porDia.toFixed(1)}</div><div class="label">Pacientes por día que necesitas (tienes ${e.porDiaActual.toFixed(1)})</div></div>
+    </div>
+
+    <div class="row" style="margin-bottom:14px">
+      <div class="col">
+        <h4 style="margin:0 0 6px">Las tres cifras, que no son la misma</h4>
+        <table>
+          <tr><td>Sesiones <b>atendidas</b> este mes</td>
+              <td style="text-align:right"><b>${e.atendidas}</b></td></tr>
+          <tr><td>Sesiones <b>agendadas</b> (atendidas + por venir)</td>
+              <td style="text-align:right"><b>${e.agendadas}</b></td></tr>
+          <tr><td>Sesiones que <b>cubren los pagos</b> del mes</td>
+              <td style="text-align:right"><b>${e.sesiones}</b></td></tr>
+        </table>
+        <p class="hint" style="margin-top:6px">El equilibrio se mide con la última: es la del dinero.
+          Un paquete pagado por adelantado suma sus sesiones el día que se cobra, aunque se atiendan
+          después. Las otras dos son de la agenda.</p>
+      </div>
+      <div class="col">
+        <h4 style="margin:0 0 6px">Qué tan lleno está el consultorio</h4>
+        ${e.cap.cupos>0? `
+        <table>
+          <tr><td>Horas de atención disponibles en el mes</td>
+              <td style="text-align:right"><b>${e.cap.horas}</b> h</td></tr>
+          <tr><td>Caben</td><td style="text-align:right"><b>${e.cap.cupos}</b> sesiones</td></tr>
+          <tr><td>Agendadas</td><td style="text-align:right"><b>${e.cap.ocupadas}</b></td></tr>
+          <tr style="border-top:2px solid var(--line)"><td><b>Quedan libres</b></td>
+              <td style="text-align:right"><b style="font-size:17px">${e.cap.libres}</b></td></tr>
+        </table>
+        <div class="barwrap" style="height:14px;margin-top:8px">
+          <div class="bar" style="width:${Math.min(100, e.cap.pct)}%"></div></div>
+        <p class="hint" style="margin-top:6px">Ocupado al <b>${e.cap.pct}%</b> del horario cargado en
+          las fichas. ${e.cap.libres > e.cap.ocupadas*3
+            ? 'Hay mucho tiempo sin usar: es la hora que puedes alquilar.'
+            : ''}</p>`
+        : `<p class="hint">Para calcularlo hace falta el horario semanal de cada profesional.
+             Cárgalo en su ficha, en <b>Disponibilidad</b>.</p>`}
+      </div>
     </div>
 
     <h4 style="margin:0 0 6px">Cuánto te falta para el punto de equilibrio</h4>
