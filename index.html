@@ -1,4 +1,10 @@
-<!DOCTYPE html>
+      tipo === 'ingreso'
+        ? 'Nueva categoría de INGRESO — dinero que ENTRA
+
+Ej: "Sueldo de mi esposa", "Alquiler del depa", "Comisiones"'
+        : 'Nueva categoría de GASTO — dinero que SALE
+
+Ej: "Mascotas", "Gimnasio", "Regalos"', '') || '').trim();<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8">
@@ -9224,8 +9230,8 @@ function movimientosConCategoria(tipo, nombre){
 async function agregarCategoriaPersonal(tipo){
   const nombre = (prompt(
       tipo === 'ingreso'
-        ? 'Nueva categoría de ingreso\n\nEj: "Sueldo de mi esposa", "Alquiler del depa", "Comisiones"'
-        : 'Nueva categoría de gasto\n\nEj: "Mascotas", "Gimnasio", "Regalos"', '') || '').trim();
+        ? 'Nueva categoría de INGRESO — dinero que ENTRA\n\nEj: "Sueldo de mi esposa", "Alquiler del depa", "Comisiones"'
+        : 'Nueva categoría de GASTO — dinero que SALE\n\nEj: "Mascotas", "Gimnasio", "Regalos"', '') || '').trim();
   if(!nombre) return;
   const lista = categoriasPersonales(tipo);
   if(lista.some(c => c.toLowerCase() === nombre.toLowerCase())){
@@ -9236,7 +9242,33 @@ async function agregarCategoriaPersonal(tipo){
   const otros = lista.filter(c => c.toLowerCase() === 'otro');
   const resto = lista.filter(c => c.toLowerCase() !== 'otro');
   await guardarCategoriasPersonales(tipo, [...resto, nombre, ...otros]);
-  showToast(`Categoría "${nombre}" agregada.`);
+  showToast(`"${nombre}" agregada a tus ${tipo==="ingreso"? "INGRESOS":"GASTOS"}.`);
+  refrescarTrasCambiarCategorias();
+}
+
+/* Pasar una categoría de la lista de gastos a la de ingresos o al revés.
+   Hace falta porque las dos columnas se parecen y es fácil agregar en la
+   que no era: sin esto habría que quitarla y volver a escribirla. */
+async function moverCategoriaPersonal(tipo, nombre){
+  const otro = tipo === 'ingreso' ? 'gasto' : 'ingreso';
+  const comoSeLlama = t => t === 'ingreso' ? 'ingresos' : 'gastos';
+  const destino = categoriasPersonales(otro);
+  if(destino.some(c => c.toLowerCase() === nombre.toLowerCase())){
+    alert(`"${nombre}" ya existe en la lista de ${comoSeLlama(otro)}.`);
+    return;
+  }
+  const usan = movimientosConCategoria(tipo, nombre);
+  if(!confirm(`"${nombre}" pasa de ${comoSeLlama(tipo)} a ${comoSeLlama(otro)}.`
+    + (usan.length? `\n\nOjo: ${usan.length} movimiento(s) de ${comoSeLlama(tipo)} la usan y `
+                    + `quedarán con una categoría que ya no está en su lista. Conviene cambiarles la categoría después.` : '')
+    + `\n\n¿Continuar?`)) return;
+
+  const origen = categoriasPersonales(tipo).filter(c => c !== nombre);
+  const otros = destino.filter(c => c.toLowerCase() === 'otro');
+  const resto = destino.filter(c => c.toLowerCase() !== 'otro');
+  await guardarCategoriasPersonales(tipo, origen);
+  await guardarCategoriasPersonales(otro, [...resto, nombre, ...otros]);
+  showToast(`"${nombre}" ahora está en ${comoSeLlama(otro)}.`);
   refrescarTrasCambiarCategorias();
 }
 
@@ -9337,20 +9369,25 @@ function renderCategoriasModal(){
 function cuerpoCategoriasPersonales(){
   const tabla = (tipo, titulo) => {
     const lista = categoriasPersonales(tipo);
-    return `
-      <div class="col">
-        <div class="sectiontitle" style="margin-bottom:6px">
-          <h4 style="margin:0">${titulo}</h4>
-          <button class="btn small" onclick="agregarCategoriaPersonal('${tipo}')">+ Agregar</button>
-        </div>
+      const esIngreso = tipo === 'ingreso';
+      const color = esIngreso ? 'var(--ok)' : 'var(--alert)';
+      return `
+      <div class="col" style="border-top:4px solid ${color};padding-top:10px">
+        <h4 style="margin:0 0 2px">${esIngreso? '↓ Dinero que ENTRA' : '↑ Dinero que SALE'}</h4>
+        <p class="hint" style="margin:0 0 8px">${titulo}</p>
+        <button class="btn small" style="margin-bottom:8px" onclick="agregarCategoriaPersonal('${tipo}')">
+          + Agregar categoría de ${esIngreso? 'INGRESO' : 'GASTO'}</button>
         <div class="tablewrap"><table>
           ${lista.map(c=>{
             const usan = movimientosConCategoria(tipo, c).length;
+            const esc = c.replace(/'/g,"\\'");
             return `<tr>
               <td>${c}<span class="sub">${usan? `${usan} movimiento(s)` : 'sin usar'}</span></td>
               <td style="white-space:nowrap">
-                <button class="btn small secondary" onclick="renombrarCategoriaPersonal('${tipo}','${c.replace(/'/g,"\\'")}')">Renombrar</button>
-                <button class="btn small danger" onclick="quitarCategoriaPersonal('${tipo}','${c.replace(/'/g,"\\'")}')">Quitar</button>
+                <button class="btn small secondary" onclick="renombrarCategoriaPersonal('${tipo}','${esc}')">Renombrar</button>
+                <button class="btn small secondary" title="Pasarla a la otra lista"
+                        onclick="moverCategoriaPersonal('${tipo}','${esc}')">${esIngreso? '→ a gastos' : '→ a ingresos'}</button>
+                <button class="btn small danger" onclick="quitarCategoriaPersonal('${tipo}','${esc}')">Quitar</button>
               </td></tr>`;
           }).join('')}
         </table></div>
@@ -10966,8 +11003,9 @@ function formularioPersonal(){
         <div class="field" id="pn_prestamoWrap" style="display:none;grid-column:1/-1">
           <label>¿Este dinero es tuyo o te lo prestaron?</label>
           <select id="pn_origen" onchange="togglePersonalCampos()">
-            <option value="propio">Es mío — sueldo, honorarios, un trabajo</option>
+            <option value="propio">Es mío — sueldo, honorarios, un trabajo, aporte de la casa</option>
             <option value="prestamo">Me lo prestaron — lo tengo que devolver</option>
+            <option value="devolucion">Me lo devolvieron — es un préstamo que yo hice</option>
           </select>
           <p class="hint" style="margin-top:3px" id="pn_origenHint"></p>
         </div>
@@ -11455,18 +11493,29 @@ function togglePersonalCampos(){
   const origen = (document.getElementById('pn_origen')||{}).value || 'propio';
   const hintOrigen = document.getElementById('pn_origenHint');
   if(hintOrigen){
-    hintOrigen.innerHTML = origen === 'prestamo'
-      ? 'Al guardar te llevo a <b>Préstamos</b> para anotar quién te lo prestó, en cuántos meses lo devuelves y con qué interés. Así no figura como si te sobrara.'
-      : 'Se suma a lo que tienes para cubrir tus gastos del mes.';
+    hintOrigen.innerHTML =
+      origen === 'prestamo'
+        ? 'Al guardar te llevo a <b>Préstamos</b> para anotar quién te lo prestó, en cuántos meses lo devuelves y con qué interés. Así no figura como si te sobrara.'
+      : origen === 'devolucion'
+        ? 'Al guardar te llevo a <b>Préstamos</b> para marcar la cuota que te pagaron. No es un ingreso nuevo: es plata tuya que vuelve, y la deuda de esa persona baja.'
+        : 'Se suma a lo que tienes para cubrir tus gastos del mes. Si viene de otra persona —el sueldo de tu esposa, por ejemplo— ponlo en el Nombre o créale su categoría.';
   }
+  // Ni un préstamo ni una devolución se anotan como ingreso: no hacen falta
+  // ni la clase ni la categoría, porque van a parar a Préstamos.
+  const vaAPrestamos = esIngreso && (origen === 'prestamo' || origen === 'devolucion');
   const camposDeIngreso = ['pn_clase','pn_category','pn_paidWrap','pn_dateWrap'];
   camposDeIngreso.forEach(id=>{
     const el = document.getElementById(id);
     if(!el) return;
     const caja = el.closest? (el.closest('.field') || el) : el;
-    if(esIngreso && origen === 'prestamo') caja.style.display = 'none';
+    if(vaAPrestamos) caja.style.display = 'none';
     else if(id !== 'pn_dateWrap' && id !== 'pn_paidWrap') caja.style.display = '';
   });
+  // Con una devolución el "nombre" es de quién viene la plata.
+  const lblNombre = document.querySelector('label[for="pn_name"]')
+                 || (document.getElementById('pn_name')||{}).closest?.('.field')?.querySelector('label');
+  if(lblNombre) lblNombre.textContent = origen === 'devolucion' ? '¿Quién te pagó?'
+                                      : (origen === 'prestamo' ? '¿Quién te prestó?' : 'Nombre');
 
   const cats = categoriasPersonales(tipo);
   const sel = document.getElementById('pn_category');
@@ -11508,6 +11557,33 @@ async function savePersonal(){
   // el panel diría que tienes plata de sobra cuando en realidad la debes.
   const tipoMov = document.getElementById('pn_tipo').value;
   const origen  = (document.getElementById('pn_origen')||{}).value || 'propio';
+
+  // Que te devuelvan un préstamo tampoco es un ingreso: es plata tuya que
+  // vuelve. Se marca la cuota en el préstamo que hiciste.
+  if(tipoMov === 'ingreso' && origen === 'devolucion'){
+    const quien = name.toLowerCase();
+    const suyos = prestamosPorDireccion('otorgado');
+    const p = suyos.find(x => String(x.receptor||'').toLowerCase().includes(quien)
+                           || quien.includes(String(x.receptor||'').toLowerCase()));
+    if(!p){
+      alert(`No encuentro un préstamo que le hayas hecho a "${name}".\n\n`
+        + (suyos.length
+            ? 'Los que tienes registrados son: ' + suyos.map(x=>x.receptor).join(', ') + '.'
+            : 'Todavía no tienes registrado ningún préstamo que hayas dado.')
+        + '\n\nRegístralo primero en Préstamos y después marca la cuota.');
+      return;
+    }
+    toggleForm('personalForm');
+    goTab('personal');
+    setTimeout(()=>{ verPrestamo(p.id); }, 120);
+    showToast(`Marca en el cronograma de ${p.receptor} la cuota que te pagó.`);
+    ['pn_name','pn_amount','pn_notes'].forEach(i=>{
+      const el = document.getElementById(i); if(el) el.value = '';
+    });
+    const sel = document.getElementById('pn_origen'); if(sel) sel.value = 'propio';
+    return;
+  }
+
   if(tipoMov === 'ingreso' && origen === 'prestamo'){
     // La nota se copia AHORA: más abajo se limpia el formulario, y el
     // temporizador la leería ya vacía.
