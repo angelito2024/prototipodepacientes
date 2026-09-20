@@ -1011,6 +1011,21 @@
   </div>
 </div>
 
+<div class="modalOverlay" id="categoriasModal">
+  <div class="receiptCard" style="max-width:720px">
+    <div style="padding:24px 26px">
+      <h2 style="margin-top:0">Tus categorías</h2>
+      <p class="hint" style="margin:0 0 14px">Cada quien gasta y cobra a su manera. Agrega las que
+        necesites —"Sueldo de mi esposa", "Mascotas", "Gimnasio"— y quita las que no uses.
+        <b>Quitar una categoría no borra ningún movimiento:</b> los que la usaban pasan a "Otro".</p>
+      <div id="categoriasContenido"></div>
+    </div>
+    <div class="receiptActions">
+      <button class="btn secondary" onclick="cerrarCategoriasPersonales()">Cerrar</button>
+    </div>
+  </div>
+</div>
+
 <div class="modalOverlay" id="rolModal">
   <div class="receiptCard" style="max-width:620px">
     <div style="padding:24px 26px">
@@ -9222,7 +9237,7 @@ async function agregarCategoriaPersonal(tipo){
   const resto = lista.filter(c => c.toLowerCase() !== 'otro');
   await guardarCategoriasPersonales(tipo, [...resto, nombre, ...otros]);
   showToast(`Categoría "${nombre}" agregada.`);
-  renderPanel();
+  refrescarTrasCambiarCategorias();
 }
 
 async function renombrarCategoriaPersonal(tipo, nombre){
@@ -9245,7 +9260,7 @@ async function renombrarCategoriaPersonal(tipo, nombre){
     await setColl('personalEntries', DB.personalEntries);
   }
   showToast(`Ahora se llama "${nuevo}".`);
-  renderPanel();
+  refrescarTrasCambiarCategorias();
 }
 
 async function quitarCategoriaPersonal(tipo, nombre){
@@ -9269,7 +9284,7 @@ async function quitarCategoriaPersonal(tipo, nombre){
   showToast(usan.length
     ? `"${nombre}" quitada. Sus ${usan.length} movimiento(s) pasaron a "${destino}".`
     : `"${nombre}" quitada.`);
-  renderPanel();
+  refrescarTrasCambiarCategorias();
 }
 
 async function restaurarCategoriasPersonales(tipo){
@@ -9279,12 +9294,47 @@ async function restaurarCategoriasPersonales(tipo){
   await guardarCategoriasPersonales(tipo,
     tipo === 'ingreso' ? [...PERSONAL_CAT_INGRESO_BASE] : [...PERSONAL_CAT_GASTO_BASE]);
   showToast('Categorías restauradas.');
-  renderPanel();
+  refrescarTrasCambiarCategorias();
 }
 
-/* El panel para administrarlas, dentro de Cuentas personales. */
-function bloqueCategoriasPersonales(){
-  if(!window._verCategorias) return '';
+/* Se administran en una ventana, no redibujando la pestaña: se llega aquí
+   desde el propio formulario —que es donde uno nota que le falta una— y
+   redibujar borraría lo que ya estaba escrito. */
+function abrirCategoriasPersonales(){
+  document.getElementById('categoriasModal').classList.add('open');
+  renderCategoriasModal();
+}
+function cerrarCategoriasPersonales(){
+  document.getElementById('categoriasModal').classList.remove('open');
+  // Al cerrar se refresca la pestaña para que las tablas muestren los
+  // nombres nuevos. Si el formulario está abierto, conserva lo escrito.
+  const form = document.getElementById('personalForm');
+  const abierto = form && form.classList.contains('open');
+  const guardado = abierto ? ['pn_tipo','pn_clase','pn_origen','pn_name','pn_category',
+                              'pn_amount','pn_paidDate','pn_date','pn_notes']
+    .reduce((a,id)=>{ const e=document.getElementById(id); if(e) a[id]=e.value; return a; }, {}) : null;
+  renderPanel();
+  if(guardado){
+    toggleForm('personalForm');
+    Object.entries(guardado).forEach(([id,v])=>{ const e=document.getElementById(id); if(e) e.value=v; });
+    togglePersonalCampos();
+    const cat = document.getElementById('pn_category');
+    if(cat && guardado.pn_category) cat.value = guardado.pn_category;
+  }
+}
+/* Tras cambiar una categoría se refresca la ventana y el desplegable del
+   formulario, sin tocar el resto de lo que se estaba escribiendo. */
+function refrescarTrasCambiarCategorias(){
+  renderCategoriasModal();
+  if(document.getElementById('pn_category')) togglePersonalCampos();
+}
+function renderCategoriasModal(){
+  const caja = document.getElementById('categoriasContenido');
+  if(caja) caja.innerHTML = cuerpoCategoriasPersonales();
+}
+
+/* El panel para administrarlas. */
+function cuerpoCategoriasPersonales(){
   const tabla = (tipo, titulo) => {
     const lista = categoriasPersonales(tipo);
     return `
@@ -9309,18 +9359,10 @@ function bloqueCategoriasPersonales(){
       </div>`;
   };
   return `
-  <div class="card" style="margin-bottom:16px">
-    <div class="sectiontitle"><h3 style="margin:0">Tus categorías</h3>
-      <button class="btn secondary" onclick="window._verCategorias=false; renderPanel();">Cerrar</button>
-    </div>
-    <p class="hint" style="margin-bottom:12px">Cada quien gasta y cobra a su manera. Agrega las que
-      necesites —"Sueldo de mi esposa", "Mascotas", "Gimnasio"— y quita las que no uses.
-      <b>Quitar una categoría no borra ningún movimiento:</b> los que la usaban pasan a "Otro".</p>
     <div class="row">
       ${tabla('ingreso','Categorías de ingreso')}
-      ${tabla('gasto','Categorías de gasto')}
-    </div>
-  </div>`;
+      ${tabla("gasto","Categorías de gasto")}
+    </div>`;
 }
 let personalDesbloqueado = false;   // dura solo mientras la pestaña esté abierta
 let editingPersonalId = null;
@@ -10930,7 +10972,15 @@ function formularioPersonal(){
           <p class="hint" style="margin-top:3px" id="pn_origenHint"></p>
         </div>
         <div class="field"><label>Nombre</label><input id="pn_name" placeholder="Alquiler, luz, mercado, sueldo…"></div>
-        <div class="field"><label>Categoría</label><select id="pn_category"></select></div>
+        <div class="field">
+          <label>Categoría
+            <button type="button" class="linkbtn" style="font-weight:400;font-size:12px;margin-left:6px"
+                    onclick="abrirCategoriasPersonales()">✏️ editar la lista</button>
+          </label>
+          <select id="pn_category"></select>
+          <p class="hint" style="margin-top:3px">¿No está la que necesitas? Agrégala desde
+            <b>editar la lista</b> — por ejemplo "Sueldo de mi esposa".</p>
+        </div>
         <div class="field"><label>Monto (S/)</label><input type="number" id="pn_amount"></div>
         <div class="field" id="pn_paidWrap"><label id="pn_paidLabel">Fecha de pago</label><input type="date" id="pn_paidDate">
           <p class="hint" style="margin-top:3px" id="pn_paidHint"></p>
@@ -11006,7 +11056,7 @@ function viewPersonal(){
     <div class="sectiontitle"><h2>Cuentas personales — ${mes}</h2>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn secondary" onclick="exportPersonalCSV()">Exportar CSV</button>
-        <button class="btn secondary" onclick="window._verCategorias=!window._verCategorias; renderPanel();">🏷️ Categorías</button>
+        <button class="btn secondary" onclick="abrirCategoriasPersonales()">🏷️ Categorías</button>
         <button class="btn secondary" onclick="openPersonalPinModal()">🔒 Clave</button>
         ${cfg.pinEnabled? `<button class="btn secondary" onclick="bloquearPersonal()">Bloquear</button>`:''}
         <button class="btn" onclick="toggleForm('personalForm')">+ Nuevo movimiento</button>
@@ -11018,7 +11068,7 @@ function viewPersonal(){
          necesita es anotar un movimiento, no leer avisos. Antes quedaba
          debajo de la cascada y los duplicados, y el botón parecía no hacer
          nada porque el formulario se abría fuera de la pantalla. -->
-    ${bloqueCategoriasPersonales()}
+    
 
     <div class="formpanel" id="personalForm">
       ${formularioPersonal()}
