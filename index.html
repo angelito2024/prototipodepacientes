@@ -10102,18 +10102,24 @@ function cascadaDelMes(mes){
   const deudasCasa = cuotasDePrestamosEnMes(mes, p => !esOtorgado(p) && !esDelConsultorio(p));
   const junta = juntaDelMes(mes);
   const compromisoCasa = redondear(gastosCasa + deudasCasa.total + junta.total);
-  const disponible = Math.max(0, queda);
+  // Tus ingresos —sueldo, honorarios, otros trabajos— ahora SÍ cuentan para
+  // cubrir lo de la casa, junto con lo que deje el consultorio. Antes iban
+  // aparte; Luis lo cambió porque en la práctica es con eso que paga.
+  const ingresosPropios = redondear(r.totalIngFijo + r.totalIngVar);
+  const delCentro = Math.max(0, queda);
+  const disponible = redondear(delCentro + ingresosPropios);
   const libre = redondear(disponible - compromisoCasa);
 
-  // --- Aparte: lo que no entra en la cascada ---
-  const extras = redondear(r.totalIngFijo + r.totalIngVar);
+  // --- Aparte: lo que todavía no está en la mano ---
+  const extras = ingresosPropios;
   const cobros = cuotasDePrestamosEnMes(mes, esOtorgado);
-  const apoyo = redondear(extras + cobros.pendiente + junta.recibo);
+  const apoyo = redondear(cobros.pendiente + junta.recibo);
 
   return {
     mes, entra, ingresoCentro, ingresoProductos, otrosIngresos, gastosCentro: g,
     deudasCentro, queda,
     gastosCasa, porPagarCasa: r.porPagar, deudasCasa, junta,
+    ingresosPropios, delCentro,
     compromisoCasa, disponible, libre,
     extras, cobros, apoyo,
     // El centro no llega a cubrir lo suyo: eso es lo primero que hay que ver.
@@ -10490,7 +10496,8 @@ function bloqueCascada(mes, verPersonal){
                 ? `Con lo que tienes aparte (${fmtMoney(c.apoyo)}) alcanzas a cubrirlo.`
                 : `Aun sumando lo que tienes aparte (${fmtMoney(c.apoyo)}), seguirían faltando ${fmtMoney(redondear(c.faltaCasa - c.apoyo))}.`)
             : 'No tienes nada registrado aparte para cubrirlo.'}</p>`
-    : `<p class="hint" style="margin-top:8px">Lo que queda después de pagar todo lo tuyo. ${c.extras>0? `Tus otros trabajos (${fmtMoney(c.extras)}) van aparte y no están contados aquí.`:''}</p>`;
+    : `<p class="hint" style="margin-top:8px">Lo que queda después de pagar todo lo tuyo,
+         contando lo que deja el consultorio${c.ingresosPropios>0? ` y tus ingresos (${fmtMoney(c.ingresosPropios)})`:''}.</p>`;
 
   const detalleDeuda = (d, vacio) => d.detalle.length
     ? d.detalle.map(({p,c:q})=>`<tr>
@@ -10530,7 +10537,8 @@ function bloqueCascada(mes, verPersonal){
         <p class="hint" style="margin-top:8px">El detalle de tus gastos personales está protegido con clave. Ábrelo en <b>Cuentas personales</b>.</p>
         ` : `
         <table>
-          ${fila('Te llega del consultorio', c.disponible)}
+          ${fila('Te llega del consultorio', c.delCentro)}
+          ${c.ingresosPropios>0? fila('Tus ingresos (sueldo, otros trabajos)', c.ingresosPropios) : ''}
           ${fila('Gastos personales del mes', c.gastosCasa, '−', true)}
           ${fila('Cuotas de tus préstamos', c.deudasCasa.total, '−', true)}
           ${c.junta.total>0? fila('Cuota de la junta', c.junta.total, '−', true) : ''}
@@ -10542,14 +10550,15 @@ function bloqueCascada(mes, verPersonal){
       </div>
     </div>
     ${verPersonal? `
-    <h4 style="margin:16px 0 6px">Aparte — no entra en la cuenta de arriba</h4>
+    ${(c.cobros.pendiente>0 || c.junta.recibo>0)? `
+    <h4 style="margin:16px 0 6px">Todavía no está en la mano</h4>
     <table>
-      ${fila('Ingresos de tus otros trabajos', c.extras)}
       ${c.cobros.pendiente>0? fila('Cuotas que te deben cobrar este mes', c.cobros.pendiente) : ''}
       ${c.junta.recibo>0? fila('Este mes te toca recibir la junta', c.junta.recibo) : ''}
-      ${total('= Con lo que cuentas aparte', c.apoyo, true)}
+      ${total('= Si te lo pagan, sumarías', c.apoyo, true)}
     </table>
-    <p class="hint" style="margin-top:8px">Tú pediste que lo personal se pague con lo que sobra del consultorio, así que esto se muestra al costado: es plata tuya, pero no la cuenta el reparto.</p>`:''}
+    <p class="hint" style="margin-top:8px">Esto no se cuenta arriba porque todavía depende de que te paguen.
+      Tu sueldo y tus otros trabajos sí están contados: van en el segundo nivel.</p>`:''}`:''}
   </div>`;
 }
 
@@ -10783,6 +10792,14 @@ function viewPersonal(){
             <option value="fijo">Fijo (se repite cada mes)</option>
             <option value="variable">Variable (una vez)</option>
           </select>
+        </div>
+        <div class="field" id="pn_prestamoWrap" style="display:none;grid-column:1/-1">
+          <label>¿Este dinero es tuyo o te lo prestaron?</label>
+          <select id="pn_origen" onchange="togglePersonalCampos()">
+            <option value="propio">Es mío — sueldo, honorarios, un trabajo</option>
+            <option value="prestamo">Me lo prestaron — lo tengo que devolver</option>
+          </select>
+          <p class="hint" style="margin-top:3px" id="pn_origenHint"></p>
         </div>
         <div class="field"><label>Nombre</label><input id="pn_name" placeholder="Alquiler, luz, mercado, sueldo…"></div>
         <div class="field"><label>Categoría</label><select id="pn_category"></select></div>
@@ -11157,6 +11174,27 @@ function togglePersonalCampos(){
   // pendiente. Al editar no se toca: mandaría lo que ya estaba guardado.
   const campoPago = document.getElementById('pn_paidDate');
   if(campoPago && !fijo && !editingPersonalId && !campoPago.value) campoPago.value = todayISO();
+  // Un dinero que te prestan NO es un ingreso: entra hoy pero hay que
+  // devolverlo. Si se anota como ingreso, las cuentas dicen que te sobra
+  // plata que en realidad debes.
+  const wrapOrigen = document.getElementById('pn_prestamoWrap');
+  if(wrapOrigen) wrapOrigen.style.display = esIngreso? '' : 'none';
+  const origen = (document.getElementById('pn_origen')||{}).value || 'propio';
+  const hintOrigen = document.getElementById('pn_origenHint');
+  if(hintOrigen){
+    hintOrigen.innerHTML = origen === 'prestamo'
+      ? 'Al guardar te llevo a <b>Préstamos</b> para anotar quién te lo prestó, en cuántos meses lo devuelves y con qué interés. Así no figura como si te sobrara.'
+      : 'Se suma a lo que tienes para cubrir tus gastos del mes.';
+  }
+  const camposDeIngreso = ['pn_clase','pn_category','pn_paidWrap','pn_dateWrap'];
+  camposDeIngreso.forEach(id=>{
+    const el = document.getElementById(id);
+    if(!el) return;
+    const caja = el.closest? (el.closest('.field') || el) : el;
+    if(esIngreso && origen === 'prestamo') caja.style.display = 'none';
+    else if(id !== 'pn_dateWrap' && id !== 'pn_paidWrap') caja.style.display = '';
+  });
+
   const cats = tipo==='ingreso'? PERSONAL_CAT_INGRESO : PERSONAL_CAT_GASTO;
   const sel = document.getElementById('pn_category');
   const previo = sel.value;
@@ -11192,6 +11230,34 @@ async function savePersonal(){
   if(!name){ alert('Ponle un nombre al movimiento.'); return; }
   const monto = Number(document.getElementById('pn_amount').value)||0;
   if(monto<=0){ alert('Ingresa un monto mayor a cero.'); return; }
+
+  // Un dinero prestado no se anota como ingreso: se anota como deuda. Si no,
+  // el panel diría que tienes plata de sobra cuando en realidad la debes.
+  const tipoMov = document.getElementById('pn_tipo').value;
+  const origen  = (document.getElementById('pn_origen')||{}).value || 'propio';
+  if(tipoMov === 'ingreso' && origen === 'prestamo'){
+    // La nota se copia AHORA: más abajo se limpia el formulario, y el
+    // temporizador la leería ya vacía.
+    const nota = (document.getElementById('pn_notes')||{}).value.trim();
+    toggleForm('personalForm');
+    nuevoPrestamo('recibido');
+    setTimeout(()=>{
+      const set = (i,v)=>{ const e=document.getElementById(i); if(e) e.value = v; };
+      set('pr_prestamista', name);
+      set('pr_capital', monto);
+      set('pr_destino', 'personal');
+      set('pr_notas', nota);
+      simularPrestamo();
+      const el = document.getElementById('pr_tasa');
+      if(el){ el.focus(); el.select(); }
+    }, 120);
+    showToast(`${fmtMoney(monto)} de ${name}: complétalo como préstamo — interés y en cuántos meses lo devuelves.`);
+    ['pn_name','pn_amount','pn_notes'].forEach(i=>{
+      const el = document.getElementById(i); if(el) el.value = '';
+    });
+    const sel = document.getElementById('pn_origen'); if(sel) sel.value = 'propio';
+    return;
+  }
   const prev = editingPersonalId? personalEntradas().find(x=>x.id===editingPersonalId) : null;
   const data = {
     id: editingPersonalId || uid(),
