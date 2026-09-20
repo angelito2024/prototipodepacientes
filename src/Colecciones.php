@@ -38,6 +38,8 @@ final class Colecciones
         'talleres', 'personalConfig', 'personalEntries',
         // Finanzas privadas: préstamos, fondos que organiza y juntas ajenas.
         'prestamos', 'recaudaciones', 'juntas',
+        // Las categorías con que él clasifica sus ingresos y gastos.
+        'categoriasPersonales',
     ];
 
     public static function para(string $clave): ?Repositorio
@@ -48,7 +50,7 @@ final class Colecciones
         }
 
         // Colecciones privadas que se guardan como documento (ver Documento.php).
-        if (in_array($clave, ['prestamos', 'recaudaciones', 'juntas'], true)) {
+        if (in_array($clave, ['prestamos', 'recaudaciones', 'juntas', 'categoriasPersonales'], true)) {
             return new Documento($clave);
         }
 

@@ -1505,7 +1505,7 @@ let DB = {
   patients:[], appointments:[], professionals:[], practicantes:[],
   services:[], payments:[], expenses:[], calendarEvents:[], products:[],
   centerInfo:{}, roomUsage:[], attendanceLog:[], talleres:[],
-  personalEntries:[], personalConfig:{}, authConfig:{},
+  personalEntries:[], personalConfig:{}, categoriasPersonales:{}, authConfig:{},
   // Finanzas personales, aparte de las del centro:
   //   prestamos     deudas totales con cada acreedor y los abonos hechos
   //   recaudaciones fondos colectivos que él organiza (aporte por persona y mes)
@@ -1725,6 +1725,7 @@ async function loadAll(){
   DB.attendanceLog = await getColl('attendanceLog', []);
   DB.talleres = await getColl('talleres', []);
   DB.personalEntries = await getColl('personalEntries', []);
+  DB.categoriasPersonales = await getColl('categoriasPersonales', {});
   // Migración: antes un mes solo estaba pagado o no. Cada mes marcado pasa a ser
   // un pago por el monto completo, que es lo que significaba.
   DB.personalEntries = DB.personalEntries.map(normalizarPersonal);
@@ -9178,8 +9179,149 @@ function exportNuevosContinuadoresCSV(){
    Sobre la clave: NO es seguridad de verdad. Los datos se guardan en el navegador en
    texto plano, así que evita que alguien los vea de pasada, pero quien sepa abrir las
    herramientas del navegador puede leerlos igual. Está dicho así en la propia pantalla. */
-const PERSONAL_CAT_GASTO = ['Vivienda','Servicios','Alimentación','Transporte','Salud','Educación','Deudas y préstamos','Familia','Ocio','Otro'];
-const PERSONAL_CAT_INGRESO = ['Sueldo','Honorarios','Alquiler','Negocio','Otro'];
+/* Las categorías con que arranca el panel. Son solo el punto de partida:
+   cada quien gasta y cobra a su manera, así que se pueden renombrar, quitar
+   y agregar desde la propia pestaña. Lo que quede guardado manda sobre esto. */
+const PERSONAL_CAT_GASTO_BASE = ['Vivienda','Servicios','Alimentación','Transporte','Salud','Educación','Deudas y préstamos','Familia','Ocio','Otro'];
+const PERSONAL_CAT_INGRESO_BASE = ['Sueldo','Honorarios','Alquiler','Negocio','Otro'];
+
+function categoriasPersonales(tipo){
+  const guardadas = DB.categoriasPersonales || {};
+  const propias = guardadas[tipo];
+  if(Array.isArray(propias) && propias.length) return propias;
+  return tipo === 'ingreso' ? [...PERSONAL_CAT_INGRESO_BASE] : [...PERSONAL_CAT_GASTO_BASE];
+}
+async function guardarCategoriasPersonales(tipo, lista){
+  DB.categoriasPersonales = {
+    ...(DB.categoriasPersonales || {}),
+    [tipo]: lista,
+  };
+  const ok = await setColl('categoriasPersonales', DB.categoriasPersonales);
+  if(!ok) showToast('No se pudo guardar, reintentando…', false);
+  return ok;
+}
+/* Cuántos movimientos usan una categoría: renombrarla los arrastra, y
+   quitarla dejaría a esos movimientos sin nombre de categoría. */
+function movimientosConCategoria(tipo, nombre){
+  return personalEntradas().filter(e => (e.tipo||'gasto') === tipo && (e.category||'') === nombre);
+}
+
+async function agregarCategoriaPersonal(tipo){
+  const nombre = (prompt(
+      tipo === 'ingreso'
+        ? 'Nueva categoría de ingreso\n\nEj: "Sueldo de mi esposa", "Alquiler del depa", "Comisiones"'
+        : 'Nueva categoría de gasto\n\nEj: "Mascotas", "Gimnasio", "Regalos"', '') || '').trim();
+  if(!nombre) return;
+  const lista = categoriasPersonales(tipo);
+  if(lista.some(c => c.toLowerCase() === nombre.toLowerCase())){
+    alert('Ya tienes una categoría con ese nombre.');
+    return;
+  }
+  // "Otro" se queda siempre al final: es el cajón de sastre.
+  const otros = lista.filter(c => c.toLowerCase() === 'otro');
+  const resto = lista.filter(c => c.toLowerCase() !== 'otro');
+  await guardarCategoriasPersonales(tipo, [...resto, nombre, ...otros]);
+  showToast(`Categoría "${nombre}" agregada.`);
+  renderPanel();
+}
+
+async function renombrarCategoriaPersonal(tipo, nombre){
+  const nuevo = (prompt(`Renombrar la categoría "${nombre}"`, nombre) || '').trim();
+  if(!nuevo || nuevo === nombre) return;
+  const lista = categoriasPersonales(tipo);
+  if(lista.some(c => c.toLowerCase() === nuevo.toLowerCase())){
+    alert('Ya tienes una categoría con ese nombre.');
+    return;
+  }
+  const usan = movimientosConCategoria(tipo, nombre);
+  if(usan.length && !confirm(
+      `${usan.length} movimiento(s) usan "${nombre}".\n\n`
+    + `Pasarán a decir "${nuevo}". No se borra nada. ¿Continuar?`)) return;
+
+  await guardarCategoriasPersonales(tipo, lista.map(c => c === nombre ? nuevo : c));
+  if(usan.length){
+    DB.personalEntries = personalEntradas().map(e =>
+      ((e.tipo||'gasto') === tipo && e.category === nombre) ? {...e, category: nuevo} : e);
+    await setColl('personalEntries', DB.personalEntries);
+  }
+  showToast(`Ahora se llama "${nuevo}".`);
+  renderPanel();
+}
+
+async function quitarCategoriaPersonal(tipo, nombre){
+  const lista = categoriasPersonales(tipo);
+  if(lista.length <= 1){ alert('Tiene que quedar al menos una categoría.'); return; }
+  const usan = movimientosConCategoria(tipo, nombre);
+  const aviso = usan.length
+    ? `${usan.length} movimiento(s) usan "${nombre}".\n\n`
+      + `Esos movimientos NO se borran: pasan a "Otro".\n\n¿Quitar la categoría?`
+    : `¿Quitar la categoría "${nombre}"?`;
+  if(!confirm(aviso)) return;
+
+  const quedan = lista.filter(c => c !== nombre);
+  const destino = quedan.find(c => c.toLowerCase() === 'otro') || quedan[0];
+  await guardarCategoriasPersonales(tipo, quedan);
+  if(usan.length){
+    DB.personalEntries = personalEntradas().map(e =>
+      ((e.tipo||'gasto') === tipo && e.category === nombre) ? {...e, category: destino} : e);
+    await setColl('personalEntries', DB.personalEntries);
+  }
+  showToast(usan.length
+    ? `"${nombre}" quitada. Sus ${usan.length} movimiento(s) pasaron a "${destino}".`
+    : `"${nombre}" quitada.`);
+  renderPanel();
+}
+
+async function restaurarCategoriasPersonales(tipo){
+  if(!confirm('Se vuelve a la lista con la que arrancó el panel.\n\n'
+    + 'Las categorías que agregaste se quitan de la lista, pero los movimientos\n'
+    + 'que las usaban NO se borran ni cambian. ¿Continuar?')) return;
+  await guardarCategoriasPersonales(tipo,
+    tipo === 'ingreso' ? [...PERSONAL_CAT_INGRESO_BASE] : [...PERSONAL_CAT_GASTO_BASE]);
+  showToast('Categorías restauradas.');
+  renderPanel();
+}
+
+/* El panel para administrarlas, dentro de Cuentas personales. */
+function bloqueCategoriasPersonales(){
+  if(!window._verCategorias) return '';
+  const tabla = (tipo, titulo) => {
+    const lista = categoriasPersonales(tipo);
+    return `
+      <div class="col">
+        <div class="sectiontitle" style="margin-bottom:6px">
+          <h4 style="margin:0">${titulo}</h4>
+          <button class="btn small" onclick="agregarCategoriaPersonal('${tipo}')">+ Agregar</button>
+        </div>
+        <div class="tablewrap"><table>
+          ${lista.map(c=>{
+            const usan = movimientosConCategoria(tipo, c).length;
+            return `<tr>
+              <td>${c}<span class="sub">${usan? `${usan} movimiento(s)` : 'sin usar'}</span></td>
+              <td style="white-space:nowrap">
+                <button class="btn small secondary" onclick="renombrarCategoriaPersonal('${tipo}','${c.replace(/'/g,"\\'")}')">Renombrar</button>
+                <button class="btn small danger" onclick="quitarCategoriaPersonal('${tipo}','${c.replace(/'/g,"\\'")}')">Quitar</button>
+              </td></tr>`;
+          }).join('')}
+        </table></div>
+        <button class="btn small secondary" style="margin-top:6px"
+                onclick="restaurarCategoriasPersonales('${tipo}')">Volver a las de fábrica</button>
+      </div>`;
+  };
+  return `
+  <div class="card" style="margin-bottom:16px">
+    <div class="sectiontitle"><h3 style="margin:0">Tus categorías</h3>
+      <button class="btn secondary" onclick="window._verCategorias=false; renderPanel();">Cerrar</button>
+    </div>
+    <p class="hint" style="margin-bottom:12px">Cada quien gasta y cobra a su manera. Agrega las que
+      necesites —"Sueldo de mi esposa", "Mascotas", "Gimnasio"— y quita las que no uses.
+      <b>Quitar una categoría no borra ningún movimiento:</b> los que la usaban pasan a "Otro".</p>
+    <div class="row">
+      ${tabla('ingreso','Categorías de ingreso')}
+      ${tabla('gasto','Categorías de gasto')}
+    </div>
+  </div>`;
+}
 let personalDesbloqueado = false;   // dura solo mientras la pestaña esté abierta
 let editingPersonalId = null;
 
@@ -10864,6 +11006,7 @@ function viewPersonal(){
     <div class="sectiontitle"><h2>Cuentas personales — ${mes}</h2>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn secondary" onclick="exportPersonalCSV()">Exportar CSV</button>
+        <button class="btn secondary" onclick="window._verCategorias=!window._verCategorias; renderPanel();">🏷️ Categorías</button>
         <button class="btn secondary" onclick="openPersonalPinModal()">🔒 Clave</button>
         ${cfg.pinEnabled? `<button class="btn secondary" onclick="bloquearPersonal()">Bloquear</button>`:''}
         <button class="btn" onclick="toggleForm('personalForm')">+ Nuevo movimiento</button>
@@ -10875,6 +11018,8 @@ function viewPersonal(){
          necesita es anotar un movimiento, no leer avisos. Antes quedaba
          debajo de la cascada y los duplicados, y el botón parecía no hacer
          nada porque el formulario se abría fuera de la pantalla. -->
+    ${bloqueCategoriasPersonales()}
+
     <div class="formpanel" id="personalForm">
       ${formularioPersonal()}
     </div>
@@ -11273,7 +11418,7 @@ function togglePersonalCampos(){
     else if(id !== 'pn_dateWrap' && id !== 'pn_paidWrap') caja.style.display = '';
   });
 
-  const cats = tipo==='ingreso'? PERSONAL_CAT_INGRESO : PERSONAL_CAT_GASTO;
+  const cats = categoriasPersonales(tipo);
   const sel = document.getElementById('pn_category');
   const previo = sel.value;
   sel.innerHTML = cats.map(c=>`<option>${c}</option>`).join('');
