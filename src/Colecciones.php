@@ -6,6 +6,7 @@ namespace Centro;
 use Centro\Repos\Asistencia;
 use Centro\Repos\AuthConfig;
 use Centro\Repos\CentroInfo;
+use Centro\Repos\Cie10;
 use Centro\Repos\Citas;
 use Centro\Repos\Documento;
 use Centro\Repos\Eventos;
@@ -42,6 +43,8 @@ final class Colecciones
         'prestamos', 'recaudaciones', 'juntas',
         // Las categorías con que él clasifica sus ingresos y gastos.
         'categoriasPersonales',
+        // El catálogo de diagnósticos: solo lectura, lo carga una migración.
+        'cie10',
         // Pruebas psicológicas: el catálogo y cada aplicación a un paciente.
         // Van al final porque una aplicación necesita paciente y profesional.
         'pruebas', 'pruebaAplicaciones',
@@ -76,6 +79,7 @@ final class Colecciones
             'talleres'       => new Talleres(),
             'personalEntries' => new Personales(),
             'personalConfig' => new PersonalConfig(),
+            'cie10'          => new Cie10(),
             'pruebas'        => new Pruebas(),
             'pruebaAplicaciones' => new PruebaAplicaciones(),
             default          => null,

@@ -24,3 +24,7 @@ respaldo/copias/
 *.xlsx
 *.xlsm
 /pruebas/contenido/
+
+# La contraseña con que se cifran las copias que salen del local.
+# Jamás al repositorio: con ella, una copia robada se vuelve legible.
+/respaldo/clave.txt

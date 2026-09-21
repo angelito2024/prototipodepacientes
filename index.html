@@ -1540,6 +1540,8 @@ let DB = {
   //   recaudaciones fondos colectivos que él organiza (aporte por persona y mes)
   //   juntas        juntas de terceros en las que participa aportando
   prestamos:[], recaudaciones:[], juntas:[],
+  //   cie10  el catálogo de diagnósticos, tal como lo acepta el servidor
+  cie10:[],
   //   pruebas            catálogo de pruebas psicológicas que el centro aplica
   //   pruebaAplicaciones cada vez que se le toma una a un paciente
   pruebas:[], pruebaAplicaciones:[]
@@ -1767,6 +1769,8 @@ async function loadAll(){
   DB.juntas        = await getColl('juntas', []);
   // Las pruebas solo existen con base de datos: la clave de corrección vive
   // en el servidor y el paciente responde por un enlace propio.
+  // El catálogo de diagnósticos, tal cual lo acepta el servidor.
+  DB.cie10              = await getColl('cie10', []);
   DB.pruebas            = await getColl('pruebas', []);
   DB.pruebaAplicaciones = await getColl('pruebaAplicaciones', []);
   DB.talleres.forEach(t=>{
@@ -13383,20 +13387,45 @@ async function removePrueba(id){
   await setColl('historia_'+currentHistoryPatientId, currentHistoriaData);
   renderPanel();
 }
+/* El catálogo que se busca.
+   Manda el de la base: es el único que el servidor acepta al guardar. La
+   lista escrita aquí abajo queda de reserva para cuando se abre el panel
+   sin base de datos. Tenerlas separadas causaba dos fallas calladas: el
+   panel ofrecía códigos que el servidor descartaba —el diagnóstico se
+   guardaba sin código— y escondía los que sí estaban en el catálogo. */
+function catalogoCIE10(){
+  const deLaBase = DB.cie10 || [];
+  return deLaBase.length ? deLaBase : CIE10_LIST;
+}
+
 function searchCIE10(query){
   const box = document.getElementById('cie10Results');
   const q = query.trim().toLowerCase();
   if(q.length<2){ box.innerHTML=''; box.style.display='none'; return; }
-  const matches = CIE10_LIST.filter(c=> c.desc.toLowerCase().includes(q) || c.code.toLowerCase().includes(q)).slice(0,10);
+  const lista = catalogoCIE10();
+  // Primero lo que empieza por lo escrito: quien teclea "F32" busca F32,
+  // no un código lejano que lo menciona en la descripción.
+  const empieza = [], contiene = [];
+  for(const c of lista){
+    const code = (c.code||'').toLowerCase(), desc = (c.desc||'').toLowerCase();
+    if(code.startsWith(q)) empieza.push(c);
+    else if(code.includes(q) || desc.includes(q)) contiene.push(c);
+  }
+  const matches = empieza.concat(contiene).slice(0,12);
   if(matches.length===0){
-    box.innerHTML = '<div class="hint" style="padding:10px">Sin coincidencias en la lista precargada.</div>';
+    box.innerHTML = `<div class="hint" style="padding:10px">Sin coincidencias entre los
+      ${lista.length} diagnósticos del catálogo.</div>`;
   } else {
-    box.innerHTML = matches.map(c=>`<div class="searchResultRow" onclick="selectCIE10('${c.code}')"><b>${c.code}</b> — ${c.desc}</div>`).join('');
+    box.innerHTML = matches.map(c=>{
+      const cod = String(c.code).replace(/'/g,"\\'");
+      return `<div class="searchResultRow" onclick="selectCIE10('${cod}')">
+        <b>${c.code}</b> — ${c.desc}${c.cap? `<span class="sub">${c.cap}</span>`:''}</div>`;
+    }).join('');
   }
   box.style.display='block';
 }
 function selectCIE10(code){
-  const item = CIE10_LIST.find(c=>c.code===code);
+  const item = catalogoCIE10().find(c=>c.code===code);
   if(!item) return;
   document.getElementById('hc_diagBuscar').value = `${item.code} — ${item.desc}`;
   document.getElementById('hc_diagCodigo').value = item.code;
