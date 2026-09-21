@@ -15,3 +15,12 @@ diagnostico-*.md
 
 # Las copias de la base son datos de pacientes: nunca al repositorio
 respaldo/copias/
+
+# Protocolos de pruebas psicológicas en Excel: llevan el nombre del paciente
+# y sus respuestas. Además, el contenido del MCMI-IV y del ICE BarOn tiene
+# derechos de autor: el repositorio guarda el programa que los corrige, nunca
+# los ítems ni los baremos.
+*.xls
+*.xlsx
+*.xlsm
+/pruebas/contenido/

@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<meta http-equiv="Cache-Control" content="no-store">
+<title>Cuestionario</title>
+<style>
+  :root{
+    --tinta:#1f2430; --suave:#5b6577; --linea:#e2e6ee; --fondo:#f4f6fa;
+    --papel:#fff; --acento:#2f6f4f; --acento2:#e8f2ec; --alerta:#a3381f;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--fondo);color:var(--tinta);
+       font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+       -webkit-text-size-adjust:100%}
+  .caja{max-width:720px;margin:0 auto;padding:0 16px 120px}
+
+  header{background:var(--papel);border-bottom:1px solid var(--linea);
+         position:sticky;top:0;z-index:5}
+  .cabecera{max-width:720px;margin:0 auto;padding:12px 16px}
+  .titulo{font-size:17px;font-weight:700;margin:0}
+  .sub{font-size:13px;color:var(--suave);margin:2px 0 0}
+  .barra{height:6px;background:var(--linea);border-radius:99px;margin-top:10px;overflow:hidden}
+  .barra>i{display:block;height:100%;background:var(--acento);width:0;transition:width .25s}
+  .cuenta{font-size:12px;color:var(--suave);margin-top:6px;display:flex;
+          justify-content:space-between;gap:10px}
+
+  .tarjeta{background:var(--papel);border:1px solid var(--linea);border-radius:12px;
+           padding:18px;margin:16px 0}
+  .tarjeta h2{font-size:16px;margin:0 0 8px}
+  .tarjeta p{margin:8px 0;font-size:14.5px;color:#39404f}
+
+  .item{background:var(--papel);border:1px solid var(--linea);border-radius:12px;
+        padding:14px 16px;margin:10px 0}
+  .item.falta{border-color:#e7b7a8;background:#fdf7f5}
+  .item .n{font-size:12px;color:var(--suave);font-weight:700;letter-spacing:.04em}
+  .item .txt{margin:4px 0 12px;font-size:15.5px}
+  .ops{display:flex;gap:10px}
+  .ops label{flex:1}
+  .ops input{position:absolute;opacity:0;width:0;height:0}
+  .ops span{display:block;text-align:center;padding:11px 8px;border:1.5px solid var(--linea);
+            border-radius:9px;font-weight:600;font-size:15px;cursor:pointer;
+            background:#fbfcfe;user-select:none}
+  .ops input:checked + span{background:var(--acento);border-color:var(--acento);color:#fff}
+  .ops input:focus-visible + span{outline:3px solid #b9d9c8;outline-offset:2px}
+
+  .pie{position:fixed;left:0;right:0;bottom:0;background:var(--papel);
+       border-top:1px solid var(--linea);padding:10px 16px calc(10px + env(safe-area-inset-bottom))}
+  .pie .caja{padding:0;display:flex;gap:10px;align-items:center}
+  button{font:inherit;font-weight:600;border-radius:9px;border:1.5px solid var(--linea);
+         background:var(--papel);color:var(--tinta);padding:12px 16px;cursor:pointer}
+  button.principal{background:var(--acento);border-color:var(--acento);color:#fff;flex:1}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .aviso{background:#fdf3ef;border:1px solid #e7c3b6;color:var(--alerta);
+         border-radius:10px;padding:12px 14px;margin:12px 0;font-size:14.5px}
+  .guardado{font-size:12px;color:var(--suave);text-align:center;margin-top:6px}
+  .fin{text-align:center;padding:40px 20px}
+  .fin .tic{font-size:46px}
+  @media (max-width:420px){ .item .txt{font-size:15px} }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="cabecera">
+    <p class="titulo" id="tituloPrueba">Cargando…</p>
+    <p class="sub" id="subPrueba"></p>
+    <div class="barra"><i id="barra"></i></div>
+    <div class="cuenta">
+      <span id="contador"></span>
+      <span id="paginaTxt"></span>
+    </div>
+  </div>
+</header>
+
+<div class="caja" id="contenido"></div>
+
+<div class="pie" id="pie" hidden>
+  <div class="caja">
+    <button id="btnAtras" type="button">Atrás</button>
+    <button id="btnSiguiente" class="principal" type="button">Siguiente</button>
+  </div>
+  <div class="guardado" id="guardado">Tus respuestas se guardan solas</div>
+</div>
+
+<script>
+const POR_PAGINA = 10;
+const token = new URLSearchParams(location.search).get('t') || '';
+let datos = null, respuestas = {}, pagina = 0, inicio = Date.now();
+let pendienteGuardar = false, guardando = false;
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+async function api(accion, cuerpo){
+  const r = await fetch(`../api/prueba.php?accion=${accion}&t=${encodeURIComponent(token)}`, {
+    method: cuerpo ? 'POST' : 'GET',
+    headers: cuerpo ? {'Content-Type':'application/json'} : {},
+    body: cuerpo ? JSON.stringify(cuerpo) : undefined
+  });
+  let j = null;
+  try { j = await r.json(); } catch(e){ /* respuesta no JSON */ }
+  if(!j) throw new Error('No hay conexión con el centro. Revisa tu internet.');
+  return j;
+}
+
+function pantallaSimple(titulo, texto, icono){
+  $('contenido').innerHTML =
+    `<div class="fin"><div class="tic">${icono}</div>
+       <h2>${esc(titulo)}</h2><p style="color:#5b6577">${esc(texto)}</p></div>`;
+  $('pie').hidden = true;
+  $('barra').style.width = '100%';
+  $('contador').textContent = '';
+  $('paginaTxt').textContent = '';
+}
+
+async function arrancar(){
+  if(!token){ pantallaSimple('Enlace incompleto',
+      'Abre el enlace completo que te envió el centro.', '🔗'); return; }
+  let j;
+  try { j = await api('abrir'); }
+  catch(e){ pantallaSimple('Sin conexión', e.message, '📡'); return; }
+
+  if(j.cerrada){ pantallaSimple('Ya enviaste esta prueba', j.error, '✅'); return; }
+  if(!j.ok){ pantallaSimple('No se puede abrir', j.error || 'Enlace no válido.', '⚠️'); return; }
+
+  datos = j;
+  respuestas = j.respuestas || {};
+  $('tituloPrueba').textContent = j.prueba.siglas || j.prueba.nombre;
+  $('subPrueba').textContent = j.paciente || '';
+  document.title = j.prueba.siglas || 'Cuestionario';
+  $('pie').hidden = false;
+  // Si ya venía a medias, retoma donde se quedó.
+  const primeraSin = primeraSinResponder();
+  pagina = primeraSin ? Math.floor((primeraSin - 1) / POR_PAGINA) : 0;
+  dibujar();
+}
+
+function primeraSinResponder(){
+  for(const it of datos.prueba.items) if(!respuestas[it.n]) return it.n;
+  return 0;
+}
+function totalRespondidas(){
+  return datos.prueba.items.filter(it => respuestas[it.n]).length;
+}
+function nPaginas(){ return Math.ceil(datos.prueba.items.length / POR_PAGINA); }
+
+function dibujar(){
+  const items = datos.prueba.items;
+  const ops = datos.prueba.opciones;
+  const desde = pagina * POR_PAGINA;
+  const bloque = items.slice(desde, desde + POR_PAGINA);
+
+  let html = '';
+  if(pagina === 0){
+    html += `<div class="tarjeta">
+      <h2>Antes de empezar</h2>
+      <p>Vas a leer ${items.length} frases. Marca <b>Verdadero</b> si la frase
+         describe cómo eres o cómo te sientes, y <b>Falso</b> si no.</p>
+      <p>No hay respuestas buenas ni malas. Contesta lo primero que pienses,
+         sin darle muchas vueltas. Si una frase te cuesta decidir, marca <b>Falso</b>.</p>
+      <p>Tus respuestas se guardan solas: puedes cerrar y seguir después desde
+         el mismo enlace. Solo las verá tu psicólogo.</p>
+    </div>`;
+  }
+  html += bloque.map(it => {
+    const marcada = respuestas[it.n];
+    return `<div class="item" id="item${it.n}" data-n="${it.n}">
+      <div class="n">${it.n} de ${items.length}</div>
+      <div class="txt">${esc(it.texto)}</div>
+      <div class="ops">${ops.map(o => `
+        <label><input type="radio" name="i${it.n}" value="${o.valor}"
+               ${marcada === o.valor ? 'checked' : ''}><span>${esc(o.etiqueta)}</span></label>`).join('')}
+      </div>
+    </div>`;
+  }).join('');
+
+  const ultima = pagina >= nPaginas() - 1;
+  if(ultima){
+    const faltan = items.length - totalRespondidas();
+    html += faltan > 0
+      ? `<div class="aviso" id="avisoFaltan">Te faltan <b>${faltan}</b> frase(s) por
+           contestar. No se puede enviar a medias: con frases en blanco el resultado
+           sale más bajo de lo real y tu psicólogo no lo podría usar.
+           <div style="margin-top:10px">
+             <button type="button" onclick="irAFaltante()">Ir a la primera que falta</button>
+           </div></div>`
+      : `<div class="tarjeta"><h2>Listo</h2>
+           <p>Contestaste las ${items.length} frases. Revisa si quieres cambiar
+              alguna y luego toca <b>Enviar</b>.</p></div>`;
+  }
+
+  $('contenido').innerHTML = html;
+  $('contenido').querySelectorAll('input[type=radio]').forEach(r => {
+    r.addEventListener('change', e => {
+      const n = Number(e.target.closest('.item').dataset.n);
+      respuestas[n] = e.target.value;
+      e.target.closest('.item').classList.remove('falta');
+      actualizar();
+      programarGuardado();
+    });
+  });
+
+  $('btnAtras').disabled = pagina === 0;
+  $('btnSiguiente').textContent = ultima ? 'Enviar respuestas' : 'Siguiente';
+  actualizar();
+  window.scrollTo({top:0});
+}
+
+function actualizar(){
+  const total = datos.prueba.items.length, hechas = totalRespondidas();
+  $('barra').style.width = (hechas / total * 100) + '%';
+  $('contador').textContent = `${hechas} de ${total} contestadas`;
+  $('paginaTxt').textContent = `Página ${pagina + 1} de ${nPaginas()}`;
+  const ultima = pagina >= nPaginas() - 1;
+  // El candado: en la última página el botón solo se activa si está completa.
+  $('btnSiguiente').disabled = ultima && hechas < total;
+  const av = $('avisoFaltan');
+  if(av) av.innerHTML = av.innerHTML.replace(/<b>\d+<\/b>/, `<b>${total - hechas}</b>`);
+}
+
+function irAFaltante(){
+  const n = primeraSinResponder();
+  if(!n) return;
+  const p = Math.floor((n - 1) / POR_PAGINA);
+  if(p !== pagina){ pagina = p; dibujar(); }
+  const el = $('item' + n);
+  if(el){ el.classList.add('falta'); el.scrollIntoView({block:'center', behavior:'smooth'}); }
+}
+
+/* Guardado automático: se junta lo que va marcando y se manda cada pocos
+   segundos, para no disparar una petición por cada toque. */
+let temporizador = null;
+function programarGuardado(){
+  pendienteGuardar = true;
+  clearTimeout(temporizador);
+  temporizador = setTimeout(guardar, 2500);
+}
+async function guardar(){
+  if(!pendienteGuardar || guardando) return;
+  guardando = true; pendienteGuardar = false;
+  try{
+    await api('avance', {respuestas});
+    $('guardado').textContent = 'Guardado ✓';
+  }catch(e){
+    pendienteGuardar = true;
+    $('guardado').textContent = 'Sin conexión — lo intento de nuevo';
+  }finally{ guardando = false; }
+}
+
+$('btnAtras').addEventListener('click', () => {
+  if(pagina > 0){ pagina--; dibujar(); }
+});
+$('btnSiguiente').addEventListener('click', async () => {
+  if(pagina < nPaginas() - 1){
+    await guardar();
+    pagina++; dibujar();
+    return;
+  }
+  const btn = $('btnSiguiente');
+  btn.disabled = true; btn.textContent = 'Enviando…';
+  try{
+    const j = await api('terminar', {respuestas, segundos: Math.round((Date.now() - inicio) / 1000)});
+    if(j.ok){
+      pantallaSimple('¡Gracias!',
+        'Tus respuestas llegaron al centro. Tu psicólogo las revisará y '
+        + 'conversarán los resultados en la consulta.', '✅');
+      return;
+    }
+    alert(j.error || 'No se pudo enviar.');
+  }catch(e){
+    alert(e.message);
+  }
+  btn.disabled = false; btn.textContent = 'Enviar respuestas';
+  actualizar();
+});
+
+// Si cierra la pestaña con algo sin mandar, se intenta guardar igual.
+window.addEventListener('visibilitychange', () => { if(document.hidden) guardar(); });
+
+arrancar();
+</script>
+</body>
+</html>

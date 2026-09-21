@@ -42,6 +42,10 @@ final class CentroInfo extends Repositorio
             // cada cita virtual, sin tener que crearlas de nuevo cada vez.
             'zoomSala'            => (string) ($c['sala_zoom'] ?? ''),
             'meetSala'            => (string) ($c['sala_meet'] ?? ''),
+            // Dirección con la que se arman los enlaces que se envían al
+            // paciente. Sin esto salen con "localhost", que en el celular del
+            // paciente apunta a su propio teléfono y no abre nunca.
+            'publicUrl'           => (string) ($c['url_publica'] ?? ''),
             'reminderMinutes'     => (int) ($c['minutos_recordatorio'] ?? 10),
             'sessionMinutes'      => (int) ($c['minutos_sesion'] ?? 60),
             'rescheduleHours'     => (int) ($c['horas_reprogramacion'] ?? 24),
@@ -65,10 +69,10 @@ final class CentroInfo extends Repositorio
             'INSERT INTO centro_config
                 (id, razon_social, direccion, telefono, ruc, lema, medios_pago,
                  titular_nombre, titular_documento, titular_cargo, titular_colegiatura,
-                 sala_zoom, sala_meet,
+                 sala_zoom, sala_meet, url_publica,
                  minutos_recordatorio, minutos_sesion, horas_reprogramacion,
                  porcentaje_penalidad, incluir_politica)
-             VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+             VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
              ON DUPLICATE KEY UPDATE
                 razon_social=VALUES(razon_social), direccion=VALUES(direccion),
                 telefono=VALUES(telefono), ruc=VALUES(ruc), lema=VALUES(lema),
@@ -78,6 +82,7 @@ final class CentroInfo extends Repositorio
                 titular_cargo=VALUES(titular_cargo),
                 titular_colegiatura=VALUES(titular_colegiatura),
                 sala_zoom=VALUES(sala_zoom), sala_meet=VALUES(sala_meet),
+                url_publica=VALUES(url_publica),
                 minutos_recordatorio=VALUES(minutos_recordatorio),
                 minutos_sesion=VALUES(minutos_sesion),
                 horas_reprogramacion=VALUES(horas_reprogramacion),
@@ -96,6 +101,7 @@ final class CentroInfo extends Repositorio
                 self::nz($valor['titular_colegiatura'] ?? null),
                 self::nz($valor['zoomSala'] ?? null),
                 self::nz($valor['meetSala'] ?? null),
+                self::nz($valor['publicUrl'] ?? null),
                 self::ent($valor['reminderMinutes'] ?? 10) ?: 10,
                 // Duración de la sesión: es el rango con el que se comparan
                 // los cruces de agenda.

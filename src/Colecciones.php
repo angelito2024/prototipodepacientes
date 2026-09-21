@@ -18,6 +18,8 @@ use Centro\Repos\Personales;
 use Centro\Repos\Practicantes;
 use Centro\Repos\Productos;
 use Centro\Repos\Profesionales;
+use Centro\Repos\PruebaAplicaciones;
+use Centro\Repos\Pruebas;
 use Centro\Repos\Servicios;
 use Centro\Repos\Talleres;
 use Centro\Repos\UsosConsultorio;
@@ -40,6 +42,9 @@ final class Colecciones
         'prestamos', 'recaudaciones', 'juntas',
         // Las categorías con que él clasifica sus ingresos y gastos.
         'categoriasPersonales',
+        // Pruebas psicológicas: el catálogo y cada aplicación a un paciente.
+        // Van al final porque una aplicación necesita paciente y profesional.
+        'pruebas', 'pruebaAplicaciones',
     ];
 
     public static function para(string $clave): ?Repositorio
@@ -71,6 +76,8 @@ final class Colecciones
             'talleres'       => new Talleres(),
             'personalEntries' => new Personales(),
             'personalConfig' => new PersonalConfig(),
+            'pruebas'        => new Pruebas(),
+            'pruebaAplicaciones' => new PruebaAplicaciones(),
             default          => null,
         };
     }

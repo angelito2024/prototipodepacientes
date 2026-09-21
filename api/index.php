@@ -110,6 +110,46 @@ try {
             }
             Http::ok();
 
+        case 'asignar_prueba':
+            // Le asigna una prueba a un paciente y devuelve el enlace para
+            // mandárselo. La clave del enlace se muestra una sola vez: después
+            // queda guardada con hash y ya no se puede volver a leer.
+            if (Http::metodo() !== 'POST') {
+                Http::error('Método no permitido.', 405);
+            }
+            Auth::exigir();
+            $c = Http::cuerpo();
+            try {
+                $r = \Centro\Repos\PruebaAplicaciones::asignar(
+                    (string) ($c['prueba'] ?? ''),
+                    (string) ($c['paciente'] ?? ''),
+                    isset($c['profesional']) ? (string) $c['profesional'] : null,
+                    isset($c['dias']) ? (int) $c['dias'] : null
+                );
+            } catch (RuntimeException $e) {
+                Http::error($e->getMessage(), 400);
+            }
+            // La dirección de esta PC dentro de la red. Hace falta porque el
+            // panel arma el enlace con la dirección que tiene en la barra, y
+            // en el centro esa es "localhost": en el celular del paciente
+            // localhost es su propio teléfono y el enlace no abre.
+            $r['ipLocal'] = ipDeLaRed();
+            Http::ok($r);
+
+        case 'enlace_prueba':
+            // Vuelve a generar el enlace de una prueba que sigue pendiente.
+            if (Http::metodo() !== 'POST') {
+                Http::error('Método no permitido.', 405);
+            }
+            Auth::exigir();
+            $c = Http::cuerpo();
+            try {
+                $token = \Centro\Repos\PruebaAplicaciones::regenerarToken((string) ($c['id'] ?? ''));
+            } catch (RuntimeException $e) {
+                Http::error($e->getMessage(), 400);
+            }
+            Http::ok(['token' => $token]);
+
         case 'coleccion':
             manejarColeccion();
 
@@ -124,6 +164,21 @@ try {
         500,
         $debug ? ['detalle' => $e->getFile() . ':' . $e->getLine()] : []
     );
+}
+
+/**
+ * La IP de esta computadora dentro de la red local, o null si no se puede
+ * averiguar. Sirve para proponerle al psicólogo una dirección que el celular
+ * del paciente sí pueda abrir mientras el sistema no esté en internet.
+ */
+function ipDeLaRed(): ?string
+{
+    $ip = gethostbyname(gethostname());
+    // gethostbyname devuelve el nombre tal cual si no resuelve.
+    if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+        return null;
+    }
+    return str_starts_with($ip, '127.') ? null : $ip;
 }
 
 function manejarColeccion(): never
