@@ -170,6 +170,36 @@ try {
 }
 
 /**
+ * Corta la petición si quien entró no tiene permiso para esta sección.
+ *
+ * Los intentos rechazados quedan anotados: si alguien anda probando lo que
+ * no le toca, se ve en el registro de auditoría.
+ */
+function comprobarPermiso(string $clave, bool $escribe): void
+{
+    // Las cuentas personales guardan a quién pertenece cada movimiento, así
+    // que cada usuario ve las suyas y solo las suyas: eso lo resuelve el
+    // repositorio al consultar, no hace falta un permiso aparte.
+    if (Colecciones::esDeCadaUsuario($clave)) {
+        return;
+    }
+
+    $permiso = Colecciones::permiso($clave, $escribe);
+    if ($permiso === null || Auth::puede($permiso)) {
+        return;
+    }
+
+    Auth::auditar('PERMISO_DENEGADO', Auth::usuarioId(),
+        ['seccion' => $clave, 'permiso' => $permiso, 'escribe' => $escribe], 'usuarios');
+    Http::error(
+        $escribe
+            ? 'Tu usuario no puede modificar esta sección. Pídeselo a quien administra el sistema.'
+            : 'Tu usuario no tiene acceso a esta sección.',
+        403
+    );
+}
+
+/**
  * La IP de esta computadora dentro de la red local, o null si no se puede
  * averiguar. Sirve para proponerle al psicólogo una dirección que el celular
  * del paciente sí pueda abrir mientras el sistema no esté en internet.
@@ -198,21 +228,29 @@ function manejarColeccion(): never
     // Si el centro activó el acceso con clave, todo exige sesión salvo lo
     // mínimo que la pantalla de login necesita para dibujarse.
     $loginRequerido = (int) (Database::valor('SELECT login_requerido FROM centro_config WHERE id = 1') ?? 0) === 1;
-    $publicas = ['authConfig', 'centerInfo'];
-    if ($loginRequerido && !in_array($clave, $publicas, true)) {
-        Auth::exigir();
-    }
+    // Estas dos se pueden LEER sin sesión: la pantalla de acceso no se
+    // puede dibujar sin ellas. Escribirlas es otra cosa, y sí pide permiso.
+    $publicasParaLeer = ['authConfig', 'centerInfo'];
 
-    if (Http::metodo() === 'GET') {
-        Http::ok(['version' => $repo->version(), 'value' => $repo->leer()]);
-    }
+    $escribe = Http::metodo() !== 'GET';
 
-    if (Http::metodo() !== 'PUT' && Http::metodo() !== 'POST') {
+    if (Http::metodo() !== 'GET' && Http::metodo() !== 'PUT' && Http::metodo() !== 'POST') {
         Http::error('Método no permitido.', 405);
     }
 
-    if ($loginRequerido) {
+    if ($loginRequerido && ($escribe || !in_array($clave, $publicasParaLeer, true))) {
         Auth::exigir();
+    }
+
+    // El permiso se comprueba aquí, del lado del servidor. Esconder un
+    // botón en la pantalla no protege nada: quien sepa pedir la dirección
+    // igual recibe los datos.
+    if ($loginRequerido && ($escribe || !in_array($clave, $publicasParaLeer, true))) {
+        comprobarPermiso($clave, $escribe);
+    }
+
+    if (!$escribe) {
+        Http::ok(['version' => $repo->version(), 'value' => $repo->leer()]);
     }
 
     $cuerpo = Http::cuerpo();

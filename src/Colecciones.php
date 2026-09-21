@@ -50,6 +50,82 @@ final class Colecciones
         'pruebas', 'pruebaAplicaciones',
     ];
 
+    /**
+     * Qué permiso hace falta para cada sección: [leer, escribir].
+     *
+     * Los roles estaban definidos en la base desde el principio —Recepción
+     * sin historia clínica, Profesional sin finanzas— pero no los miraba
+     * nadie: cualquiera que entrara veía todo. Esta tabla es lo que les da
+     * efecto.
+     *
+     * `null` significa que basta con haber entrado. Es el caso de los datos
+     * del centro o del catálogo de diagnósticos: sin ellos la pantalla no
+     * se puede ni dibujar, y no son secretos.
+     */
+    private const PERMISOS = [
+        'patients'           => ['pacientes.ver',   'pacientes.editar'],
+        'appointments'       => ['citas.ver',       'citas.editar'],
+        'calendarEvents'     => ['citas.ver',       'citas.editar'],
+        'roomUsage'          => ['citas.ver',       'citas.editar'],
+        'talleres'           => ['citas.ver',       'citas.editar'],
+        'attendanceLog'      => ['citas.ver',       'asistencia.registrar'],
+        'payments'           => ['pagos.ver',       'pagos.registrar'],
+        'expenses'           => ['gastos.ver',      'config.editar'],
+        'professionals'      => ['pacientes.ver',   'profesionales.editar'],
+        'practicantes'       => ['pacientes.ver',   'practicantes.editar'],
+        'services'           => [null,              'config.editar'],
+        'products'           => [null,              'config.editar'],
+        'centerInfo'         => [null,              'config.editar'],
+        'authConfig'         => [null,              'config.editar'],
+        'cie10'              => [null,              null],
+        // Las pruebas psicológicas son material clínico: van con la
+        // historia, no con la agenda.
+        'pruebas'            => ['historia.ver',    'config.editar'],
+        'pruebaAplicaciones' => ['historia.ver',    'historia.editar'],
+    ];
+
+    /**
+     * Finanzas privadas del dueño: préstamos, fondos y juntas.
+     *
+     * Van aparte porque se guardan como un documento único, sin columna de
+     * usuario: lo que hay ahí es de una sola persona, y con solo entrar al
+     * sistema cualquiera lo vería entero. Se exige el permiso de finanzas,
+     * que únicamente tiene el administrador.
+     *
+     * (Las cuentas personales y sus categorías no están en esta lista
+     * porque sí guardan a quién pertenece cada movimiento: ahí cada
+     * usuario ve las suyas y no las de nadie más.)
+     */
+    private const FINANZAS_PRIVADAS = [
+        'prestamos', 'recaudaciones', 'juntas', 'categoriasPersonales',
+    ];
+
+    /** Permiso que exige una sección, o null si basta con haber entrado. */
+    public static function permiso(string $clave, bool $escribe): ?string
+    {
+        // Cada historia clínica va por su propia clave: historia_<paciente>.
+        if (str_starts_with($clave, 'historia_')) {
+            return $escribe ? 'historia.editar' : 'historia.ver';
+        }
+        if (in_array($clave, self::FINANZAS_PRIVADAS, true)) {
+            return 'finanzas.reportes';
+        }
+        $par = self::PERMISOS[$clave] ?? null;
+        if ($par === null) {
+            // Una sección que no está en la tabla se trata como lo más
+            // reservado que hay. Es preferible que algo deje de abrirse a
+            // que algo se abra de más sin que nadie lo note.
+            return $escribe ? 'config.editar' : 'config.editar';
+        }
+        return $escribe ? $par[1] : $par[0];
+    }
+
+    /** Secciones donde cada usuario ve solo sus propios movimientos. */
+    public static function esDeCadaUsuario(string $clave): bool
+    {
+        return $clave === 'personalEntries' || $clave === 'personalConfig';
+    }
+
     public static function para(string $clave): ?Repositorio
     {
         if (str_starts_with($clave, 'historia_')) {
