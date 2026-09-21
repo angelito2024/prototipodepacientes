@@ -1940,7 +1940,10 @@ function pendingAlertCount(){
     }).length;
     const pagos = DB.patients.filter(p=>computedPaymentStatus(p)!=='Completo').length;
     const informes = DB.patients.filter(p=>p.reportStatus==='Pendiente').length;
-    return citas + pagos + informes;
+    // Las pruebas que se le van a vencer al paciente: si no se le recuerda
+    // a tiempo, vuelve a consulta sin haberla hecho.
+    const pruebas = typeof pruebasQueUrgen==='function'? pruebasQueUrgen() : 0;
+    return citas + pagos + informes + pruebas;
   }catch(e){ return 0; }
 }
 
@@ -8222,6 +8225,8 @@ function viewAlertas(){
       : `<div class="empty">No hay informes pendientes.</div>`}
     </div>
 
+    ${bloqueAlertaPruebas()}
+
     <h3 style="margin-top:22px">Profesionales con pago pendiente</h3>
     <div class="tablewrap">
       ${profRows? `<table><tr><th>Profesional</th><th>Monto</th><th>Enviar</th></tr>${profRows}</table>`
@@ -8372,11 +8377,9 @@ function viewPruebas(){
           <p class="hint" style="margin-top:3px" id="pb_modoHint"></p></div>
         <div class="field" id="pb_diasWrap" style="display:none">
           <label>¿Cuántos días tiene para responderla?</label>
-          <div style="display:flex;gap:8px;align-items:center">
-            <input type="number" id="pb_dias" value="7" min="1" max="365" step="1"
-                   style="width:92px" oninput="pintarDiasPrueba()">
-            <span class="hint" id="pb_diasVence" style="white-space:nowrap"></span>
-          </div>
+          <input type="number" id="pb_dias" value="7" min="1" max="365" step="1"
+                 style="width:92px" oninput="pintarDiasPrueba()">
+          <p class="hint" id="pb_diasVence" style="margin:5px 0 0"></p>
           <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
             ${[1,2,3,7,15,30].map(d=>`<button type="button" class="btn small secondary"
                  onclick="ponerDiasPrueba(${d})">${d===1? '1 día' : d+' días'}</button>`).join('')}
@@ -8446,6 +8449,128 @@ function fmtFechaCorta(s){
   const d = new Date(String(s).replace(' ','T'));
   if(isNaN(d)) return String(s).slice(0,10);
   return d.toLocaleDateString('es-PE', {day:'2-digit', month:'short', year:'numeric'});
+}
+
+/* --- Las pruebas que quedaron pendientes, en Alertas ------------------
+   Una prueba enviada y no respondida es trabajo parado: el paciente vuelve
+   a consulta y no hay con qué trabajar. Aquí se ve en qué quedó cada una y
+   se le recuerda con un botón, como con las citas y los pagos.          */
+
+/* Días que faltan para que venza el enlace (negativo = ya venció). */
+function diasParaVencer(a){
+  if(!a.expiraEn) return null;
+  const f = new Date(String(a.expiraEn).replace(' ','T'));
+  if(isNaN(f)) return null;
+  const hoy = new Date(); hoy.setHours(0,0,0,0);
+  f.setHours(0,0,0,0);
+  return Math.round((f - hoy) / 86400000);
+}
+
+/* En qué situación está: es lo que decide el color y el mensaje. */
+function situacionDePrueba(a){
+  const d = diasParaVencer(a);
+  const empezo = (a.respondidos||0) > 0;
+  if(d !== null && d < 0) return {clave:'vencida', dias:d,
+    chip:`<span class="chip alert">Venció hace ${-d} día(s)</span>`};
+  if(d !== null && d <= 2) return {clave:'porvencer', dias:d,
+    chip:`<span class="chip alert">${d===0? 'Vence hoy' : `Vence en ${d} día(s)`}</span>`};
+  if(empezo) return {clave:'amedias', dias:d,
+    chip:`<span class="chip warn">A medias — ${a.respondidos} de ${a.nItems}</span>`};
+  return {clave:'sinabrir', dias:d,
+    chip:`<span class="chip neutral">Sin abrir${d!==null? ` — quedan ${d} día(s)` : ''}</span>`};
+}
+
+function pruebasPendientes(){
+  return (DB.pruebaAplicaciones||[])
+    .filter(a => a.estado==='pendiente' || a.estado==='en_curso')
+    .map(a => ({...a, situacion: situacionDePrueba(a)}))
+    .sort((x,y)=>{
+      // Primero lo que urge: vencidas, luego por vencer, luego el resto.
+      const orden = {vencida:0, porvencer:1, amedias:2, sinabrir:3};
+      const d = orden[x.situacion.clave] - orden[y.situacion.clave];
+      return d !== 0 ? d : (x.situacion.dias ?? 99) - (y.situacion.dias ?? 99);
+    });
+}
+
+/* Cuántas requieren que él haga algo. Va en el distintivo del menú. */
+function pruebasQueUrgen(){
+  try{
+    return pruebasPendientes().filter(a =>
+      a.situacion.clave === 'vencida' || a.situacion.clave === 'porvencer').length;
+  }catch(e){ return 0; }
+}
+
+function bloqueAlertaPruebas(){
+  const lista = pruebasPendientes();
+  const filas = lista.map(a=>{
+    const pac = DB.patients.find(p=>p.id===a.patientId) || {};
+    const s = a.situacion;
+    const falta = a.nItems - (a.respondidos||0);
+    const avance = a.nItems
+      ? Math.round((a.respondidos||0) / a.nItems * 100) : 0;
+    return `<tr>
+      <td><span class="nom" title="${pac.name||a.pacienteNombre||''}">${pac.name||a.pacienteNombre||'—'}</span>
+        <span class="sub">${a.siglas||a.pruebaNombre||''}</span></td>
+      <td>${s.chip}
+        <span class="sub">${(a.respondidos||0)===0
+          ? 'todavía no la empieza'
+          : `le faltan ${falta} de ${a.nItems} (${avance}% hecho)`}</span></td>
+      <td>${a.expiraEn? fmtFechaCorta(a.expiraEn) : '—'}</td>
+      <td>${botonRecordarPrueba(a, pac)}</td>
+    </tr>`;
+  }).join('');
+
+  const urgen = lista.filter(a=>
+    a.situacion.clave==='vencida' || a.situacion.clave==='porvencer').length;
+
+  return `
+    <h3 style="margin-top:22px">Pruebas psicológicas por responder${
+      urgen? ` <span class="chip alert">${urgen} urgente(s)</span>` : ''}</h3>
+    <div class="tablewrap">
+      ${filas? `<table><tr><th>Paciente</th><th>Cómo va</th><th>Vence</th><th>Recordar</th></tr>${filas}</table>`
+      : `<div class="empty">No hay pruebas esperando respuesta.</div>`}
+    </div>`;
+}
+
+/* El recordatorio cambia según en qué quedó: no es lo mismo no haberla
+   abierto que haberla dejado a la mitad, ni haber dejado vencer el plazo. */
+function botonRecordarPrueba(a, pac){
+  const tel = pac.isMinor ? pac.guardianPhone : pac.phone;
+  const gs = pac.isMinor && typeof guardiansFromPatient==='function'
+    ? guardiansFromPatient(pac) : [];
+  const quien = pac.isMinor
+    ? (nombreDePila((gs[0]&&gs[0].name) || pac.guardianName || '') || 'Estimado(a)')
+    : (nombreDePila(pac.name||'') || pac.name || '');
+  const deQuien = pac.isMinor ? ` de ${pac.name}` : '';
+  const nombre = a.siglas || a.pruebaNombre || 'el cuestionario';
+  const s = a.situacion;
+  const falta = a.nItems - (a.respondidos||0);
+
+  let cuerpo;
+  if(s.clave === 'vencida'){
+    cuerpo = `el plazo del cuestionario${deQuien} se pasó. Si aún desea responderlo, `
+           + `avíseme y le envío un enlace nuevo — lo que ya respondió no se perdió.`;
+  }else if((a.respondidos||0) === 0){
+    cuerpo = `le recuerdo el cuestionario${deQuien} que le envié. Se responde desde el `
+           + `celular y se guarda solo, así que puede hacerlo por partes.`
+           + (s.dias!=null && s.dias>=0 ? ` Tiene plazo ${s.dias===0? 'hasta hoy' : `de ${s.dias} día(s)`}.` : '');
+  }else{
+    cuerpo = `vi que empezó el cuestionario${deQuien} y le faltan ${falta} frases para `
+           + `terminarlo. Puede continuar desde el mismo enlace, sigue donde lo dejó.`
+           + (s.dias!=null && s.dias>=0 ? ` Tiene plazo ${s.dias===0? 'hasta hoy' : `de ${s.dias} día(s)`}.` : '');
+  }
+  const texto = `Hola ${quien}, soy del Centro Psicológico MAGUSA.\n\n${cuerpo}\n\n`
+              + `Cualquier duda, escríbame por aquí. Gracias.`;
+  const wa = waLink(tel, texto);
+
+  if(!wa){
+    return `<span class="sub" style="color:var(--alert)">Sin teléfono registrado</span>
+      <button class="btn small secondary" onclick="goTab('pacientes')">Ver ficha</button>`;
+  }
+  return `<a class="btn small" href="${wa}" target="_blank" rel="noopener">💬 Recordar</a>
+    <span class="sub">${tel}</span>
+    ${s.clave==='vencida'
+      ? `<button class="btn small secondary" onclick="reenviarPrueba('${a.id}')">Nuevo enlace</button>` : ''}`;
 }
 
 /* --- Tomarla ahora o enviarla ---------------------------------------- */
