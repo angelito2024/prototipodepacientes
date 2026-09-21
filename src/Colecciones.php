@@ -22,6 +22,7 @@ use Centro\Repos\Profesionales;
 use Centro\Repos\PruebaAplicaciones;
 use Centro\Repos\Pruebas;
 use Centro\Repos\Servicios;
+use Centro\Repos\Usuarios;
 use Centro\Repos\Talleres;
 use Centro\Repos\UsosConsultorio;
 
@@ -45,6 +46,8 @@ final class Colecciones
         'categoriasPersonales',
         // El catálogo de diagnósticos: solo lectura, lo carga una migración.
         'cie10',
+        // Las cuentas del equipo. Al final: nada depende de ellas.
+        'usuarios',
         // Pruebas psicológicas: el catálogo y cada aplicación a un paciente.
         // Van al final porque una aplicación necesita paciente y profesional.
         'pruebas', 'pruebaAplicaciones',
@@ -78,6 +81,8 @@ final class Colecciones
         'centerInfo'         => [null,              'config.editar'],
         'authConfig'         => [null,              'config.editar'],
         'cie10'              => [null,              null],
+        'usuarios'           => ['usuarios.editar', 'usuarios.editar'],
+        'roles'              => ['usuarios.editar', null],
         // Las pruebas psicológicas son material clínico: van con la
         // historia, no con la agenda.
         'pruebas'            => ['historia.ver',    'config.editar'],
@@ -156,6 +161,7 @@ final class Colecciones
             'personalEntries' => new Personales(),
             'personalConfig' => new PersonalConfig(),
             'cie10'          => new Cie10(),
+            'usuarios'       => new Usuarios(),
             'pruebas'        => new Pruebas(),
             'pruebaAplicaciones' => new PruebaAplicaciones(),
             default          => null,

@@ -110,6 +110,50 @@ try {
             }
             Http::ok();
 
+        case 'crear_usuario':
+            // Dar de alta a alguien del equipo. La contraseña llega una vez
+            // y se guarda con hash: nunca se puede volver a leer, solo
+            // restablecer.
+            if (Http::metodo() !== 'POST') {
+                Http::error('Método no permitido.', 405);
+            }
+            Auth::exigir();
+            if (!Auth::puede('usuarios.editar')) {
+                Auth::auditar('PERMISO_DENEGADO', Auth::usuarioId(),
+                    ['accion' => 'crear_usuario'], 'usuarios');
+                Http::error('Solo un administrador puede crear usuarios.', 403);
+            }
+            try {
+                $id = \Centro\Repos\Usuarios::crear(Http::cuerpo());
+            } catch (RuntimeException $e) {
+                Http::error($e->getMessage(), 400);
+            }
+            Http::ok(['id' => $id]);
+
+        case 'restablecer_clave':
+            if (Http::metodo() !== 'POST') {
+                Http::error('Método no permitido.', 405);
+            }
+            Auth::exigir();
+            if (!Auth::puede('usuarios.editar')) {
+                Auth::auditar('PERMISO_DENEGADO', Auth::usuarioId(),
+                    ['accion' => 'restablecer_clave'], 'usuarios');
+                Http::error('Solo un administrador puede restablecer contraseñas.', 403);
+            }
+            $c = Http::cuerpo();
+            try {
+                $usuario = \Centro\Repos\Usuarios::restablecerClave(
+                    (int) ($c['id'] ?? 0), (string) ($c['clave'] ?? '')
+                );
+            } catch (RuntimeException $e) {
+                Http::error($e->getMessage(), 400);
+            }
+            Http::ok(['usuario' => $usuario]);
+
+        case 'roles':
+            Auth::exigir();
+            Http::ok(['roles' => \Centro\Repos\Usuarios::roles()]);
+
         case 'asignar_prueba':
             // Le asigna una prueba a un paciente y devuelve el enlace para
             // mandárselo. La clave del enlace se muestra una sola vez: después

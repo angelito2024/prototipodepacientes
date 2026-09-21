@@ -914,7 +914,13 @@
           <br><button type="button" class="btn small secondary" style="margin-top:8px" onclick="downloadQRPlin()">Descargar QR</button>
         </div>
       </div>
-      <h3 style="margin-top:10px">Política de puntualidad (para recordatorios de citas)</h3>
+      <h3 style="margin-top:22px">Quién entra al sistema</h3>
+      <p class="hint">Cada persona con su propia cuenta y su rol. Así cada quien ve lo
+        que le toca —recepción no abre historias clínicas, un profesional no ve las
+        finanzas— y el registro del sistema puede decir quién hizo cada cosa.</p>
+      <div id="ci_usuarios"><p class="hint">Cargando…</p></div>
+
+      <h3 style="margin-top:22px">Política de puntualidad (para recordatorios de citas)</h3>
       <div class="formgrid">
         <div class="field"><label>Minutos de anticipación sugeridos</label><input type="number" id="ci_reminderMinutes" value="10"></div>
         <div class="field"><label>Horas de anticipación para reprogramar sin penalidad</label><input type="number" id="ci_rescheduleHours" value="24"></div>
@@ -1542,6 +1548,8 @@ let DB = {
   prestamos:[], recaudaciones:[], juntas:[],
   //   cie10  el catálogo de diagnósticos, tal como lo acepta el servidor
   cie10:[],
+  //   usuarios  las cuentas del equipo (sin contraseñas: no viajan)
+  usuarios:[],
   //   pruebas            catálogo de pruebas psicológicas que el centro aplica
   //   pruebaAplicaciones cada vez que se le toma una a un paciente
   pruebas:[], pruebaAplicaciones:[]
@@ -7134,6 +7142,7 @@ function openCenterInfoModal(){
   document.getElementById('ci_authPassword').value = auth.password||'';
   toggleAuthFields();
   document.getElementById('centerInfoModal').classList.add('open');
+  cargarUsuarios();
 }
 function showPaymentMethodsCard(){
   const ci = DB.centerInfo || DEFAULT_CENTER_INFO;
@@ -7193,6 +7202,156 @@ function toggleAuthFields(){
   document.getElementById('ci_authUserWrap').style.display = on? 'block':'none';
   document.getElementById('ci_authPassWrap').style.display = on? 'block':'none';
 }
+/* ===================== CUENTAS DEL EQUIPO =====================
+   Había una sola cuenta y todo el equipo trabajaba con ella. Los cuatro
+   roles del sistema no servían de nada —no había a quién asignárselos— y
+   el registro decía siempre lo mismo, así que no permitía saber quién
+   hizo qué.                                                            */
+
+let rolesDelSistema = [];
+
+const ROL_EXPLICADO = {
+  admin:       'Todo: configuración, finanzas y cuentas del equipo',
+  recepcion:   'Agenda, pacientes y cobros. No abre historias clínicas',
+  profesional: 'Historia clínica y su agenda. No ve el dinero',
+  practicante: 'Solo consultar la agenda',
+};
+
+async function cargarUsuarios(){
+  const caja = document.getElementById('ci_usuarios');
+  if(!caja) return;
+  if(STORAGE_MODE !== 'api'){
+    caja.innerHTML = `<p class="hint">Las cuentas necesitan la base de datos.</p>`;
+    return;
+  }
+  try{
+    if(!rolesDelSistema.length){
+      const r = await fetch(`${API_URL}?accion=roles`, {credentials:'same-origin'});
+      const j = await r.json();
+      rolesDelSistema = j.ok ? (j.roles||[]) : [];
+    }
+    DB.usuarios = await getColl('usuarios', []);
+    caja.innerHTML = cuerpoUsuarios();
+    pintarRolElegido();
+  }catch(e){
+    caja.innerHTML = `<p class="hint alert">No se pudieron cargar las cuentas.</p>`;
+  }
+}
+
+function cuerpoUsuarios(){
+  const lista = DB.usuarios || [];
+  const filas = lista.map(u=>{
+    const rol = (u.roles||[])[0] || '';
+    const bloqueado = u.bloqueadoHasta && new Date(u.bloqueadoHasta) > new Date();
+    return `<tr${u.activo? '' : ' style="opacity:.55"'}>
+      <td><b>${u.usuario}</b>${u.soyYo? ' <span class="chip ok">tú</span>':''}
+        <span class="sub">${u.nombre||''}</span></td>
+      <td>
+        <select onchange="cambiarRolUsuario(${u.id}, this.value)" ${u.soyYo? 'disabled':''}>
+          ${rolesDelSistema.map(r=>`<option value="${r.clave}"${r.clave===rol?' selected':''}>${r.nombre}</option>`).join('')}
+        </select>
+        <span class="sub">${ROL_EXPLICADO[rol]||''}</span>
+      </td>
+      <td>${u.activo
+            ? (bloqueado? '<span class="chip alert">Bloqueado por intentos fallidos</span>'
+                        : '<span class="chip ok">Activa</span>')
+            : '<span class="chip neutral">Desactivada</span>'}
+        <span class="sub">${u.ultimoAcceso? 'entró '+fmtFechaCorta(u.ultimoAcceso) : 'nunca entró'}</span></td>
+      <td>
+        <button class="btn small secondary" onclick="restablecerClaveUsuario(${u.id}, '${u.usuario}')">Nueva contraseña</button>
+        ${u.soyYo? '' : `<button class="btn small secondary" onclick="activarUsuario(${u.id}, ${u.activo? 'false':'true'})">${u.activo? 'Desactivar':'Reactivar'}</button>`}
+      </td>
+    </tr>`;
+  }).join('');
+
+  return `
+    <div class="tablewrap">
+      <table><tr><th>Usuario</th><th>Rol</th><th>Estado</th><th>Acciones</th></tr>${filas}</table>
+    </div>
+    <div class="formgrid" style="margin-top:14px">
+      <div class="field"><label>Usuario nuevo</label>
+        <input id="us_usuario" placeholder="rosa.diaz" autocomplete="off">
+        <p class="hint" style="margin-top:3px">Sin espacios ni tildes</p></div>
+      <div class="field"><label>Nombre completo</label>
+        <input id="us_nombre" placeholder="Lic. Rosa Díaz" autocomplete="off"></div>
+      <div class="field"><label>Rol</label>
+        <select id="us_rol" onchange="pintarRolElegido()">${rolesDelSistema.map(r=>
+          `<option value="${r.clave}">${r.nombre}</option>`).join('')}</select>
+        <p class="hint" style="margin-top:3px" id="us_rolQue"></p></div>
+      <div class="field"><label>Contraseña</label>
+        <input id="us_clave" type="text" autocomplete="off" placeholder="mínimo 8 caracteres">
+        <p class="hint" style="margin-top:3px">Se ve mientras la escribes para que puedas
+          dictársela. Después ya no se puede leer: solo cambiarla.</p></div>
+    </div>
+    <button class="btn secondary" onclick="crearUsuario()">+ Crear la cuenta</button>
+    <div id="us_aviso"></div>`;
+}
+
+/* Qué va a poder hacer la persona con el rol que se está eligiendo. Sin
+   esto hay que acordarse de memoria qué significa cada nombre. */
+function pintarRolElegido(){
+  const sel = document.getElementById('us_rol');
+  const caja = document.getElementById('us_rolQue');
+  if(!sel || !caja) return;
+  caja.textContent = ROL_EXPLICADO[sel.value] || '';
+}
+
+async function crearUsuario(){
+  const datos = {
+    usuario: document.getElementById('us_usuario').value,
+    nombre:  document.getElementById('us_nombre').value,
+    rol:     document.getElementById('us_rol').value,
+    clave:   document.getElementById('us_clave').value,
+  };
+  const aviso = document.getElementById('us_aviso');
+  aviso.innerHTML = '';
+  try{
+    const r = await fetch(`${API_URL}?accion=crear_usuario`, {
+      method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin',
+      body: JSON.stringify(datos)
+    });
+    const j = await r.json();
+    if(!j.ok){ aviso.innerHTML = `<p class="hint alert">${j.error}</p>`; return; }
+    showToast(`Cuenta creada para ${datos.nombre}.`);
+    await cargarUsuarios();
+  }catch(e){ aviso.innerHTML = `<p class="hint alert">No se pudo conectar con el servidor.</p>`; }
+}
+
+async function cambiarRolUsuario(id, rol){
+  DB.usuarios = (DB.usuarios||[]).map(u=> u.id===id? {...u, roles:[rol]} : u);
+  if(await setColl('usuarios', DB.usuarios)){
+    showToast('Rol cambiado.');
+  }
+  await cargarUsuarios();
+}
+
+async function activarUsuario(id, activar){
+  const u = (DB.usuarios||[]).find(x=>x.id===id);
+  if(!activar && !confirm(`Desactivar la cuenta de ${u? u.usuario : 'este usuario'}.\n\n`
+      + `No podrá entrar más. Sus registros y lo que hizo se conservan.`)) return;
+  DB.usuarios = (DB.usuarios||[]).map(x=> x.id===id? {...x, activo:!!activar} : x);
+  if(await setColl('usuarios', DB.usuarios)){
+    showToast(activar? 'Cuenta reactivada.' : 'Cuenta desactivada.');
+  }
+  await cargarUsuarios();
+}
+
+async function restablecerClaveUsuario(id, usuario){
+  const clave = prompt(`Contraseña nueva para «${usuario}».\n\n`
+    + `Anótala para dictársela: después no se puede volver a leer.`, '');
+  if(clave === null) return;
+  try{
+    const r = await fetch(`${API_URL}?accion=restablecer_clave`, {
+      method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin',
+      body: JSON.stringify({id, clave})
+    });
+    const j = await r.json();
+    if(!j.ok){ alert(j.error); return; }
+    showToast(`Contraseña cambiada. Dísela a ${usuario}.`);
+    await cargarUsuarios();
+  }catch(e){ alert('No se pudo conectar con el servidor.'); }
+}
+
 async function saveCenterInfo(){
   DB.centerInfo = {
     name: document.getElementById('ci_name').value.trim() || 'Centro Psicológico',
