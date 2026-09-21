@@ -144,11 +144,14 @@ try {
             Auth::exigir();
             $c = Http::cuerpo();
             try {
-                $token = \Centro\Repos\PruebaAplicaciones::regenerarToken((string) ($c['id'] ?? ''));
+                $r = \Centro\Repos\PruebaAplicaciones::regenerarToken(
+                    (string) ($c['id'] ?? ''),
+                    isset($c['dias']) ? (int) $c['dias'] : null
+                );
             } catch (RuntimeException $e) {
                 Http::error($e->getMessage(), 400);
             }
-            Http::ok(['token' => $token]);
+            Http::ok($r + ['ipLocal' => ipDeLaRed()]);
 
         case 'coleccion':
             manejarColeccion();

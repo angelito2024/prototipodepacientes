@@ -8372,13 +8372,18 @@ function viewPruebas(){
           <p class="hint" style="margin-top:3px" id="pb_modoHint"></p></div>
         <div class="field" id="pb_diasWrap" style="display:none">
           <label>¿Cuántos días tiene para responderla?</label>
-          <select id="pb_dias">
-            <option value="7">7 días</option>
-            <option value="15">15 días</option>
-            <option value="30" selected>30 días</option>
-          </select>
-          <p class="hint" style="margin-top:3px">Pasado ese plazo el enlace deja de abrir.
-            Siempre se puede generar uno nuevo.</p></div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input type="number" id="pb_dias" value="7" min="1" max="365" step="1"
+                   style="width:92px" oninput="pintarDiasPrueba()">
+            <span class="hint" id="pb_diasVence" style="white-space:nowrap"></span>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+            ${[1,2,3,7,15,30].map(d=>`<button type="button" class="btn small secondary"
+                 onclick="ponerDiasPrueba(${d})">${d===1? '1 día' : d+' días'}</button>`).join('')}
+          </div>
+          <p class="hint" style="margin-top:5px">Escribe los días que quieras, de 1 a 365.
+            Pasado el plazo el enlace deja de abrir y hay que generar otro;
+            lo que ya haya respondido no se pierde.</p></div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
         <button class="btn" id="pb_boton" onclick="generarPrueba()">Empezar la prueba</button>
@@ -8444,11 +8449,38 @@ function fmtFechaCorta(s){
 }
 
 /* --- Tomarla ahora o enviarla ---------------------------------------- */
+
+/* Los días de plazo se escriben a mano. Se acotan de 1 a 365: cero o menos
+   daría un enlace que nace vencido, y un año ya es más de lo razonable
+   para un enlace que abre la historia de alguien sin pedir contraseña. */
+function diasDePlazo(){
+  const el = document.getElementById('pb_dias');
+  const n = Math.round(Number((el||{}).value));
+  if(!isFinite(n) || n < 1) return 1;
+  return Math.min(365, n);
+}
+function ponerDiasPrueba(d){
+  const el = document.getElementById('pb_dias');
+  if(el) el.value = d;
+  pintarDiasPrueba();
+}
+/* Decir la fecha concreta evita tener que contar con los dedos. */
+function pintarDiasPrueba(){
+  const caja = document.getElementById('pb_diasVence');
+  if(!caja) return;
+  const d = diasDePlazo();
+  const f = new Date();
+  f.setDate(f.getDate() + d);
+  caja.textContent = 'vence el ' + f.toLocaleDateString('es-PE',
+    {weekday:'long', day:'2-digit', month:'long'});
+}
+
 function togglePruebaModo(){
   const modo = (document.getElementById('pb_modo')||{}).value || 'aqui';
   const aqui = modo === 'aqui';
   const dias = document.getElementById('pb_diasWrap');
   if(dias) dias.style.display = aqui ? 'none' : '';
+  if(!aqui) pintarDiasPrueba();
   const btn = document.getElementById('pb_boton');
   if(btn) btn.textContent = aqui ? 'Empezar la prueba' : 'Generar el enlace';
   const hint = document.getElementById('pb_modoHint');
@@ -8464,7 +8496,7 @@ async function generarPrueba(){
   const patientId = document.getElementById('pb_paciente').value;
   const codigo    = document.getElementById('pb_prueba').value;
   const modo      = (document.getElementById('pb_modo')||{}).value || 'aqui';
-  const dias      = Number((document.getElementById('pb_dias')||{}).value)||30;
+  const dias      = diasDePlazo();
   const pac = DB.patients.find(p=>p.id===patientId);
   if(!pac){ alert('Elige un paciente.'); return; }
   const prueba = pruebaDe(codigo);
@@ -8570,7 +8602,8 @@ function cajaDelEnlace(info, dias){
     + `Le comparto el cuestionario que conversamos. Puede responderlo desde el celular, `
     + `con calma; se guarda solo, así que puede cerrarlo y continuar después.\n\n`
     + `${info.url}\n\n`
-    + `El enlace es personal y vence en ${dias} días. Cualquier duda, escríbame por aquí.`;
+    + `El enlace es personal y vence ${dias === 1 ? 'mañana' : `en ${dias} días`}. `
+    + `Cualquier duda, escríbame por aquí.`;
   const wa = waLink(tel, texto);
   const sirve = enlaceSirveAfuera();
   return `<div class="card" style="margin-top:14px;border-color:${sirve?'#bcd9c8':'#e7c3b6'};
@@ -8594,19 +8627,26 @@ async function reenviarPrueba(id){
   const a = (DB.pruebaAplicaciones||[]).find(x=>x.id===id);
   if(!a) return;
   const pac = DB.patients.find(p=>p.id===a.patientId);
-  if(!confirm(`Generar un enlace nuevo para ${pac? pac.name : 'este paciente'}.\n\n`
-            + `El enlace anterior dejará de servir. Lo que ya respondió NO se pierde.`)) return;
+  const puesto = prompt(
+      `Enlace nuevo para ${pac? pac.name : 'este paciente'}.\n\n`
+    + `El anterior dejará de servir. Lo que ya respondió NO se pierde.\n\n`
+    + `¿Cuántos días tiene para responderlo?`, '7');
+  if(puesto === null) return;
+  const dias = Math.max(1, Math.min(365, Math.round(Number(puesto)) || 7));
   try{
     const r = await fetch(`${API_URL}?accion=enlace_prueba`, {
       method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin',
-      body: JSON.stringify({id})
+      body: JSON.stringify({id, dias})
     });
     const j = await r.json();
     if(!j.ok){ alert(j.error||'No se pudo generar el enlace.'); return; }
+    if(j.ipLocal) ipLocalDelServidor = j.ipLocal;
     toggleForm('pruebaForm');
     ultimoEnlacePrueba = {id, url:enlaceDePrueba(j.token), paciente:pac};
-    document.getElementById('pb_resultado').innerHTML = cajaDelEnlace(ultimoEnlacePrueba, 30);
+    document.getElementById('pb_resultado').innerHTML =
+      cajaDelEnlace(ultimoEnlacePrueba, j.dias || dias);
     document.getElementById('pruebaForm').scrollIntoView({block:'start', behavior:'smooth'});
+    DB.pruebaAplicaciones = await getColl('pruebaAplicaciones', []);
   }catch(e){ alert('No se pudo conectar con el servidor.'); }
 }
 

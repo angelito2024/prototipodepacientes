@@ -29,7 +29,15 @@ use RuntimeException;
 final class PruebaAplicaciones extends Repositorio
 {
     /** Días que dura el enlace si no se dice otra cosa. */
-    private const DIAS_VIGENCIA = 30;
+    private const DIAS_VIGENCIA = 7;
+    /**
+     * Límites del plazo. Menos de un día daría un enlace que nace vencido;
+     * más de un año es demasiado para una dirección que abre sin pedir
+     * contraseña. El panel ya los aplica, pero la comprobación que vale es
+     * esta: lo que llega del navegador no se cree.
+     */
+    private const DIAS_MINIMO = 1;
+    private const DIAS_MAXIMO = 365;
 
     public function clave(): string
     {
@@ -142,7 +150,7 @@ final class PruebaAplicaciones extends Repositorio
         // 32 bytes de azar: no se adivina ni probando.
         $token = bin2hex(random_bytes(32));
         $uid   = 'pa_' . bin2hex(random_bytes(8));
-        $dias  = $diasVigencia ?? self::DIAS_VIGENCIA;
+        $dias  = max(self::DIAS_MINIMO, min(self::DIAS_MAXIMO, $diasVigencia ?? self::DIAS_VIGENCIA));
 
         Database::query(
             'INSERT INTO prueba_aplicacion
@@ -157,8 +165,16 @@ final class PruebaAplicaciones extends Repositorio
         return ['id' => $uid, 'token' => $token, 'dias' => $dias];
     }
 
-    /** Vuelve a generar la clave de un enlace que se perdió. */
-    public static function regenerarToken(string $uid): string
+    /**
+     * Vuelve a generar la clave de un enlace que se perdió o venció.
+     *
+     * Con el plazo se renueva también la fecha: si no, regenerar el enlace
+     * de una prueba vencida devolvía otro igual de vencido, que tampoco
+     * abría. Lo ya respondido no se toca.
+     *
+     * @return array{token:string, dias:int}
+     */
+    public static function regenerarToken(string $uid, ?int $diasVigencia = null): array
     {
         $fila = Database::uno(
             'SELECT id, estado FROM prueba_aplicacion WHERE uid = ?', [$uid]
@@ -169,13 +185,20 @@ final class PruebaAplicaciones extends Repositorio
         if ($fila['estado'] === 'terminada') {
             throw new RuntimeException('Esa prueba ya está terminada: no se puede volver a abrir.');
         }
+        if ($fila['estado'] === 'anulada') {
+            throw new RuntimeException('Esa prueba está anulada. Asígnala de nuevo si hace falta.');
+        }
+        $dias  = max(self::DIAS_MINIMO, min(self::DIAS_MAXIMO, $diasVigencia ?? self::DIAS_VIGENCIA));
         $token = bin2hex(random_bytes(32));
         Database::query(
-            'UPDATE prueba_aplicacion SET token_hash = ? WHERE id = ?',
-            [hash('sha256', $token), (int) $fila['id']]
+            'UPDATE prueba_aplicacion
+                SET token_hash = ?, expira_en = DATE_ADD(NOW(), INTERVAL ? DAY)
+              WHERE id = ?',
+            [hash('sha256', $token), $dias, (int) $fila['id']]
         );
-        Auth::auditar('REGENERAR_ENLACE_PRUEBA', Auth::usuarioId(), ['uid' => $uid], 'prueba_aplicacion');
-        return $token;
+        Auth::auditar('REGENERAR_ENLACE_PRUEBA', Auth::usuarioId(),
+            ['uid' => $uid, 'dias' => $dias], 'prueba_aplicacion');
+        return ['token' => $token, 'dias' => $dias];
     }
 
     // ------------------------------------------------------------------
