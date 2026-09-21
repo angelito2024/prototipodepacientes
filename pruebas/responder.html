@@ -39,6 +39,12 @@
   .item .txt{margin:4px 0 12px;font-size:15.5px}
   .ops{display:flex;gap:10px}
   .ops label{flex:1}
+  /* Con cinco respuestas ("rara vez", "pocas veces"…) los botones en fila
+     quedan ilegibles en un celular: se apilan y el texto se lee entero. */
+  .ops.muchas{flex-direction:column;gap:7px}
+  .ops.muchas span{text-align:left;padding:12px 14px;font-weight:500}
+  .ops.muchas span::before{content:attr(data-n) ".  ";font-weight:700;opacity:.55}
+  .ops.muchas input:checked + span::before{opacity:.85}
   .ops input{position:absolute;opacity:0;width:0;height:0}
   .ops span{display:block;text-align:center;padding:11px 8px;border:1.5px solid var(--linea);
             border-radius:9px;font-weight:600;font-size:15px;cursor:pointer;
@@ -155,12 +161,20 @@ function dibujar(){
 
   let html = '';
   if(pagina === 0){
+    // Las instrucciones cambian según cómo se responda: no es lo mismo
+    // Verdadero/Falso que elegir entre cinco grados.
+    const escala = ops.length > 3;
     html += `<div class="tarjeta">
       <h2>Antes de empezar</h2>
-      <p>Vas a leer ${items.length} frases. Marca <b>Verdadero</b> si la frase
-         describe cómo eres o cómo te sientes, y <b>Falso</b> si no.</p>
+      <p>Vas a leer ${items.length} frases.${escala
+        ? ` Para cada una, elige en qué medida describe cómo eres o cómo te
+            sientes, desde <b>${esc(ops[0].etiqueta)}</b> hasta
+            <b>${esc(ops[ops.length-1].etiqueta)}</b>.`
+        : ` Marca <b>${esc(ops[0].etiqueta)}</b> si la frase describe cómo eres o
+            cómo te sientes, y <b>${esc(ops[1].etiqueta)}</b> si no.`}</p>
       <p>No hay respuestas buenas ni malas. Contesta lo primero que pienses,
-         sin darle muchas vueltas. Si una frase te cuesta decidir, marca <b>Falso</b>.</p>
+         sin darle muchas vueltas.${escala ? '' : ` Si una frase te cuesta decidir,
+         marca <b>${esc(ops[1].etiqueta)}</b>.`}</p>
       <p>Tus respuestas se guardan solas: puedes cerrar y seguir después desde
          el mismo enlace. Solo las verá tu psicólogo.</p>
     </div>`;
@@ -170,9 +184,9 @@ function dibujar(){
     return `<div class="item" id="item${it.n}" data-n="${it.n}">
       <div class="n">${it.n} de ${items.length}</div>
       <div class="txt">${esc(it.texto)}</div>
-      <div class="ops">${ops.map(o => `
+      <div class="ops${ops.length > 3 ? ' muchas' : ''}">${ops.map(o => `
         <label><input type="radio" name="i${it.n}" value="${o.valor}"
-               ${marcada === o.valor ? 'checked' : ''}><span>${esc(o.etiqueta)}</span></label>`).join('')}
+               ${marcada === o.valor ? 'checked' : ''}><span data-n="${esc(o.valor)}">${esc(o.etiqueta)}</span></label>`).join('')}
       </div>
     </div>`;
   }).join('');

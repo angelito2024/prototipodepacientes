@@ -33,6 +33,13 @@ final class Corrector
             }
         }
 
+        // Las pruebas de escala (1 a 5) se puntúan distinto de las de
+        // Verdadero/Falso: cada escala suma respuestas y el bruto se lleva
+        // a un cociente con la media y la desviación de la muestra.
+        if (($definicion['tipo'] ?? '') === 'likert') {
+            return self::corregirLikert($definicion, $respuestas, $contestados, $sinResponder);
+        }
+
         $escalas = [];
         foreach ($definicion['escalas'] as $e) {
             $pd = 0;
@@ -70,6 +77,115 @@ final class Corrector
             'completo'      => $sinResponder === [],
             'validez'       => self::validez($definicion, $respuestas),
             'escalas'       => $escalas,
+        ];
+    }
+
+    /**
+     * Pruebas de escala, como el ICE BarOn.
+     *
+     * Cada subescala suma las respuestas de sus ítems, dando vuelta las de
+     * los ítems inversos —los redactados al revés, donde un 5 significa lo
+     * contrario que en el resto—. Ese bruto se convierte en cociente:
+     *
+     *     CE = ((bruto − media) / desviación) × 15 + 100
+     *
+     * Si la prueba está cargada sin la clave de inversión, se devuelven las
+     * respuestas y nada más: no se inventan puntajes. El protocolo queda
+     * guardado y se corrige entero cuando la clave esté.
+     */
+    private static function corregirLikert(
+        array $definicion, array $respuestas, int $contestados, array $sinResponder
+    ): array {
+        $base = [
+            'corregidoEn'  => date('c'),
+            'nItems'       => (int) $definicion['nItems'],
+            'contestados'  => $contestados,
+            'sinResponder' => $sinResponder,
+            'completo'     => $sinResponder === [],
+            'validez'      => [],
+            'escalas'      => [],
+        ];
+
+        if (($definicion['correccionPendiente'] ?? false) === true) {
+            return $base + [
+                'sinCorregir' => true,
+                'motivo'      => 'Las respuestas quedaron guardadas, pero esta prueba todavía '
+                               . 'no se puede puntuar: falta la clave de ítems inversos. '
+                               . 'En cuanto se cargue, este protocolo se corrige solo.',
+            ];
+        }
+
+        $inversos = array_flip($definicion['inversos'] ?? []);
+        $min = 1;
+        $max = count($definicion['opciones'] ?? []) ?: 5;
+        $valorDe = static function (int $item) use ($respuestas, $inversos, $min, $max): ?int {
+            $r = $respuestas[$item] ?? null;
+            if ($r === null || !is_numeric($r)) {
+                return null;
+            }
+            $v = (int) $r;
+            // Dar vuelta: con 5 opciones, 1↔5, 2↔4 y el 3 queda igual.
+            return isset($inversos[$item]) ? ($min + $max - $v) : $v;
+        };
+
+        // --- Subescalas ---
+        $bruto = [];
+        $escalas = [];
+        foreach ($definicion['escalas'] as $e) {
+            $suma = 0;
+            $faltan = 0;
+            foreach ($e['items'] as $item) {
+                $v = $valorDe($item);
+                if ($v === null) { $faltan++; continue; }
+                $suma += $v;
+            }
+            $bruto[$e['codigo']] = $suma;
+            $escalas[] = [
+                'codigo' => $e['codigo'], 'nombre' => $e['nombre'], 'grupo' => $e['grupo'],
+                'pd' => $suma, 'sinResponder' => $faltan,
+            ] + self::cociente($definicion, $e['codigo'], $suma);
+        }
+
+        // --- Componentes y total ---
+        foreach ($definicion['componentes'] ?? [] as $c) {
+            $suma = 0;
+            foreach ($c['subescalas'] as $cod) {
+                $suma += $bruto[$cod] ?? 0;
+            }
+            // Hay ítems que puntúan en dos subescalas: se contarían dos
+            // veces al sumar el componente, así que se descuentan una.
+            foreach ($c['descontar'] ?? [] as $item) {
+                $v = $valorDe($item);
+                if ($v !== null) {
+                    $suma -= $v;
+                }
+            }
+            $escalas[] = [
+                'codigo' => $c['codigo'], 'nombre' => $c['nombre'],
+                'grupo'  => $c['codigo'] === 'total' ? 'total' : 'componente',
+                'pd'     => $suma, 'sinResponder' => 0,
+            ] + self::cociente($definicion, $c['codigo'], $suma);
+        }
+
+        // Cuidado: "+" entre arrays conserva la clave que ya estaba, así que
+        // aquí no sirve para reemplazar 'escalas'.
+        $base['escalas'] = $escalas;
+        return $base;
+    }
+
+    /** Lleva un puntaje bruto a cociente con los baremos de la prueba. */
+    private static function cociente(array $definicion, string $codigo, int $bruto): array
+    {
+        $b = $definicion['baremos'][$codigo] ?? null;
+        if ($b === null || (float) $b['ds'] <= 0) {
+            return ['tb' => null, 'percentil' => null, 'interpretacion' => null];
+        }
+        $ce = (($bruto - (float) $b['media']) / (float) $b['ds']) * 15 + 100;
+        $ce = (int) round($ce);
+        return [
+            'tb'             => $ce,   // el panel lo muestra en la columna del puntaje
+            'percentil'      => null,  // el BarOn no trae tabla de percentiles
+            'interpretacion' => self::rotulo($definicion['cortes']['ce'] ?? [], $ce),
         ];
     }
 

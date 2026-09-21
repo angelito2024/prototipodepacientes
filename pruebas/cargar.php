@@ -73,7 +73,21 @@ try {
     echo "  " . $def['nombre'] . " (" . $def['siglas'] . ")\n";
     echo "  ítems ................ " . count($def['items']) . "\n";
     echo "  escalas .............. " . count($def['escalas']) . "\n";
-    echo "  índices de validez ... " . count($def['validez']) . "\n";
+    if (isset($def['validez'])) {
+        echo "  índices de validez ... " . count($def['validez']) . "\n";
+    }
+    if (isset($def['componentes'])) {
+        echo "  componentes .......... " . count($def['componentes']) . "\n";
+    }
+    if (($def['correccionPendiente'] ?? false) === true) {
+        echo "\n  ATENCIÓN: se carga para APLICARLA, no para puntuarla.\n"
+           . "  Falta la lista de ítems inversos, así que no se calculan puntajes.\n"
+           . "  El paciente la puede responder y sus respuestas quedan guardadas en\n"
+           . "  su historia. Cuando tengas la lista, vuelve a cargarla pasándola al\n"
+           . "  final del comando y luego corre:\n"
+           . "      php pruebas/recorregir.php {$def['codigo']}\n"
+           . "  y los protocolos ya respondidos se puntúan solos.\n";
+    }
 
     // --- Comprobación contra el propio Excel --------------------------
     $x  = new LectorExcel($archivo);

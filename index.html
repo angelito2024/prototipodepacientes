@@ -8682,21 +8682,55 @@ function cuerpoDelInforme(a){
     <td style="text-align:right">${v.tb!=null? v.tb : '—'}</td>
     <td>${v.interpretacion||'—'}</td></tr>`).join('');
 
+  // Si la prueba todavía no se puede puntuar, se dice y no se muestra nada
+  // más: un cuadro de escalas vacío se leería como "salió todo en cero".
+  if(r.sinCorregir){
+    return `
+      <div style="display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:12px">
+        <div><p style="margin:0"><b>${pac? pac.name : a.pacienteNombre}</b></p>
+          <p class="hint" style="margin:2px 0">${a.pruebaNombre}</p></div>
+        <div style="text-align:right">
+          <p class="hint" style="margin:0">Aplicada: ${fmtFechaCorta(a.terminadaEn)}</p>
+          <p class="hint" style="margin:2px 0">Profesional: ${prof}</p></div>
+      </div>
+      <div class="card" style="border-color:#e7c3b6;background:#fdf3ef">
+        <h4 style="margin:0 0 6px">Respondida, todavía sin puntuar</h4>
+        <p style="margin:0">${r.motivo||''}</p>
+      </div>
+      <p class="hint">Contestó <b>${r.contestados} de ${r.nItems}</b> frases${
+        a.minutos!=null? ` en ${a.minutos} minutos` : ''}. Las respuestas están
+        guardadas: no hay que volver a tomarle la prueba.</p>`;
+  }
+
   const grupos = [
     ['personalidad', 'Patrones clínicos de personalidad'],
     ['patologia',    'Patología grave de la personalidad'],
     ['sindrome',     'Síndromes clínicos'],
     ['grave',        'Síndromes clínicos graves'],
+    // Las del ICE BarOn: subescalas por componente, y arriba el resumen.
+    ['total',          'Cociente emocional total'],
+    ['componente',     'Por componente'],
+    ['intrapersonal',  'Componente intrapersonal'],
+    ['interpersonal',  'Componente interpersonal'],
+    ['adaptabilidad',  'Componente de adaptabilidad'],
+    ['manejo_tension', 'Componente de manejo de la tensión'],
+    ['animo_general',  'Componente del estado de ánimo general'],
+    ['validez',        'Escalas de impresión'],
   ];
+  // El Millon se lee en tasas base con índices de validez; el BarOn en
+  // cocientes, sin percentiles. Las columnas se nombran según cuál es.
+  const esCociente = !(r.validez||[]).length;
   const bloques = grupos.map(([g, titulo])=>{
     const esc = (r.escalas||[]).filter(e=>e.grupo===g);
     if(!esc.length) return '';
     return `<h4 style="margin:18px 0 6px">${titulo}</h4>
       <div class="tablewrap"><table>
-        <thead><tr><th>Cód</th><th>Escala</th><th style="text-align:right">PD</th>
-          <th style="text-align:right">TB</th><th style="text-align:right">Pc</th>
+        <thead><tr><th>Cód</th><th>Escala</th>
+          <th style="text-align:right">${esCociente? 'Bruto' : 'PD'}</th>
+          <th style="text-align:right">${esCociente? 'CE' : 'TB'}</th>
+          ${esCociente? '' : '<th style="text-align:right">Pc</th>'}
           <th style="min-width:160px">Perfil</th><th>Interpretación</th></tr></thead>
-        <tbody>${esc.map(e=>filaEscala(e)).join('')}</tbody></table></div>`;
+        <tbody>${esc.map(e=>filaEscala(e, esCociente)).join('')}</tbody></table></div>`;
   }).join('');
 
   return `
@@ -8713,35 +8747,49 @@ function cuerpoDelInforme(a){
       </div>
     </div>
     ${aviso}${rapido}
-    <h4 style="margin:18px 0 6px">Índices de validez</h4>
+    ${filaValidez? `<h4 style="margin:18px 0 6px">Índices de validez</h4>
     <div class="tablewrap"><table>
       <thead><tr><th>Cód</th><th>Índice</th><th style="text-align:right">PD</th>
         <th style="text-align:right">TB</th><th>Interpretación</th></tr></thead>
-      <tbody>${filaValidez}</tbody></table></div>
+      <tbody>${filaValidez}</tbody></table></div>` : ''}
     ${bloques}
     <p class="hint" style="margin-top:16px">
-      PD: puntuación directa · TB: tasa base · Pc: percentil.
-      La línea del perfil marca 60, 75 y 85, que son los cortes del instrumento.
+      ${esCociente
+        ? 'Bruto: suma de las respuestas · CE: cociente emocional, donde 100 es el '
+          + 'promedio y cada 15 puntos una desviación. La línea del perfil marca 70, '
+          + '90 y 100.'
+        : 'PD: puntuación directa · TB: tasa base · Pc: percentil. '
+          + 'La línea del perfil marca 60, 75 y 85, que son los cortes del instrumento.'}
       Este cuadro es un insumo para el profesional: no es un diagnóstico.
     </p>`;
 }
 
-function filaEscala(e){
-  const tb = Number(e.tb)||0;
-  const color = tb>=85? '#a3381f' : tb>=75? '#c77c26' : tb>=60? '#3f7ca8' : '#6a7688';
-  const ancho = Math.min(100, tb/115*100);
+function filaEscala(e, esCociente){
+  const v = Number(e.tb)||0;
+  // En tasa base lo alto es lo preocupante; en cociente emocional es al
+  // revés: 100 es el promedio y lo que hay que mirar es lo bajo.
+  const color = esCociente
+    ? (v<80? '#a3381f' : v<90? '#c77c26' : v<=109? '#3f7ca8' : '#2f6f4f')
+    : (v>=85? '#a3381f' : v>=75? '#c77c26' : v>=60? '#3f7ca8' : '#6a7688');
+  // La barra: tasa base de 0 a 115; cociente de 55 a 145 (±3 desviaciones).
+  const ancho = esCociente
+    ? Math.max(0, Math.min(100, (v-55)/90*100))
+    : Math.min(100, v/115*100);
+  // Marcas de referencia: los cortes del instrumento.
+  const marcas = esCociente
+    ? [[ (70-55)/90*100, '#e0a08a'], [(90-55)/90*100, '#d8b48a'], [(100-55)/90*100, '#9fb6c9']]
+    : [[52.2,'#c3cad6'], [65.2,'#d8b48a'], [73.9,'#e0a08a']];
   return `<tr>
     <td><b>${e.codigo}</b></td>
     <td>${e.nombre}</td>
     <td style="text-align:right">${e.pd}</td>
     <td style="text-align:right"><b>${e.tb!=null? e.tb : '—'}</b></td>
-    <td style="text-align:right">${e.percentil!=null? e.percentil : '—'}</td>
+    ${esCociente? '' : `<td style="text-align:right">${e.percentil!=null? e.percentil : '—'}</td>`}
     <td><div style="position:relative;height:12px;background:#eef1f6;border-radius:99px">
       <i style="position:absolute;left:0;top:0;height:100%;width:${ancho}%;
                 background:${color};border-radius:99px;display:block"></i>
-      <i style="position:absolute;left:52.2%;top:-2px;height:16px;width:1px;background:#c3cad6"></i>
-      <i style="position:absolute;left:65.2%;top:-2px;height:16px;width:1px;background:#d8b48a"></i>
-      <i style="position:absolute;left:73.9%;top:-2px;height:16px;width:1px;background:#e0a08a"></i>
+      ${marcas.map(([x,c])=>`<i style="position:absolute;left:${x}%;top:-2px;
+          height:16px;width:1px;background:${c}"></i>`).join('')}
     </div></td>
     <td>${e.interpretacion||'—'}</td></tr>`;
 }

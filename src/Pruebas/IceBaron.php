@@ -93,18 +93,18 @@ final class IceBaron
         'TOTAL CE' => 'total',
     ];
 
+    /**
+     * @param list<int> $itemsInversos los del manual; vacío deja la prueba
+     *                  en "solo aplicación" (se puede tomar, no puntuar)
+     */
     public static function extraer(string $rutaExcel, array $itemsInversos = []): array
     {
         $inversos = $itemsInversos !== [] ? $itemsInversos : self::ITEMS_INVERSOS;
-        if ($inversos === []) {
-            throw new RuntimeException(
-                "Falta la lista de ítems inversos del ICE BarOn.\n"
-                . "  El Excel no la trae: la columna donde se daba vuelta la respuesta\n"
-                . "  quedó vacía, así que no se puede deducir del archivo.\n"
-                . "  Sin ella los puntajes salen equivocados y la prueba no se carga.\n"
-                . "  Sale del manual del instrumento; pásala y queda operativa."
-            );
-        }
+        // Sin la clave de inversión la prueba se puede aplicar igual: las
+        // respuestas del paciente quedan guardadas en su historia. Lo que no
+        // se hace es inventar puntajes — se marca pendiente y se corrige
+        // sola en cuanto la clave esté cargada.
+        $pendiente = $inversos === [];
         foreach ($inversos as $i) {
             if (!is_int($i) || $i < 1 || $i > self::N_ITEMS) {
                 throw new RuntimeException(
@@ -142,6 +142,9 @@ final class IceBaron
             ],
             'items'        => $items,
             'inversos'     => array_values($inversos),
+            // Se puede tomar, pero todavía no puntuar. El panel lo muestra
+            // y el corrector devuelve las respuestas sin inventar escalas.
+            'correccionPendiente' => $pendiente,
             'escalas'      => self::escalas($ent, $itemDe),
             'componentes'  => self::componentes($ent, $itemDe),
             'baremos'      => $baremos,

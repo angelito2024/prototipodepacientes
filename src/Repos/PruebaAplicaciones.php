@@ -227,7 +227,7 @@ final class PruebaAplicaciones extends Repositorio
     /** Guarda el avance. No corrige ni cierra nada. */
     public static function guardarAvance(int $aplicacionId, array $respuestas): int
     {
-        $limpias = self::limpiar($respuestas);
+        $limpias = self::limpiar($respuestas, self::definicionDe($aplicacionId));
         Database::query(
             "UPDATE prueba_aplicacion
                 SET respuestas = ?, n_respondidos = ?,
@@ -261,7 +261,7 @@ final class PruebaAplicaciones extends Repositorio
             throw new RuntimeException('No tengo la definición de esa prueba.');
         }
 
-        $limpias = self::limpiar($respuestas);
+        $limpias = self::limpiar($respuestas, $def);
         $faltan  = [];
         for ($i = 1; $i <= (int) $def['nItems']; $i++) {
             if (!isset($limpias[$i])) {
@@ -288,19 +288,65 @@ final class PruebaAplicaciones extends Repositorio
         return $resultado;
     }
 
-    /** @return array<int,string> solo ítems válidos y respuestas conocidas */
-    private static function limpiar(array $respuestas): array
+    /**
+     * Deja solo lo que la prueba acepta: ítems que existen y respuestas que
+     * están entre sus opciones. Cada prueba tiene las suyas —el Millon es
+     * Verdadero/Falso, el BarOn va del 1 al 5— así que se comprueban contra
+     * la definición, no contra una lista fija.
+     *
+     * @return array<int,string>
+     */
+    private static function limpiar(array $respuestas, ?array $definicion = null): array
     {
+        $validas = null;
+        $nItems  = 999;
+        if ($definicion !== null) {
+            $validas = array_map(
+                static fn(array $o): string => (string) $o['valor'],
+                $definicion['opciones'] ?? []
+            );
+            $nItems = (int) ($definicion['nItems'] ?? 999);
+        }
+
         $out = [];
         foreach ($respuestas as $item => $r) {
             $n = (int) $item;
-            $v = is_string($r) ? strtoupper(trim($r)) : '';
-            if ($n > 0 && $n <= 999 && ($v === 'V' || $v === 'F')) {
-                $out[$n] = $v;
+            if ($n < 1 || $n > $nItems) {
+                continue;
+            }
+            $v = is_scalar($r) ? trim((string) $r) : '';
+            if ($v === '') {
+                continue;
+            }
+            if ($validas === null || $validas === []) {
+                // Sin definición a mano se mantiene el criterio antiguo.
+                $v = strtoupper($v);
+                if ($v === 'V' || $v === 'F') {
+                    $out[$n] = $v;
+                }
+                continue;
+            }
+            // "v" y "V" son la misma respuesta; "3" y "3 " también.
+            foreach ($validas as $ok) {
+                if (strcasecmp($v, $ok) === 0) {
+                    $out[$n] = $ok;
+                    break;
+                }
             }
         }
         ksort($out);
         return $out;
+    }
+
+    /** La definición de la prueba de una aplicación, o null si no está. */
+    private static function definicionDe(int $aplicacionId): ?array
+    {
+        $codigo = Database::valor(
+            'SELECT p.codigo FROM prueba_aplicacion a JOIN pruebas p ON p.id = a.prueba_id
+              WHERE a.id = ?',
+            [$aplicacionId]
+        );
+        return $codigo === null ? null : Pruebas::definicion((string) $codigo);
     }
 
     /** Las respuestas crudas, para el informe del profesional. */
