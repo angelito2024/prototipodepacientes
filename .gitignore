@@ -28,3 +28,8 @@ respaldo/copias/
 # La contraseña con que se cifran las copias que salen del local.
 # Jamás al repositorio: con ella, una copia robada se vuelve legible.
 /respaldo/clave.txt
+
+# Modelos de documentos que subió Luis para mejorar el sistema: son
+# informes reales, con nombres de pacientes y contenido clínico. Sirven
+# de referencia para construir las plantillas; no se versionan.
+/documentos para mejora de la pagina/
