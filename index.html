@@ -9327,6 +9327,9 @@ function documentoHTML(tipo, paraImpresion){
     : tipo === 'orientacion_vocacional' ? cuerpoOrientacionVocacional(pac)
     : tipo === 'ficha_practicante'      ? cuerpoFichaPracticante()
     : tipo === 'encuesta_practicante'   ? cuerpoEncuestaPracticante()
+    : tipo === 'informe_educativo'      ? cuerpoInformeEducativo(pac)
+    : tipo === 'orientacion_padres'     ? cuerpoOrientacionPadres(pac)
+    : tipo === 'pautas_docente'         ? cuerpoPautasDocente(pac)
     : '';
 
   return `
@@ -9445,11 +9448,24 @@ function menuDocumentos(patientId){
       <b style="display:block;font-size:15px">${d.titulo}</b>
       <span class="hint" style="display:block;margin-top:3px">${d.para}</span>
     </button>`;
-  const tarjetas = Object.entries(DOCUMENTOS_OFICIALES)
-    .filter(([,d]) => !d.sinPaciente && !d.esPracticante)
+  // Agrupados por línea de trabajo: el mismo caso se informa distinto
+  // según a quién va dirigido, y conviene que se elija con eso en mente.
+  const deLinea = linea => Object.entries(DOCUMENTOS_OFICIALES)
+    .filter(([,d]) => !d.sinPaciente && !d.esPracticante && (d.linea||'clinica') === linea)
     .map(tarjeta).join('');
+  const bloque = (titulo, nota, contenido) => contenido
+    ? `<h3 style="margin:16px 0 4px">${titulo}</h3>
+       <p class="hint" style="margin:0 0 10px">${nota}</p>${contenido}` : '';
 
-  m.innerHTML = `<div class="receiptCard" style="max-width:620px">
+  const tarjetas =
+      bloque('Atención clínica', 'Lo que se emite por el tratamiento del paciente.',
+             deLinea('clinica'))
+    + bloque('Uso legal', 'Para juzgados, fiscalías o demandas.', deLinea('forense'))
+    + bloque('Convenio con colegios',
+             'El mismo caso se informa distinto según quién lo va a leer: al colegio, '
+           + 'a la familia o al docente.', deLinea('educativa'));
+
+  m.innerHTML = `<div class="receiptCard" style="max-width:640px">
     <div style="padding:24px 26px;max-height:76vh;overflow-y:auto">
       <h2 style="margin-top:0">Documentos para ${esc(pac.name)}</h2>
       <p class="hint">Se arman con lo que ya está registrado; el profesional completa
@@ -9529,6 +9545,7 @@ Object.assign(DOCUMENTOS_OFICIALES, {
     para: 'Para juzgados, fiscalías o demandas: violencia familiar, tenencia, '
         + 'alimentos. Lleva numeración propia y exige que cada afirmación se '
         + 'sostenga en lo evaluado.',
+    linea: 'forense',
     campos: [
       {id:'solicitado_por', etiqueta:'¿Quién lo solicita?', tipo:'texto',
        ayuda:'Juzgado, fiscalía, abogado o el propio evaluado. Va en el informe: '
@@ -9557,12 +9574,22 @@ Object.assign(DOCUMENTOS_OFICIALES, {
   informe_laboral: {
     titulo: 'Informe psicolaboral',
     nombre: 'INFORME DE EVALUACIÓN PSICOLABORAL',
-    para: 'Evaluación de personal para una empresa: Raven, Zavic, DISC y Wartegg, '
-        + 'con la conclusión sobre el ajuste al puesto.',
+    para: 'Evaluación de un trabajador, por encargo de la empresa que contrató al '
+        + 'centro: Raven, Zavic, DISC y Wartegg, con la conclusión sobre el puesto.',
     sinPaciente: true,
+    linea: 'organizacional',
     campos: [
-      {id:'empresa', etiqueta:'Empresa que lo solicita', tipo:'texto'},
-      {id:'puesto', etiqueta:'Puesto al que postula', tipo:'texto'},
+      {id:'empresa', etiqueta:'Empresa que contrata el servicio', tipo:'texto'},
+      {id:'tipo_evaluacion', etiqueta:'¿Para qué se evalúa?', tipo:'select',
+       opciones:['Evaluación de personal en actividad',
+                 'Selección de personal',
+                 'Evaluación periódica anual',
+                 'Reubicación o ascenso',
+                 'Evaluación por incidente o solicitud del área'],
+       ayuda:'Cambia lo que se concluye: en una selección se dice si es apto; en una '
+           + 'evaluación de alguien que ya trabaja, se habla de su desempeño y de '
+           + 'qué necesita, no de contratarlo o no.'},
+      {id:'puesto', etiqueta:'Puesto que ocupa', tipo:'texto'},
       {id:'ev_nombre', etiqueta:'Nombre del evaluado', tipo:'texto'},
       {id:'ev_dni', etiqueta:'DNI', tipo:'texto'},
       {id:'ev_edad', etiqueta:'Edad', tipo:'texto'},
@@ -9586,11 +9613,15 @@ Object.assign(DOCUMENTOS_OFICIALES, {
       {id:'aspectos', etiqueta:'Aspectos a considerar', tipo:'textarea', filas:3,
        ayuda:'Lo que conviene que la empresa sepa. Redáctalo como característica, '
            + 'no como defecto: este informe decide si alguien trabaja o no.'},
-      {id:'conclusion_ajuste', etiqueta:'Conclusión sobre el ajuste al puesto', tipo:'select',
-       opciones:['Recomendable para el puesto',
-                 'Recomendable con observaciones',
-                 'Recomendable condicionado a capacitación',
-                 'No recomendable para el puesto']},
+      {id:'conclusion_ajuste', etiqueta:'Conclusión', tipo:'select',
+       opciones:['Perfil compatible con el puesto',
+                 'Perfil compatible, con aspectos a reforzar',
+                 'Perfil compatible condicionado a capacitación',
+                 'Perfil que requiere acompañamiento en el puesto',
+                 'Perfil no compatible con el puesto'],
+       ayuda:'Para una selección, "compatible" equivale a apto. Para un trabajador '
+           + 'en actividad, describe el ajuste y lo que necesita: un informe no es '
+           + 'causa de despido y conviene que no se lea como si lo fuera.'},
       {id:'sustento_conclusion', etiqueta:'Sustento de la conclusión', tipo:'textarea', filas:3},
     ],
   },
@@ -9601,6 +9632,7 @@ Object.assign(DOCUMENTOS_OFICIALES, {
     nombre: 'INFORME PSICOLÓGICO DE ORIENTACIÓN VOCACIONAL',
     para: 'Para estudiantes que deciden qué estudiar: personalidad, inteligencia '
         + 'emocional e intereses vocacionales con el CASM-83.',
+    linea: 'educativa',
     campos: [
       {id:'motivo', etiqueta:'Motivo de consulta', tipo:'textarea', filas:3,
        valor:'Acude a consulta para realizar una evaluación de orientación vocacional.'},
@@ -9707,8 +9739,9 @@ function cuerpoInformeLaboral(){
     ${filaDato('Estado civil', g.ev_estado)}
     ${filaDato('Grado de instrucción', g.ev_grado)}
     ${filaDato('Profesión', g.ev_profesion)}
-    ${filaDato('Puesto al que postula', g.puesto)}
-    ${filaDato('Empresa solicitante', g.empresa)}
+    ${filaDato('Puesto', g.puesto)}
+    ${filaDato('Empresa', g.empresa)}
+    ${filaDato('Tipo de evaluación', g.tipo_evaluacion)}
   </table>
 
   <div style="font-weight:bold;margin:12pt 0 5pt">III. RESULTADOS DE LA EVALUACIÓN</div>
@@ -9735,9 +9768,14 @@ function cuerpoInformeLaboral(){
   <div style="font-weight:bold;margin:12pt 0 5pt">V. CONCLUSIÓN</div>
   <p style="margin:0 0 6pt;text-align:justify">
     Considerando los resultados obtenidos en las evaluaciones aplicadas,
-    ${esc(g.ev_nombre||'el evaluado')} resulta
-    <b>${esc(g.conclusion_ajuste||'—')}</b>${g.puesto? ` para el puesto de ${esc(g.puesto)}`:''}.</p>
-  ${g.sustento_conclusion? parrafos(g.sustento_conclusion):''}`;
+    ${esc(g.ev_nombre||'el evaluado')} presenta un
+    <b>${esc(g.conclusion_ajuste||'—')}</b>${g.puesto? `, para el puesto de ${esc(g.puesto)}`:''}.</p>
+  ${g.sustento_conclusion? parrafos(g.sustento_conclusion):''}
+  <p style="margin:12pt 0 0;font-size:9pt;color:#555;text-align:justify">
+    Este informe responde a la evaluación solicitada por la empresa y describe el
+    ajuste del trabajador al puesto en el momento de la evaluación. No constituye
+    diagnóstico clínico ni sustento por sí solo para una decisión laboral.
+    Información reservada, sujeta a la Ley 29733 de Protección de Datos Personales.</p>`;
 }
 
 function cuerpoOrientacionVocacional(pac){
@@ -9864,6 +9902,211 @@ function cuerpoEncuestaPracticante(){
   ${parrafos(g.cursos)}
   <p style="margin:10pt 0 3pt;font-weight:bold">4. Mencione dos sugerencias para mejorar la formación académica de los estudiantes practicantes.</p>
   ${lista(g.sugerencias)}`;
+}
+
+
+/* ===================== LÍNEA EDUCATIVA =====================
+   El centro trabaja con colegios por convenio, y ahí el mismo caso se
+   informa tres veces a tres lectores distintos. No es el mismo documento
+   con otro título: cambia qué se puede decir.
+
+   Al colegio se le informa lo que necesita para decidir apoyos, sin
+   volcarle la historia clínica del alumno. A los padres se les explica en
+   castellano claro y se les dice qué hacer en casa. Al docente se le dan
+   pautas de aula que pueda aplicar el lunes, no teoría.
+
+   Esto no es formalidad: lo que se escribe en un informe escolar puede
+   quedar en el legajo de un niño por años.                             */
+
+Object.assign(DOCUMENTOS_OFICIALES, {
+
+  informe_educativo: {
+    titulo: 'Informe psicológico educativo',
+    nombre: 'INFORME PSICOLÓGICO EDUCATIVO',
+    para: 'Para la institución educativa: lo que el colegio necesita para decidir '
+        + 'apoyos y adaptaciones, sin exponer la historia clínica completa.',
+    linea: 'educativa',
+    campos: [
+      {id:'institucion', etiqueta:'Institución educativa', tipo:'texto'},
+      {id:'grado', etiqueta:'Grado y sección', tipo:'texto'},
+      {id:'docente', etiqueta:'Docente a cargo', tipo:'texto'},
+      {id:'derivado_por', etiqueta:'¿Quién lo derivó?', tipo:'select',
+       opciones:['La institución educativa','Los padres o apoderados',
+                 'El docente de aula','Departamento psicopedagógico','Otro']},
+      {id:'motivo', etiqueta:'Motivo de la derivación', tipo:'textarea', filas:4,
+       ayuda:'Lo que se observó en el colegio y llevó a derivarlo.'},
+      {id:'tecnicas', etiqueta:'Técnicas e instrumentos aplicados', tipo:'textarea', filas:4},
+      {id:'area_cognitiva', etiqueta:'Área cognitiva y de aprendizaje', tipo:'textarea', filas:4},
+      {id:'area_conductual', etiqueta:'Área conductual en el aula', tipo:'textarea', filas:4},
+      {id:'area_socioemocional', etiqueta:'Área socioemocional', tipo:'textarea', filas:4},
+      {id:'fortalezas', etiqueta:'Fortalezas del estudiante', tipo:'textarea', filas:3,
+       ayuda:'Va antes de las dificultades, y a propósito: el colegio lee primero '
+           + 'lo que puede aprovechar. Un informe que solo lista problemas termina '
+           + 'etiquetando al alumno.'},
+      {id:'conclusiones', etiqueta:'Conclusiones', tipo:'textarea', filas:5,
+       ayuda:'Solo lo que el colegio necesita saber para actuar. El diagnóstico '
+           + 'clínico detallado va en la historia, no en el legajo escolar.'},
+      {id:'adaptaciones', etiqueta:'Adaptaciones y apoyos sugeridos', tipo:'textarea', filas:5,
+       ayuda:'Una por línea, concretas y aplicables: ubicación en el aula, tiempo '
+           + 'extra, forma de evaluar, apoyo de un adulto.'},
+      {id:'seguimiento', etiqueta:'Seguimiento propuesto', tipo:'textarea', filas:2},
+    ],
+  },
+
+  orientacion_padres: {
+    titulo: 'Informe y pautas para los padres',
+    nombre: 'INFORME DE ORIENTACIÓN A PADRES DE FAMILIA',
+    para: 'Para la familia: lo mismo explicado sin tecnicismos, con lo que pueden '
+        + 'hacer en casa.',
+    linea: 'educativa',
+    campos: [
+      {id:'institucion', etiqueta:'Institución educativa (si aplica)', tipo:'texto'},
+      {id:'grado', etiqueta:'Grado y sección', tipo:'texto'},
+      {id:'dirigido_a', etiqueta:'Dirigido a', tipo:'texto',
+       ayuda:'Los padres o el apoderado, por su nombre. Se completa solo con el '
+           + 'apoderado registrado.'},
+      {id:'que_evaluamos', etiqueta:'Qué se evaluó', tipo:'textarea', filas:3,
+       ayuda:'En palabras que los padres entiendan. "Se aplicaron pruebas de atención '
+           + 'y de estado emocional", no los nombres técnicos de los reactivos.'},
+      {id:'que_encontramos', etiqueta:'Qué encontramos', tipo:'textarea', filas:5,
+       ayuda:'Sin tecnicismos y sin suavizarlo tanto que no se entienda. Los padres '
+           + 'tienen derecho a saber qué pasa con su hijo.'},
+      {id:'fortalezas', etiqueta:'Lo que su hijo(a) tiene a favor', tipo:'textarea', filas:3},
+      {id:'en_casa', etiqueta:'Qué pueden hacer en casa', tipo:'textarea', filas:6,
+       ayuda:'Una por línea. Acciones concretas y posibles: rutinas, horarios, cómo '
+           + 'responder ante una conducta. Evita "brindar mayor apoyo emocional", '
+           + 'que nadie sabe cómo se hace.'},
+      {id:'que_esperar', etiqueta:'Qué esperar del proceso', tipo:'textarea', filas:3,
+       ayuda:'Cuánto puede tardar y cómo se va a ver la mejora. Baja la ansiedad '
+           + 'de la familia y evita que abandonen a las tres sesiones.'},
+      {id:'cuando_volver', etiqueta:'Cuándo volver a consulta', tipo:'texto'},
+      {id:'alerta', etiqueta:'Señales por las que deben buscar ayuda antes', tipo:'textarea', filas:3,
+       ayuda:'Importante ponerlo por escrito: qué no puede esperar a la próxima cita.'},
+    ],
+  },
+
+  pautas_docente: {
+    titulo: 'Pautas para el docente',
+    nombre: 'PAUTAS DE MANEJO EN EL AULA',
+    para: 'Para el profesor: qué hacer en clase con este estudiante, en una página '
+        + 'y sin diagnósticos.',
+    linea: 'educativa',
+    campos: [
+      {id:'institucion', etiqueta:'Institución educativa', tipo:'texto'},
+      {id:'grado', etiqueta:'Grado y sección', tipo:'texto'},
+      {id:'docente', etiqueta:'Docente', tipo:'texto'},
+      {id:'que_observar', etiqueta:'Qué puede estar viendo en clase', tipo:'textarea', filas:4,
+       ayuda:'Las conductas tal como aparecen en el aula, no su nombre clínico. El '
+           + 'docente no necesita el diagnóstico: necesita reconocer la situación.'},
+      {id:'fortalezas', etiqueta:'Lo que funciona con este estudiante', tipo:'textarea', filas:3},
+      {id:'estrategias', etiqueta:'Estrategias para el aula', tipo:'textarea', filas:7,
+       ayuda:'Una por línea, aplicables sin material especial ni tiempo extra. Si la '
+           + 'estrategia exige que el docente atienda solo a este alumno, no se va a '
+           + 'aplicar: tiene treinta más.'},
+      {id:'evitar', etiqueta:'Qué conviene evitar', tipo:'textarea', filas:4,
+       ayuda:'Una por línea. Lo que suele empeorar la situación aunque parezca lógico.'},
+      {id:'evaluacion', etiqueta:'Sugerencias para la evaluación', tipo:'textarea', filas:3},
+      {id:'contacto', etiqueta:'Ante qué situación comunicarse con el centro', tipo:'textarea', filas:2},
+    ],
+  },
+});
+
+/* --- Los cuerpos de la línea educativa ------------------------------ */
+
+function datosEscolares(pac){
+  const g = docDatos;
+  return `
+  <table style="width:100%;border:none;border-collapse:collapse;font-size:10.5pt;margin-bottom:12pt">
+    ${filaDato('Estudiante', pac.name)}
+    ${filaDato('Edad', pac.age? `${pac.age} años` : '')}
+    ${filaDato('Fecha de nacimiento', pac.birthDate)}
+    ${filaDato('Institución educativa', g.institucion)}
+    ${filaDato('Grado y sección', g.grado)}
+    ${filaDato('Docente a cargo', g.docente)}
+    ${pac.isMinor? filaDato('Padres o apoderado', pac.guardianName) : ''}
+    ${filaDato('Derivado por', g.derivado_por)}
+    ${filaDato('Evaluador', (docDatos._profesional||{}).name)}
+  </table>`;
+}
+
+function cuerpoInformeEducativo(pac){
+  const g = docDatos;
+  return `
+    ${datosEscolares(pac)}
+    ${seccion('I. MOTIVO DE LA DERIVACIÓN', g.motivo)}
+    ${g.tecnicas? `<div style="font-weight:bold;margin:12pt 0 5pt">II. TÉCNICAS E INSTRUMENTOS APLICADOS</div>${lista(g.tecnicas)}`:''}
+    <div style="font-weight:bold;margin:12pt 0 5pt">III. RESULTADOS</div>
+    ${g.area_cognitiva? `<p style="margin:0 0 6pt;text-align:justify"><b>Área cognitiva y de aprendizaje.</b> ${esc(g.area_cognitiva)}</p>`:''}
+    ${g.area_conductual? `<p style="margin:0 0 6pt;text-align:justify"><b>Conducta en el aula.</b> ${esc(g.area_conductual)}</p>`:''}
+    ${g.area_socioemocional? `<p style="margin:0 0 6pt;text-align:justify"><b>Área socioemocional.</b> ${esc(g.area_socioemocional)}</p>`:''}
+    ${g.fortalezas? `<div style="font-weight:bold;margin:12pt 0 5pt">IV. FORTALEZAS DEL ESTUDIANTE</div>${parrafos(g.fortalezas)}`:''}
+    ${seccion('V. CONCLUSIONES', g.conclusiones)}
+    ${g.adaptaciones? `<div style="font-weight:bold;margin:12pt 0 5pt">VI. ADAPTACIONES Y APOYOS SUGERIDOS</div>${lista(g.adaptaciones)}`:''}
+    ${seccion('VII. SEGUIMIENTO', g.seguimiento)}
+    <p style="margin:14pt 0 0;font-size:9pt;color:#555;text-align:justify">
+      Documento de carácter reservado, emitido para orientar el apoyo pedagógico del
+      estudiante. Su contenido está protegido por la Ley 29733 de Protección de Datos
+      Personales y por el deber de confidencialidad profesional: no debe incorporarse
+      a documentos de acceso general ni comunicarse a terceros sin autorización de los
+      padres o apoderados.</p>`;
+}
+
+function cuerpoOrientacionPadres(pac){
+  const g = docDatos;
+  const dirigido = g.dirigido_a || pac.guardianName || 'Señores padres de familia';
+  return `
+  <p style="margin:0 0 12pt">${esc(dirigido)}:</p>
+  <table style="width:100%;border:none;border-collapse:collapse;font-size:10.5pt;margin-bottom:12pt">
+    ${filaDato('Estudiante', pac.name)}
+    ${filaDato('Edad', pac.age? `${pac.age} años` : '')}
+    ${filaDato('Institución educativa', g.institucion)}
+    ${filaDato('Grado y sección', g.grado)}
+  </table>
+  ${seccion('QUÉ SE EVALUÓ', g.que_evaluamos)}
+  ${seccion('QUÉ ENCONTRAMOS', g.que_encontramos)}
+  ${g.fortalezas? `<div style="font-weight:bold;margin:12pt 0 5pt">LO QUE SU HIJO(A) TIENE A FAVOR</div>${parrafos(g.fortalezas)}`:''}
+  ${g.en_casa? `<div style="font-weight:bold;margin:12pt 0 5pt">QUÉ PUEDEN HACER EN CASA</div>${lista(g.en_casa)}`:''}
+  ${seccion('QUÉ ESPERAR DEL PROCESO', g.que_esperar)}
+  ${g.alerta? `
+    <div style="border:1px solid #c98b73;background:#fdf4f0;padding:9pt 12pt;margin:12pt 0">
+      <div style="font-weight:bold;margin-bottom:4pt">Busquen ayuda antes de la próxima cita si observan:</div>
+      ${lista(g.alerta)}
+      <div style="font-size:10pt;margin-top:4pt">Comuníquense con el centro al
+        ${esc((DB.centerInfo||{}).phone||'')}.</div>
+    </div>`:''}
+  ${g.cuando_volver? `<p style="margin:10pt 0 0"><b>Próxima consulta:</b> ${esc(g.cuando_volver)}</p>`:''}
+  <p style="margin:12pt 0 0;text-align:justify">
+    Quedamos a su disposición para cualquier duda sobre este informe o sobre el
+    proceso de su hijo(a).</p>`;
+}
+
+function cuerpoPautasDocente(pac){
+  const g = docDatos;
+  return `
+  <p style="margin:0 0 12pt">${g.docente? `Estimado(a) ${esc(g.docente)}:` : 'Estimado(a) docente:'}</p>
+  <table style="width:100%;border:none;border-collapse:collapse;font-size:10.5pt;margin-bottom:12pt">
+    ${filaDato('Estudiante', pac.name)}
+    ${filaDato('Grado y sección', g.grado)}
+    ${filaDato('Institución educativa', g.institucion)}
+  </table>
+  <p style="margin:0 0 10pt;text-align:justify;font-size:10.5pt">
+    Estas pautas surgen de la evaluación psicológica del estudiante y buscan
+    apoyar su desempeño en el aula. No incluyen información clínica: para eso
+    puede comunicarse directamente con el centro.</p>
+  ${seccion('QUÉ PUEDE ESTAR VIENDO EN CLASE', g.que_observar)}
+  ${g.fortalezas? `<div style="font-weight:bold;margin:12pt 0 5pt">LO QUE FUNCIONA CON ESTE ESTUDIANTE</div>${parrafos(g.fortalezas)}`:''}
+  ${g.estrategias? `<div style="font-weight:bold;margin:12pt 0 5pt">ESTRATEGIAS PARA EL AULA</div>${lista(g.estrategias)}`:''}
+  ${g.evitar? `<div style="font-weight:bold;margin:12pt 0 5pt">QUÉ CONVIENE EVITAR</div>${lista(g.evitar)}`:''}
+  ${seccion('SUGERENCIAS PARA LA EVALUACIÓN', g.evaluacion)}
+  ${g.contacto? `
+    <div style="border:1px solid #bcd0c4;background:#f3f8f5;padding:9pt 12pt;margin:12pt 0">
+      <div style="font-weight:bold;margin-bottom:4pt">Comuníquese con el centro si:</div>
+      ${parrafos(g.contacto)}
+      <div style="font-size:10pt">${esc((DB.centerInfo||{}).phone||'')}</div>
+    </div>`:''}
+  <p style="margin:12pt 0 0;font-size:9pt;color:#555;text-align:justify">
+    Documento reservado para uso pedagógico del docente a cargo. No debe
+    compartirse con otros estudiantes ni con sus familias.</p>`;
 }
 
 /* --- La ventana desde donde se emite ------------------------------- */
