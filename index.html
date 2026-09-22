@@ -5919,6 +5919,8 @@ function viewPracticantes(){
     <td>${pt.birthday? fmtBirthday(pt.birthday):'—'}</td>
     <td>
       <button class="btn small secondary" onclick="showPracticeReport('${pt.id}')">📊 Reporte de horas</button>
+      <button class="btn small secondary" onclick="menuDocsPracticante('${pt.id}')"
+        title="La ficha de desempeño y la encuesta que pide la universidad">📄 Formatos</button>
       <button class="btn small secondary" onclick="editPract('${pt.id}')">Editar / asignar tarea</button>
       <button class="btn small secondary" onclick="toggleActive('practicantes','${pt.id}')">${pt.active===false?'Habilitar':'Inhabilitar'}</button>
       <button class="btn small danger" onclick="deletePract('${pt.id}')">Eliminar</button>
@@ -9317,9 +9319,15 @@ function documentoHTML(tipo, paraImpresion){
   const fecha = `${hoy.getDate()} de ${MESES[hoy.getMonth()]} de ${hoy.getFullYear()}`;
   const num = docDatos._numero || '';
 
-  const cuerpo = tipo === 'constancia'
-    ? cuerpoConstancia(pac, fecha)
-    : cuerpoInformeClinico(pac);
+  const cuerpo =
+      tipo === 'constancia'             ? cuerpoConstancia(pac, fecha)
+    : tipo === 'informe_clinico'        ? cuerpoInformeClinico(pac)
+    : tipo === 'informe_forense'        ? cuerpoInformeForense(pac)
+    : tipo === 'informe_laboral'        ? cuerpoInformeLaboral()
+    : tipo === 'orientacion_vocacional' ? cuerpoOrientacionVocacional(pac)
+    : tipo === 'ficha_practicante'      ? cuerpoFichaPracticante()
+    : tipo === 'encuesta_practicante'   ? cuerpoEncuestaPracticante()
+    : '';
 
   return `
   <div style="font-family:Georgia,'Times New Roman',serif;font-size:11pt;line-height:1.45;color:#111">
@@ -9427,22 +9435,29 @@ function menuDocumentos(patientId){
     m.className = 'modalOverlay open';
     document.body.appendChild(m);
   }
-  const tarjetas = Object.entries(DOCUMENTOS_OFICIALES).map(([clave, d])=>`
+  // Los de practicante y el psicolaboral no salen de un paciente: se
+  // emiten desde su propia pestaña y no tienen sentido en esta lista.
+  const tarjeta = ([clave, d]) => `
     <button type="button" onclick="cerrarMenuDocs(); abrirDocumento('${clave}','${patientId}')"
       style="display:block;width:100%;text-align:left;background:var(--paper);
              border:1px solid var(--border);border-radius:8px;padding:14px 16px;
              margin-bottom:10px;cursor:pointer;font:inherit">
       <b style="display:block;font-size:15px">${d.titulo}</b>
       <span class="hint" style="display:block;margin-top:3px">${d.para}</span>
-    </button>`).join('');
-  m.innerHTML = `<div class="receiptCard" style="max-width:600px">
+    </button>`;
+  const tarjetas = Object.entries(DOCUMENTOS_OFICIALES)
+    .filter(([,d]) => !d.sinPaciente && !d.esPracticante)
+    .map(tarjeta).join('');
+
+  m.innerHTML = `<div class="receiptCard" style="max-width:620px">
     <div style="padding:24px 26px;max-height:76vh;overflow-y:auto">
       <h2 style="margin-top:0">Documentos para ${esc(pac.name)}</h2>
       <p class="hint">Se arman con lo que ya está registrado; el profesional completa
-        y revisa lo demás antes de firmar.</p>
+        y revisa lo demás antes de firmar. La firma va en blanco.</p>
       ${tarjetas}
-      <p class="hint" style="margin-top:14px">Los demás formatos —informe forense,
-        psicolaboral, orientación vocacional— están en camino.</p>
+      <p class="hint" style="margin-top:14px">Los que no parten de un paciente están en
+        otro lado: la evaluación de personal para empresas, en <b>Informes</b>;
+        los formatos de la universidad, en <b>Practicantes</b>.</p>
     </div>
     <div class="receiptActions">
       <button class="btn secondary" onclick="cerrarMenuDocs()">Cerrar</button>
@@ -9454,28 +9469,451 @@ function cerrarMenuDocs(){
   if(m) m.remove();
 }
 
+/* Los dos formatos que pide la universidad por cada practicante. */
+function menuDocsPracticante(practicanteId){
+  const pt = (DB.practicantes||[]).find(p=>p.id===practicanteId);
+  if(!pt) return;
+  let m = document.getElementById('menuDocsModal');
+  if(!m){
+    m = document.createElement('div');
+    m.id = 'menuDocsModal';
+    m.className = 'modalOverlay open';
+    document.body.appendChild(m);
+  }
+  const tarjetas = Object.entries(DOCUMENTOS_OFICIALES)
+    .filter(([,d]) => d.esPracticante)
+    .map(([clave, d])=>`
+      <button type="button" onclick="cerrarMenuDocs(); abrirDocumento('${clave}','${practicanteId}')"
+        style="display:block;width:100%;text-align:left;background:var(--paper);
+               border:1px solid var(--border);border-radius:8px;padding:14px 16px;
+               margin-bottom:10px;cursor:pointer;font:inherit">
+        <b style="display:block;font-size:15px">${d.titulo}</b>
+        <span class="hint" style="display:block;margin-top:3px">${d.para}</span>
+      </button>`).join('');
+  m.innerHTML = `<div class="receiptCard" style="max-width:620px">
+    <div style="padding:24px 26px;max-height:76vh;overflow-y:auto">
+      <h2 style="margin-top:0">Formatos de ${esc(pt.name)}</h2>
+      <p class="hint">Vienen con los datos del practicante y del centro ya puestos.
+        La nota final de la ficha se suma sola al elegir el nivel de cada criterio.</p>
+      ${tarjetas}
+    </div>
+    <div class="receiptActions">
+      <button class="btn secondary" onclick="cerrarMenuDocs()">Cerrar</button>
+    </div>
+  </div>`;
+}
+
+/* --- Las áreas del CASM-83, en el orden en que se informan ---------- */
+const AREAS_CASM83 = [
+  ['CCSS','Ciencias Sociales'],      ['CCCO','Ciencias de la Comunicación'],
+  ['CCNA','Ciencias Naturales'],     ['IIAA','Institutos Armados'],
+  ['CCFM','Ciencias Físico-Matemáticas'], ['FINA','Finanzas'],
+  ['LING','Lingüística'],            ['JURI','Jurisprudencia'],
+  ['CCEP','Ciencias Económico-Políticas'], ['ARTE','Artes'],
+  ['BURO','Burocracia'],
+];
+
+/* --- Los ejes del Zavic, como los reporta el centro ----------------- */
+const EJES_ZAVIC = [
+  ['moral','Moral'], ['legalidad','Legalidad'], ['indiferencia','Indiferencia'],
+  ['corrupto','Corrupción'], ['economico','Económico'], ['politico','Político'],
+  ['social','Social'], ['religioso','Religioso'],
+];
+
+Object.assign(DOCUMENTOS_OFICIALES, {
+
+  /* ============ INFORME PSICOLÓGICO FORENSE / LEGAL ============ */
+  informe_forense: {
+    titulo: 'Informe psicológico forense',
+    nombre: 'INFORME PSICOLÓGICO',
+    para: 'Para juzgados, fiscalías o demandas: violencia familiar, tenencia, '
+        + 'alimentos. Lleva numeración propia y exige que cada afirmación se '
+        + 'sostenga en lo evaluado.',
+    campos: [
+      {id:'solicitado_por', etiqueta:'¿Quién lo solicita?', tipo:'texto',
+       ayuda:'Juzgado, fiscalía, abogado o el propio evaluado. Va en el informe: '
+           + 'un peritaje no dice lo mismo que una evaluación de parte.'},
+      {id:'expediente', etiqueta:'N° de expediente (si lo hay)', tipo:'texto'},
+      {id:'motivo', etiqueta:'Motivación de la consulta', tipo:'textarea', filas:6,
+       ayuda:'El relato del evaluado va entre comillas y en sus palabras. Lo que es '
+           + 'relato se marca como relato; lo que es observación, como observación.'},
+      {id:'antecedentes', etiqueta:'Antecedentes del caso', tipo:'textarea', filas:5},
+      {id:'tecnicas', etiqueta:'Técnicas e instrumentos aplicados', tipo:'textarea', filas:4},
+      {id:'observacion', etiqueta:'Observación de conducta', tipo:'textarea', filas:5},
+      {id:'area_personalidad', etiqueta:'Área de personalidad', tipo:'textarea', filas:3},
+      {id:'area_cognitiva', etiqueta:'Área cognitiva', tipo:'textarea', filas:3},
+      {id:'area_familiar', etiqueta:'Área familiar', tipo:'textarea', filas:3},
+      {id:'area_socioemocional', etiqueta:'Área socioemocional', tipo:'textarea', filas:5},
+      {id:'resultados_pruebas', etiqueta:'Resultados de las pruebas', tipo:'textarea', filas:4},
+      {id:'conclusiones', etiqueta:'Conclusiones', tipo:'textarea', filas:7,
+       ayuda:'La parte más leída y la más usada en contra. Revisa que no niegues y '
+           + 'afirmes lo mismo en una sola frase: si hay afectación, dilo sin el '
+           + '"no se evidencia" delante. Cada conclusión debe poder rastrearse a un dato.'},
+      {id:'recomendaciones', etiqueta:'Recomendaciones', tipo:'textarea', filas:5},
+    ],
+  },
+
+  /* ============ INFORME PSICOLABORAL ============ */
+  informe_laboral: {
+    titulo: 'Informe psicolaboral',
+    nombre: 'INFORME DE EVALUACIÓN PSICOLABORAL',
+    para: 'Evaluación de personal para una empresa: Raven, Zavic, DISC y Wartegg, '
+        + 'con la conclusión sobre el ajuste al puesto.',
+    sinPaciente: true,
+    campos: [
+      {id:'empresa', etiqueta:'Empresa que lo solicita', tipo:'texto'},
+      {id:'puesto', etiqueta:'Puesto al que postula', tipo:'texto'},
+      {id:'ev_nombre', etiqueta:'Nombre del evaluado', tipo:'texto'},
+      {id:'ev_dni', etiqueta:'DNI', tipo:'texto'},
+      {id:'ev_edad', etiqueta:'Edad', tipo:'texto'},
+      {id:'ev_estado', etiqueta:'Estado civil', tipo:'texto'},
+      {id:'ev_grado', etiqueta:'Grado de instrucción', tipo:'texto'},
+      {id:'ev_profesion', etiqueta:'Profesión', tipo:'texto'},
+      {id:'presentacion', etiqueta:'Presentación del proceso', tipo:'textarea', filas:5,
+       ayuda:'Qué se evaluó y para qué. Viene un texto base: ajústalo a lo que pidió la empresa.'},
+      {id:'raven_nivel', etiqueta:'Raven — nivel alcanzado', tipo:'texto',
+       ayuda:'Por ejemplo: Superior al término medio'},
+      {id:'raven_puntaje', etiqueta:'Raven — puntaje', tipo:'texto'},
+      {id:'zavic', etiqueta:'Zavic — puntajes', tipo:'zavic'},
+      {id:'disc_patron', etiqueta:'DISC — patrón', tipo:'texto',
+       ayuda:'Por ejemplo: Patrón del Creativo'},
+      {id:'disc_detalle', etiqueta:'DISC — descripción del patrón', tipo:'textarea', filas:5},
+      {id:'wartegg', etiqueta:'Wartegg — hallazgos', tipo:'textarea', filas:4},
+      {id:'cualitativos', etiqueta:'Resultados cualitativos', tipo:'textarea', filas:7,
+       ayuda:'La lectura integrada: actitud durante la evaluación, área intelectual, '
+           + 'personalidad, valores y perfil laboral.'},
+      {id:'aporte', etiqueta:'Aporte a la organización', tipo:'textarea', filas:3},
+      {id:'aspectos', etiqueta:'Aspectos a considerar', tipo:'textarea', filas:3,
+       ayuda:'Lo que conviene que la empresa sepa. Redáctalo como característica, '
+           + 'no como defecto: este informe decide si alguien trabaja o no.'},
+      {id:'conclusion_ajuste', etiqueta:'Conclusión sobre el ajuste al puesto', tipo:'select',
+       opciones:['Recomendable para el puesto',
+                 'Recomendable con observaciones',
+                 'Recomendable condicionado a capacitación',
+                 'No recomendable para el puesto']},
+      {id:'sustento_conclusion', etiqueta:'Sustento de la conclusión', tipo:'textarea', filas:3},
+    ],
+  },
+
+  /* ============ ORIENTACIÓN VOCACIONAL ============ */
+  orientacion_vocacional: {
+    titulo: 'Informe de orientación vocacional',
+    nombre: 'INFORME PSICOLÓGICO DE ORIENTACIÓN VOCACIONAL',
+    para: 'Para estudiantes que deciden qué estudiar: personalidad, inteligencia '
+        + 'emocional e intereses vocacionales con el CASM-83.',
+    campos: [
+      {id:'motivo', etiqueta:'Motivo de consulta', tipo:'textarea', filas:3,
+       valor:'Acude a consulta para realizar una evaluación de orientación vocacional.'},
+      {id:'tecnicas', etiqueta:'Técnicas e instrumentos aplicados', tipo:'textarea', filas:4},
+      {id:'area_personalidad', etiqueta:'Área de personalidad', tipo:'textarea', filas:5},
+      {id:'area_emocional', etiqueta:'Área emocional', tipo:'textarea', filas:5},
+      {id:'casm', etiqueta:'CASM-83 — puntajes por área', tipo:'casm'},
+      {id:'area_vocacional', etiqueta:'Lectura del área vocacional', tipo:'textarea', filas:5},
+      {id:'integracion', etiqueta:'Integración de resultados', tipo:'textarea', filas:5,
+       ayuda:'Lo que más sirve al estudiante: cómo se cruzan personalidad, emoción e '
+           + 'intereses, y qué implica para elegir.'},
+      {id:'conclusiones', etiqueta:'Conclusiones', tipo:'textarea', filas:5},
+      {id:'carreras', etiqueta:'Carreras u ocupaciones sugeridas', tipo:'textarea', filas:4,
+       ayuda:'Una por línea. Conviene nombrar tres o cuatro, no una sola: la decisión '
+           + 'es del estudiante, el informe le da el mapa.'},
+      {id:'recomendaciones', etiqueta:'Recomendaciones', tipo:'textarea', filas:4},
+    ],
+  },
+
+  /* ============ FICHA DE DESEMPEÑO DEL PRACTICANTE ============ */
+  ficha_practicante: {
+    titulo: 'Ficha de desempeño del practicante',
+    nombre: 'FICHA DE EVALUACIÓN DEL DESEMPEÑO DEL PRACTICANTE',
+    para: 'La que pide la universidad en cada supervisión. Se llena con los datos '
+        + 'del practicante y sus actividades ya registradas; solo se ponen las notas.',
+    esPracticante: true,
+    campos: [
+      {id:'supervision', etiqueta:'¿Qué supervisión es?', tipo:'select',
+       opciones:['Primera supervisión','Segunda supervisión','Tercera supervisión']},
+      {id:'universidad', etiqueta:'Universidad', tipo:'texto'},
+      {id:'ciclo', etiqueta:'Ciclo', tipo:'texto'},
+      {id:'area', etiqueta:'Área de prácticas', tipo:'select',
+       opciones:['Clínica','Educativa','Organizacional']},
+      {id:'supervisor', etiqueta:'Supervisor de la universidad', tipo:'texto'},
+      {id:'notas', etiqueta:'Calificación por competencia', tipo:'competencias'},
+      {id:'observaciones', etiqueta:'Observaciones', tipo:'textarea', filas:4,
+       ayuda:'Lo que la universidad más valora: qué hizo concretamente y en qué tiene '
+           + 'que mejorar. Las actividades registradas en el panel te sirven de respaldo.'},
+    ],
+  },
+
+  /* ============ ENCUESTA DE SATISFACCIÓN ============ */
+  encuesta_practicante: {
+    titulo: 'Encuesta de satisfacción del practicante',
+    nombre: 'ENCUESTA DE SATISFACCIÓN',
+    para: 'La que la universidad pide al centro sobre el desempeño de su estudiante.',
+    esPracticante: true,
+    campos: [
+      {id:'nivel_pp', etiqueta:'Nivel de prácticas', tipo:'texto'},
+      {id:'sat_desempeno', etiqueta:'Satisfacción con el desempeño', tipo:'select',
+       opciones:['Muy satisfecho','Satisfecho','Medianamente satisfecho','Poco satisfecho']},
+      {id:'sat_conocimientos', etiqueta:'Satisfacción con el dominio de conocimientos', tipo:'select',
+       opciones:['Muy satisfecho','Satisfecho','Medianamente satisfecho','Poco satisfecho']},
+      {id:'cursos', etiqueta:'¿Qué cursos o programas deberían dominar?', tipo:'textarea', filas:6},
+      {id:'sugerencias', etiqueta:'Sugerencias a la universidad', tipo:'textarea', filas:6,
+       ayuda:'Dos, como pide el formato. Una por línea.'},
+    ],
+  },
+});
+
+/* --- Los cuerpos de cada documento nuevo ---------------------------- */
+
+function cuerpoInformeForense(pac){
+  const g = docDatos;
+  const encabezado = [
+    g.solicitado_por ? `Solicitado por: ${g.solicitado_por}` : '',
+    g.expediente ? `Expediente N° ${g.expediente}` : '',
+  ].filter(Boolean);
+  return `
+    ${encabezado.length? `<p style="margin:0 0 10pt;font-size:10.5pt">${
+      encabezado.map(esc).join(' · ')}</p>`:''}
+    ${bloqueFiliacion(pac)}
+    ${seccion('II. MOTIVACIÓN DE LA CONSULTA', g.motivo)}
+    ${seccion('III. ANTECEDENTES DEL CASO', g.antecedentes)}
+    ${g.tecnicas? `<div style="font-weight:bold;margin:12pt 0 5pt">IV. TÉCNICAS E INSTRUMENTOS APLICADOS</div>${lista(g.tecnicas)}`:''}
+    ${seccion('V. OBSERVACIÓN DE CONDUCTA', g.observacion)}
+    <div style="font-weight:bold;margin:12pt 0 5pt">VI. RESULTADOS OBTENIDOS</div>
+    ${g.area_personalidad? `<p style="margin:0 0 6pt;text-align:justify"><b>Área de personalidad.</b> ${esc(g.area_personalidad)}</p>`:''}
+    ${g.area_cognitiva? `<p style="margin:0 0 6pt;text-align:justify"><b>Área cognitiva.</b> ${esc(g.area_cognitiva)}</p>`:''}
+    ${g.area_familiar? `<p style="margin:0 0 6pt;text-align:justify"><b>Área familiar.</b> ${esc(g.area_familiar)}</p>`:''}
+    ${g.area_socioemocional? `<p style="margin:0 0 6pt;text-align:justify"><b>Área socioemocional.</b> ${esc(g.area_socioemocional)}</p>`:''}
+    ${g.resultados_pruebas? parrafos(g.resultados_pruebas):''}
+    ${seccion('VII. CONCLUSIONES', g.conclusiones)}
+    ${g.recomendaciones? `<div style="font-weight:bold;margin:12pt 0 5pt">VIII. RECOMENDACIONES</div>${lista(g.recomendaciones)}`:''}`;
+}
+
+function cuerpoInformeLaboral(){
+  const g = docDatos;
+  const zavic = EJES_ZAVIC
+    .filter(([k]) => g['zavic_'+k] !== undefined && g['zavic_'+k] !== '')
+    .map(([k,n]) => `<tr><td style="border:1px solid #bbb;padding:3pt 6pt">${n}</td>
+      <td style="border:1px solid #bbb;padding:3pt 6pt;text-align:center">${esc(g['zavic_'+k])}</td></tr>`).join('');
+  return `
+  <div style="font-weight:bold;margin-bottom:5pt">I. PRESENTACIÓN</div>
+  ${parrafos(g.presentacion || `${(DB.centerInfo||{}).name||'El centro'} expone a continuación`
+    + ` los alcances del proceso de evaluación psicolaboral solicitado por`
+    + ` ${g.empresa||'la empresa'}.`)}
+
+  <div style="font-weight:bold;margin:12pt 0 5pt">II. PERSONA EVALUADA</div>
+  <table style="width:100%;border:none;border-collapse:collapse;font-size:10.5pt;margin-bottom:10pt">
+    ${filaDato('Nombres y apellidos', g.ev_nombre)}
+    ${filaDato('DNI', g.ev_dni)}
+    ${filaDato('Edad', g.ev_edad)}
+    ${filaDato('Estado civil', g.ev_estado)}
+    ${filaDato('Grado de instrucción', g.ev_grado)}
+    ${filaDato('Profesión', g.ev_profesion)}
+    ${filaDato('Puesto al que postula', g.puesto)}
+    ${filaDato('Empresa solicitante', g.empresa)}
+  </table>
+
+  <div style="font-weight:bold;margin:12pt 0 5pt">III. RESULTADOS DE LA EVALUACIÓN</div>
+  ${(g.raven_nivel||g.raven_puntaje)? `
+    <p style="margin:0 0 4pt"><b>Inteligencia general — Test de Matrices Progresivas de Raven.</b></p>
+    <p style="margin:0 0 8pt">Nivel: ${esc(g.raven_nivel||'—')}${
+      g.raven_puntaje? ` · Puntaje: ${esc(g.raven_puntaje)}` : ''}</p>`:''}
+  ${zavic? `
+    <p style="margin:8pt 0 4pt"><b>Valores e intereses — Test de Zavic.</b></p>
+    <table style="border-collapse:collapse;font-size:10pt;margin-bottom:8pt">
+      <tr><th style="border:1px solid #bbb;padding:3pt 6pt;background:#f0f0f0">Eje</th>
+          <th style="border:1px solid #bbb;padding:3pt 6pt;background:#f0f0f0">Puntaje</th></tr>
+      ${zavic}</table>`:''}
+  ${g.disc_patron? `
+    <p style="margin:8pt 0 4pt"><b>Perfil laboral — Evaluación DISC: ${esc(g.disc_patron)}.</b></p>
+    ${parrafos(g.disc_detalle)}`:''}
+  ${g.wartegg? `<p style="margin:8pt 0 4pt"><b>Personalidad — Test de Wartegg.</b></p>
+    ${parrafos(g.wartegg)}`:''}
+
+  ${seccion('IV. RESULTADOS CUALITATIVOS', g.cualitativos)}
+  ${g.aporte? `<p style="margin:0 0 6pt;text-align:justify"><b>Aporte a la organización.</b> ${esc(g.aporte)}</p>`:''}
+  ${g.aspectos? `<p style="margin:0 0 6pt;text-align:justify"><b>Aspectos a considerar.</b> ${esc(g.aspectos)}</p>`:''}
+
+  <div style="font-weight:bold;margin:12pt 0 5pt">V. CONCLUSIÓN</div>
+  <p style="margin:0 0 6pt;text-align:justify">
+    Considerando los resultados obtenidos en las evaluaciones aplicadas,
+    ${esc(g.ev_nombre||'el evaluado')} resulta
+    <b>${esc(g.conclusion_ajuste||'—')}</b>${g.puesto? ` para el puesto de ${esc(g.puesto)}`:''}.</p>
+  ${g.sustento_conclusion? parrafos(g.sustento_conclusion):''}`;
+}
+
+function cuerpoOrientacionVocacional(pac){
+  const g = docDatos;
+  const filas = AREAS_CASM83
+    .filter(([k]) => g['casm_'+k] !== undefined && g['casm_'+k] !== '')
+    .map(([k,n]) => `<tr>
+      <td style="border:1px solid #bbb;padding:3pt 6pt">${k} — ${n}</td>
+      <td style="border:1px solid #bbb;padding:3pt 6pt;text-align:center">${esc(g['casm_'+k])}</td>
+      <td style="border:1px solid #bbb;padding:3pt 6pt">${esc(g['nivel_'+k]||'')}</td></tr>`).join('');
+  return `
+    ${bloqueFiliacion(pac)}
+    ${seccion('II. MOTIVO DE CONSULTA', g.motivo)}
+    ${g.tecnicas? `<div style="font-weight:bold;margin:12pt 0 5pt">III. TÉCNICAS E INSTRUMENTOS APLICADOS</div>${lista(g.tecnicas)}`:''}
+    <div style="font-weight:bold;margin:12pt 0 5pt">IV. INTERPRETACIÓN DE RESULTADOS</div>
+    ${g.area_personalidad? `<p style="margin:0 0 4pt"><b>Área de personalidad.</b></p>${parrafos(g.area_personalidad)}`:''}
+    ${g.area_emocional? `<p style="margin:6pt 0 4pt"><b>Área emocional.</b></p>${parrafos(g.area_emocional)}`:''}
+    ${filas? `<p style="margin:6pt 0 4pt"><b>Área vocacional — Inventario CASM-83.</b></p>
+      <table style="border-collapse:collapse;font-size:10pt;margin-bottom:8pt;width:100%">
+        <tr><th style="border:1px solid #bbb;padding:3pt 6pt;background:#f0f0f0;text-align:left">Área</th>
+            <th style="border:1px solid #bbb;padding:3pt 6pt;background:#f0f0f0">Puntaje</th>
+            <th style="border:1px solid #bbb;padding:3pt 6pt;background:#f0f0f0;text-align:left">Nivel</th></tr>
+        ${filas}</table>`:''}
+    ${g.area_vocacional? parrafos(g.area_vocacional):''}
+    ${seccion('V. INTEGRACIÓN DE RESULTADOS', g.integracion)}
+    ${seccion('VI. CONCLUSIONES', g.conclusiones)}
+    ${g.carreras? `<div style="font-weight:bold;margin:12pt 0 5pt">VII. CARRERAS U OCUPACIONES SUGERIDAS</div>${lista(g.carreras)}`:''}
+    ${g.recomendaciones? `<div style="font-weight:bold;margin:12pt 0 5pt">VIII. RECOMENDACIONES</div>${lista(g.recomendaciones)}`:''}`;
+}
+
+/* --- Las competencias que califica la universidad -------------------
+   Se transcriben del formato que el centro recibe, con el puntaje máximo
+   de cada una, para que la nota final se sume sola y no a mano.        */
+const COMPETENCIAS_PRACTICANTE = [
+  {grupo:'II. COMPETENCIAS GENÉRICAS'},
+  {id:'cg1', texto:'Aplica el proceso creativo para solucionar problemas de su entorno personal de forma colaborativa', max:1},
+  {id:'cg2', texto:'Explora sus recursos corporales y vocales para fortalecer su capacidad expresiva', max:2},
+  {id:'cg3', texto:'Aplica técnicas de autoexploración para descubrir y desarrollar su potencial', max:1},
+  {id:'cg4', texto:'Organiza el trabajo en equipo para desarrollar el proceso creativo', max:2},
+  {id:'cg5', texto:'Aplica y sustenta estrategias investigativas', max:1},
+  {grupo:'III. COMPETENCIAS ESPECÍFICAS'},
+  {id:'ce1', texto:'Fundamenta teóricamente las técnicas e instrumentos utilizados en el diagnóstico', max:2},
+  {id:'ce2', texto:'Establece coherencia entre motivo de consulta, anamnesis y resultados', max:2},
+  {id:'ce3', texto:'Sustenta el diagnóstico de su estudio de caso integrando la información', max:2},
+  {id:'ce4', texto:'Elabora el avance de un programa de Responsabilidad Social', max:2},
+  {id:'ce5', texto:'Aplica principios éticos y de confidencialidad en su práctica', max:2},
+  {id:'ce6', texto:'Cumple con la puntualidad, permanencia y presentación acordadas', max:3},
+];
+const NIVELES_COMPETENCIA = ['Bajo','Medio','Alto','Notable'];
+
+function cuerpoFichaPracticante(){
+  const g = docDatos;
+  const pr = docDatos._practicante || {};
+  const ci = DB.centerInfo || {};
+  let total = 0, maximo = 0;
+  const filas = COMPETENCIAS_PRACTICANTE.map(c=>{
+    if(c.grupo){
+      return `<tr><td colspan="3" style="border:1px solid #bbb;padding:4pt 6pt;
+        background:#eef2ef;font-weight:bold">${c.grupo}</td></tr>`;
+    }
+    const nota = Number(g['nota_'+c.id]);
+    maximo += c.max;
+    if(isFinite(nota)) total += nota;
+    return `<tr>
+      <td style="border:1px solid #bbb;padding:3pt 6pt">${esc(c.texto)}</td>
+      <td style="border:1px solid #bbb;padding:3pt 6pt;text-align:center;white-space:nowrap">${
+        isFinite(nota)? nota.toFixed(2).replace(/\.00$/,'') : '—'} / ${c.max}</td>
+      <td style="border:1px solid #bbb;padding:3pt 6pt">${esc(g['niv_'+c.id]||'')}</td></tr>`;
+  }).join('');
+
+  return `
+  <p style="margin:0 0 10pt;text-align:justify;font-size:10.5pt">
+    El objetivo de esta evaluación es medir el desempeño del practicante de la carrera
+    profesional de Psicología durante su permanencia en el centro de prácticas.</p>
+
+  <div style="font-weight:bold;margin:0 0 5pt">I. DATOS GENERALES</div>
+  <table style="width:100%;border:none;border-collapse:collapse;font-size:10.5pt;margin-bottom:10pt">
+    ${filaDato('Escuela profesional', 'Psicología')}
+    ${filaDato('Apellidos y nombres', pr.name)}
+    ${filaDato('Universidad', g.universidad)}
+    ${filaDato('Ciclo', g.ciclo)}
+    ${filaDato('Centro de práctica', ci.name)}
+    ${filaDato('Dirección del centro', ci.address)}
+    ${filaDato('Área de prácticas', g.area)}
+    ${filaDato('Supervisión', g.supervision)}
+    ${filaDato('Jefe inmediato', (docDatos._profesional||{}).name)}
+    ${filaDato('Supervisor de la universidad', g.supervisor)}
+    ${filaDato('Fecha de supervisión', fmtFechaCorta(todayISO()))}
+  </table>
+
+  <table style="width:100%;border-collapse:collapse;font-size:10pt">
+    <tr><th style="border:1px solid #bbb;padding:4pt 6pt;background:#f0f0f0;text-align:left">Criterio</th>
+        <th style="border:1px solid #bbb;padding:4pt 6pt;background:#f0f0f0">Puntaje</th>
+        <th style="border:1px solid #bbb;padding:4pt 6pt;background:#f0f0f0;text-align:left">Nivel</th></tr>
+    ${filas}
+    <tr><td style="border:1px solid #bbb;padding:5pt 6pt;font-weight:bold;text-align:right">NOTA FINAL</td>
+        <td style="border:1px solid #bbb;padding:5pt 6pt;text-align:center;font-weight:bold">${
+          total.toFixed(2).replace(/\.00$/,'')} / ${maximo}</td>
+        <td style="border:1px solid #bbb;padding:5pt 6pt"></td></tr>
+  </table>
+  ${g.observaciones? `<div style="font-weight:bold;margin:12pt 0 5pt">OBSERVACIONES</div>
+    ${parrafos(g.observaciones)}`:''}`;
+}
+
+function cuerpoEncuestaPracticante(){
+  const g = docDatos;
+  const pr = docDatos._practicante || {};
+  const ci = DB.centerInfo || {};
+  const pregunta = (n, texto, respuesta) => `
+    <p style="margin:10pt 0 3pt;font-weight:bold">${n}. ${texto}</p>
+    <p style="margin:0 0 6pt">${esc(respuesta||'—')}</p>`;
+  return `
+  <table style="width:100%;border:none;border-collapse:collapse;font-size:10.5pt;margin-bottom:10pt">
+    ${filaDato('Estudiante', pr.name)}
+    ${filaDato('Nivel de prácticas', g.nivel_pp)}
+    ${filaDato('Razón social de la empresa', ci.name)}
+  </table>
+  <p style="margin:0 0 10pt;text-align:justify;font-size:10.5pt">
+    La presente ficha tiene como objetivo conocer el nivel de satisfacción del centro
+    de prácticas respecto al desempeño del estudiante.</p>
+  ${pregunta(1, '¿Qué tan satisfecho se encuentra con el desempeño de nuestro estudiante?', g.sat_desempeno)}
+  ${pregunta(2, '¿Qué tan satisfecho se encuentra con el dominio de conocimientos de la especialidad?', g.sat_conocimientos)}
+  <p style="margin:10pt 0 3pt;font-weight:bold">3. ¿Qué cursos o programas considera que deben dominar los estudiantes que practican en su institución?</p>
+  ${parrafos(g.cursos)}
+  <p style="margin:10pt 0 3pt;font-weight:bold">4. Mencione dos sugerencias para mejorar la formación académica de los estudiantes practicantes.</p>
+  ${lista(g.sugerencias)}`;
+}
+
 /* --- La ventana desde donde se emite ------------------------------- */
 function abrirDocumento(tipo, patientId){
   const d = DOCUMENTOS_OFICIALES[tipo];
   if(!d){ alert('Ese documento todavía no está disponible.'); return; }
-  const pac = DB.patients.find(p=>p.id===patientId);
-  if(!pac){ alert('Elige primero un paciente.'); return; }
+
+  // El psicolaboral evalúa a quien postula a una empresa, y los formatos de
+  // la universidad evalúan a un practicante: ninguno parte de un paciente.
+  let pac = {};
+  let practicante = {};
+  if(d.esPracticante){
+    practicante = (DB.practicantes||[]).find(p=>p.id===patientId) || {};
+    if(!practicante.id){ alert('Elige primero un practicante.'); return; }
+  }else if(!d.sinPaciente){
+    pac = DB.patients.find(p=>p.id===patientId) || {};
+    if(!pac.id){ alert('Elige primero un paciente.'); return; }
+  }
 
   docTipoActual = tipo;
-  const prof = DB.professionals.find(p=>p.id===pac.professionalId) || {};
+  const prof = DB.professionals.find(p=>p.id===(pac.professionalId
+                || practicante.supervisorId)) || DB.professionals[0] || {};
   // Lo que ya está registrado no se vuelve a escribir a mano.
   docDatos = {
     _paciente: pac,
+    _practicante: practicante,
     _profesional: prof,
     _historia: (typeof currentHistoriaData !== 'undefined' && currentHistoriaData
                 && currentHistoryPatientId === patientId) ? currentHistoriaData : {},
     _numero: numeroDeDocumento(),
-    _cargoFirma: tipo === 'constancia' ? 'Directora General' : 'Psicóloga',
+    // La constancia y el psicolaboral los firma la dirección; los informes
+    // clínicos y forenses, el profesional que evaluó.
+    _cargoFirma: (tipo === 'constancia' || tipo === 'informe_laboral')
+      ? 'Directora General' : 'Psicóloga',
     desde: primeraAtencionDe(patientId),
     frecuencia: 'sesiones semanales',
     solicitante: 'a solicitud del interesado',
     tecnicas: tecnicasSugeridas(patientId),
   };
+  // Lo que el sistema ya sabe del practicante o del evaluado laboral.
+  if(d.esPracticante){
+    docDatos.universidad = practicante.university || practicante.universidad || '';
+    docDatos.ciclo       = practicante.cycle || practicante.ciclo || '';
+    docDatos.area        = 'Clínica';
+    docDatos.nivel_pp    = practicante.cycle || '';
+  }
+  if(tipo === 'orientacion_vocacional'){
+    docDatos.motivo = 'Acude a consulta para realizar una evaluación de '
+                    + 'orientación vocacional.';
+  }
   renderDocumentoModal();
 }
 
@@ -9522,17 +9960,7 @@ function renderDocumentoModal(){
     m.className = 'modalOverlay open';
     document.body.appendChild(m);
   }
-  const campos = d.campos.map(c=>{
-    const v = docDatos[c.id] ?? c.valor ?? '';
-    const control = c.tipo === 'textarea'
-      ? `<textarea id="doc_${c.id}" rows="${c.filas||3}" oninput="docCambio('${c.id}', this.value)"
-           style="width:100%;font-family:Georgia,serif;font-size:13px;line-height:1.5">${esc(v)}</textarea>`
-      : `<input id="doc_${c.id}" type="${c.tipo==='date'?'date':'text'}" value="${esc(v)}"
-           oninput="docCambio('${c.id}', this.value)">`;
-    return `<div class="field" style="grid-column:1/-1">
-      <label>${c.etiqueta}</label>${control}
-      ${c.ayuda? `<p class="hint" style="margin-top:3px">${c.ayuda}</p>`:''}</div>`;
-  }).join('');
+  const campos = d.campos.map(c=>controlDeCampo(c)).join('');
 
   m.innerHTML = `<div class="receiptCard" style="max-width:1000px">
     <div style="padding:22px 24px;max-height:78vh;overflow-y:auto">
@@ -9564,9 +9992,89 @@ function renderDocumentoModal(){
   docVistaPrevia();
 }
 
+/* Cada campo según su tipo. Las tablas de puntajes —CASM-83, Zavic, las
+   competencias del practicante— se escriben aquí en vez de a mano en el
+   Word, y así la nota final se suma sola. */
+function controlDeCampo(c){
+  const v = docDatos[c.id] ?? c.valor ?? '';
+  const ancho = c.tipo === 'texto' || c.tipo === 'date' || c.tipo === 'select' ? '' : 'grid-column:1/-1';
+  let control;
+
+  if(c.tipo === 'textarea'){
+    control = `<textarea id="doc_${c.id}" rows="${c.filas||3}" oninput="docCambio('${c.id}', this.value)"
+      style="width:100%;font-family:Georgia,serif;font-size:13px;line-height:1.5">${esc(v)}</textarea>`;
+
+  }else if(c.tipo === 'select'){
+    control = `<select id="doc_${c.id}" onchange="docCambio('${c.id}', this.value)">
+      <option value=""></option>
+      ${(c.opciones||[]).map(o=>`<option${o===v?' selected':''}>${esc(o)}</option>`).join('')}
+    </select>`;
+
+  }else if(c.tipo === 'casm'){
+    control = `<div class="tablewrap"><table><tr><th>Área</th><th>Puntaje</th><th>Nivel</th></tr>
+      ${AREAS_CASM83.map(([k,n])=>`<tr>
+        <td>${k} — ${n}</td>
+        <td><input type="number" min="0" max="20" style="width:70px"
+             value="${esc(docDatos['casm_'+k]||'')}" oninput="docCampoExtra('casm_${k}', this.value)"></td>
+        <td><select onchange="docCampoExtra('nivel_${k}', this.value)">
+          ${['','Desinterés','Bajo','Promedio bajo','Promedio','Promedio alto','Alto']
+            .map(o=>`<option${o===(docDatos['nivel_'+k]||'')?' selected':''}>${o}</option>`).join('')}
+        </select></td></tr>`).join('')}
+    </table></div>`;
+
+  }else if(c.tipo === 'zavic'){
+    control = `<div class="tablewrap"><table><tr><th>Eje</th><th>Puntaje</th></tr>
+      ${EJES_ZAVIC.map(([k,n])=>`<tr><td>${n}</td>
+        <td><input type="number" min="0" style="width:80px"
+             value="${esc(docDatos['zavic_'+k]||'')}" oninput="docCampoExtra('zavic_${k}', this.value)"></td>
+      </tr>`).join('')}
+    </table></div>`;
+
+  }else if(c.tipo === 'competencias'){
+    control = `<div class="tablewrap"><table><tr><th>Criterio</th><th>Nivel</th><th>Puntaje</th></tr>
+      ${COMPETENCIAS_PRACTICANTE.map(x=>{
+        if(x.grupo) return `<tr><td colspan="3"><b>${x.grupo}</b></td></tr>`;
+        // Los cuatro niveles reparten el puntaje máximo, como en el formato
+        // original: notable es el máximo, bajo la cuarta parte.
+        const escala = [0.25, 0.5, 0.75, 1].map(f=>+(x.max*f).toFixed(2));
+        return `<tr>
+          <td style="font-size:12.5px">${x.texto}</td>
+          <td><select onchange="docNotaCompetencia('${x.id}', this.value, ${x.max})">
+            <option value=""></option>
+            ${NIVELES_COMPETENCIA.map((n,i)=>`<option value="${escala[i]}"${
+              docDatos['niv_'+x.id]===n?' selected':''}>${n}</option>`).join('')}
+          </select></td>
+          <td style="white-space:nowrap">${docDatos['nota_'+x.id] ?? '—'} / ${x.max}</td>
+        </tr>`;
+      }).join('')}
+    </table></div>`;
+
+  }else{
+    control = `<input id="doc_${c.id}" type="${c.tipo==='date'?'date':'text'}" value="${esc(v)}"
+      oninput="docCambio('${c.id}', this.value)">`;
+  }
+
+  return `<div class="field" style="${ancho}">
+    <label>${c.etiqueta}</label>${control}
+    ${c.ayuda? `<p class="hint" style="margin-top:3px">${c.ayuda}</p>`:''}</div>`;
+}
+
 function docCambio(id, valor){
   docDatos[id] = valor;
   docVistaPrevia();
+}
+/* Los campos de las tablas no redibujan el formulario: si lo hicieran, se
+   perdería el foco a media escritura. */
+function docCampoExtra(id, valor){
+  docDatos[id] = valor;
+  docVistaPrevia();
+}
+function docNotaCompetencia(id, valor, max){
+  const n = parseFloat(valor);
+  docDatos['nota_'+id] = isFinite(n) ? n : undefined;
+  const i = [0.25,0.5,0.75,1].findIndex(f => Math.abs(max*f - n) < 0.001);
+  docDatos['niv_'+id] = i >= 0 ? NIVELES_COMPETENCIA[i] : '';
+  renderDocumentoModal();
 }
 function docVistaPrevia(){
   const caja = document.getElementById('doc_vista');
@@ -9681,6 +10189,9 @@ function viewInformes(){
   </tr>`;}).join('');
   return `
     <div class="sectiontitle"><h2>Informes por presentar</h2>
+      <button class="btn secondary" onclick="abrirDocumento('informe_laboral','')"
+        title="Evaluación de personal para una empresa: no parte de un paciente">
+        + Informe psicolaboral</button>
       <button class="btn secondary" onclick="exportReportsCSV()">Exportar CSV</button>
     </div>
     <div class="kpi-grid">
