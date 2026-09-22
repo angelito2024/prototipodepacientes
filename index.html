@@ -10269,10 +10269,11 @@ function abrirDocumento(tipo, patientId){
     _historia: (typeof currentHistoriaData !== 'undefined' && currentHistoriaData
                 && currentHistoryPatientId === patientId) ? currentHistoriaData : {},
     _numero: numeroDeDocumento(),
-    // La constancia y el psicolaboral los firma la dirección; los informes
-    // clínicos y forenses, el profesional que evaluó.
-    _cargoFirma: (tipo === 'constancia' || tipo === 'informe_laboral')
-      ? 'Directora General' : 'Psicóloga',
+    // Todos los documentos los firma el profesional por su condición
+    // profesional, con su colegiatura. Un cargo administrativo no habilita
+    // a firmar un documento psicológico: lo que lo respalda es estar
+    // colegiado, y eso es lo que tiene que leerse debajo de la firma.
+    _cargoFirma: 'Psicóloga',
     desde: primeraAtencionDe(patientId),
     frecuencia: 'sesiones semanales',
     solicitante: 'a solicitud del interesado',
@@ -10347,7 +10348,8 @@ function renderDocumentoModal(){
                  oninput="docDatos._numero=this.value; docVistaPrevia()"></div>
         <div class="field"><label>Quién firma</label>
           <select id="doc_cargo" onchange="docDatos._cargoFirma=this.value; docVistaPrevia()">
-            ${['Psicóloga','Psicólogo','Directora General','Director General']
+            ${['Psicóloga','Psicólogo','Psicóloga tratante','Psicólogo tratante',
+               'Psicóloga responsable de la evaluación','Psicólogo responsable de la evaluación']
               .map(c=>`<option${c===docDatos._cargoFirma?' selected':''}>${c}</option>`).join('')}
           </select></div>
       </div>
