@@ -9337,20 +9337,70 @@ function membreteDoc(paraImpresion){
   <div style="border-bottom:2px solid #2f6f4f;margin-bottom:${paraImpresion?'14':'12'}pt"></div>`;
 }
 
-/* --- El pie con el espacio de firma --------------------------------- */
+/* --- El pie con el espacio de firma ---------------------------------
+   Quién firma depende de la naturaleza del documento, no de quién lo
+   emite desde la pantalla:
+
+     · lo clínico y lo pericial lo firma el profesional, por su
+       colegiatura —es lo que un juzgado o un colegio pueden verificar—;
+     · lo administrativo —contratos, convenios, propuestas— lo firma la
+       gerencia, que es quien obliga al centro.
+
+   Un administrador no colegiado no puede firmar un informe psicológico,
+   y un profesional no compromete al centro en un contrato. */
 function firmaDoc(){
+  const d = DOCUMENTOS_OFICIALES[docTipoActual] || {};
+  const ci = DB.centerInfo || {};
+
+  if(d.firma === 'gerencia'){
+    return bloqueFirma(
+      ci.titular_nombre || '',
+      docDatos._cargoFirma || 'Administrador',
+      ci.titular_documento ? `DNI ${ci.titular_documento}` : ''
+    );
+  }
   const prof = docDatos._profesional || {};
-  const nombre = prof.name || '';
   const colegiatura = prof.license || prof.colegiatura || '';
-  const cargo = docDatos._cargoFirma || 'Psicólogo(a)';
+  return bloqueFirma(
+    prof.name || '',
+    docDatos._cargoFirma || 'Psicólogo(a)',
+    colegiatura ? `C.Ps.P. N° ${colegiatura}` : ''
+  );
+}
+
+function bloqueFirma(nombre, cargo, acreditacion){
   return `
   <div style="margin-top:34pt;text-align:center;page-break-inside:avoid">
     <div style="height:52pt"></div>
     <div style="border-top:1px solid #000;width:250pt;margin:0 auto"></div>
     <div style="font-size:11pt;font-weight:bold;margin-top:3pt">${esc(nombre)}</div>
     <div style="font-size:10pt">${esc(cargo)}</div>
-    ${colegiatura? `<div style="font-size:10pt">C.Ps.P. N° ${esc(colegiatura)}</div>`:''}
+    ${acreditacion? `<div style="font-size:10pt">${esc(acreditacion)}</div>`:''}
   </div>`;
+}
+
+/* Dos firmas, cuando el documento obliga a ambas partes. */
+function dobleFirmaDoc(etiquetaIzq, nombreIzq, cargoIzq, etiquetaDer){
+  return `
+  <table style="width:100%;border:none;border-collapse:collapse;margin-top:40pt;
+                page-break-inside:avoid">
+   <tr>
+    <td style="border:none;width:50%;text-align:center;vertical-align:bottom;padding:0 10pt">
+      <div style="height:48pt"></div>
+      <div style="border-top:1px solid #000"></div>
+      <div style="font-size:10.5pt;font-weight:bold;margin-top:3pt">${esc(nombreIzq)}</div>
+      <div style="font-size:9.5pt">${esc(cargoIzq)}</div>
+      <div style="font-size:9pt;color:#555">${esc(etiquetaIzq)}</div>
+    </td>
+    <td style="border:none;width:50%;text-align:center;vertical-align:bottom;padding:0 10pt">
+      <div style="height:48pt"></div>
+      <div style="border-top:1px solid #000"></div>
+      <div style="font-size:10.5pt;font-weight:bold;margin-top:3pt">&nbsp;</div>
+      <div style="font-size:9.5pt">Nombre y DNI</div>
+      <div style="font-size:9pt;color:#555">${esc(etiquetaDer)}</div>
+    </td>
+   </tr>
+  </table>`;
 }
 
 /* --- Armar el documento completo ------------------------------------ */
@@ -9373,6 +9423,11 @@ function documentoHTML(tipo, paraImpresion){
     : tipo === 'informe_educativo'      ? cuerpoInformeEducativo(pac)
     : tipo === 'orientacion_padres'     ? cuerpoOrientacionPadres(pac)
     : tipo === 'pautas_docente'         ? cuerpoPautasDocente(pac)
+    : tipo === 'contrato_servicios'     ? cuerpoContratoServicios(pac)
+    : tipo === 'convenio_colegio'       ? cuerpoConvenioColegio()
+    : tipo === 'propuesta_empresa'      ? cuerpoPropuestaEmpresa()
+    : tipo === 'constancia_practicas'   ? cuerpoConstanciaPracticas()
+    : tipo === 'entrega_documento'      ? cuerpoEntregaDocumento(pac)
     : '';
 
   return `
@@ -9385,7 +9440,7 @@ function documentoHTML(tipo, paraImpresion){
     ${cuerpo}
     <div style="margin-top:20pt;font-size:11pt">
       San Juan de Lurigancho, ${fecha}</div>
-    ${firmaDoc()}
+    ${d.firmaPropia ? '' : firmaDoc()}
   </div>`;
 }
 
@@ -9556,7 +9611,8 @@ function centroDeDocumentos(){
   // Los de practicante van en su propio bloque: si no se excluyen aquí,
   // al no declarar línea caen en "clínica" y salen listados dos veces.
   const deLinea = linea => Object.entries(DOCUMENTOS_OFICIALES)
-    .filter(([,d]) => !d.esPracticante && (d.linea||'clinica') === linea)
+    .filter(([,d]) => !d.esPracticante && d.firma !== 'gerencia'
+                   && (d.linea||'clinica') === linea)
     .map(tarjeta).join('');
   const bloque = (titulo, contenido) => contenido
     ? `<h3 style="margin:16px 0 8px">${titulo}</h3>${contenido}` : '';
@@ -9572,7 +9628,10 @@ function centroDeDocumentos(){
       ${bloque('Convenio con colegios', deLinea('educativa'))}
       ${bloque('Empresas', deLinea('organizacional'))}
       ${bloque('Practicantes', Object.entries(DOCUMENTOS_OFICIALES)
-        .filter(([,d]) => d.esPracticante).map(tarjeta).join(''))}
+        .filter(([,d]) => d.esPracticante && d.firma !== 'gerencia').map(tarjeta).join(''))}
+      ${bloque('Administración — los firma la gerencia',
+        Object.entries(DOCUMENTOS_OFICIALES)
+          .filter(([,d]) => d.firma === 'gerencia').map(tarjeta).join(''))}
     </div>
     <div class="receiptActions">
       <button class="btn secondary" onclick="cerrarMenuDocs()">Cerrar</button>
@@ -9615,6 +9674,31 @@ function elegirParaDocumento(clave){
       <button class="btn secondary" onclick="centroDeDocumentos()">Volver</button>
     </div>
   </div>`;
+}
+
+/* Las horas y actividades del practicante para su constancia.
+   Salen del mismo cálculo que el reporte de horas —semanas transcurridas
+   por horas semanales— para que la constancia y el reporte no digan cosas
+   distintas. Es una estimación y hay que revisarla antes de firmar: la
+   constancia certifica y el reporte solo informa. */
+function horasDePracticante(id){
+  const pt = (DB.practicantes||[]).find(p=>p.id===id);
+  if(!pt || !pt.startDate) return '';
+  const semanales = typeof practicanteWeeklyHours==='function'
+    ? practicanteWeeklyHours(pt) : 0;
+  const inicio = new Date(pt.startDate+'T00:00:00');
+  const fin = pt.endDate ? new Date(pt.endDate+'T00:00:00') : null;
+  const hoy = new Date(); hoy.setHours(0,0,0,0);
+  const hasta = (fin && fin < hoy) ? fin : hoy;
+  const semanas = Math.max(0, Math.floor((hasta - inicio) / (7*86400000)));
+  const horas = Math.round(semanas * semanales * 10) / 10;
+  return horas ? String(horas) : '';
+}
+function actividadesDePracticante(id){
+  const pt = (DB.practicantes||[]).find(p=>p.id===id);
+  const acts = (pt && Array.isArray(pt.activities)) ? pt.activities : [];
+  const hechas = acts.filter(a=>a.status==='Completada').map(a=>a.description);
+  return [...new Set(hechas)].join('\n');
 }
 
 /* Los dos formatos que pide la universidad por cada practicante. */
@@ -10241,6 +10325,335 @@ function cuerpoPautasDocente(pac){
     compartirse con otros estudiantes ni con sus familias.</p>`;
 }
 
+
+/* ===================== DOCUMENTOS DE GERENCIA =====================
+   Los que obligan al centro, no los que informan sobre un paciente.
+   Los firma la administración: un contrato o un convenio comprometen a
+   la empresa, y eso no lo puede hacer el profesional tratante.
+
+   Van sin diagnóstico ni contenido clínico. Un contrato de servicios no
+   tiene por qué decir por qué viene el paciente.                       */
+
+Object.assign(DOCUMENTOS_OFICIALES, {
+
+  contrato_servicios: {
+    titulo: 'Contrato de servicios psicológicos',
+    nombre: 'CONTRATO DE PRESTACIÓN DE SERVICIOS PSICOLÓGICOS',
+    para: 'Lo que se acuerda con el paciente o su apoderado: sesiones, tarifa, '
+        + 'forma de pago y qué pasa si falta a una cita.',
+    linea: 'gerencia',
+    firma: 'gerencia',
+    firmaPropia: true,   // el cuerpo lleva las dos firmas
+    campos: [
+      {id:'contratante', etiqueta:'¿Quién contrata?', tipo:'texto',
+       ayuda:'Si el paciente es menor, contrata el apoderado. Se completa solo.'},
+      {id:'doc_contratante', etiqueta:'DNI de quien contrata', tipo:'texto'},
+      {id:'servicio', etiqueta:'Servicio contratado', tipo:'select',
+       opciones:['Terapia psicológica individual','Terapia de pareja','Terapia familiar',
+                 'Evaluación psicológica','Orientación vocacional','Taller o programa']},
+      {id:'n_sesiones', etiqueta:'Número de sesiones', tipo:'texto'},
+      {id:'duracion', etiqueta:'Duración de cada sesión', tipo:'texto', valor:'45 minutos'},
+      {id:'modalidad', etiqueta:'Modalidad', tipo:'select',
+       opciones:['Presencial','Virtual','Mixta']},
+      {id:'tarifa', etiqueta:'Tarifa por sesión (S/)', tipo:'texto'},
+      {id:'forma_pago', etiqueta:'Forma de pago', tipo:'textarea', filas:2},
+      {id:'politica_inasistencia', etiqueta:'Si falta a una cita', tipo:'textarea', filas:3,
+       ayuda:'Conviene que esté escrito antes del primer desacuerdo: con cuánta '
+           + 'anticipación avisar y qué pasa si no avisa.'},
+      {id:'vigencia', etiqueta:'Vigencia', tipo:'texto'},
+      {id:'observaciones', etiqueta:'Acuerdos adicionales', tipo:'textarea', filas:3},
+    ],
+  },
+
+  convenio_colegio: {
+    titulo: 'Convenio con institución educativa',
+    nombre: 'CONVENIO DE COOPERACIÓN INTERINSTITUCIONAL',
+    para: 'El acuerdo con un colegio: qué servicios se prestan, a quiénes, con qué '
+        + 'frecuencia y en qué condiciones.',
+    linea: 'gerencia',
+    firma: 'gerencia',
+    firmaPropia: true,   // el cuerpo lleva las dos firmas
+    sinPaciente: true,
+    campos: [
+      {id:'institucion', etiqueta:'Institución educativa', tipo:'texto'},
+      {id:'ruc_institucion', etiqueta:'RUC de la institución', tipo:'texto'},
+      {id:'direccion_institucion', etiqueta:'Dirección', tipo:'texto'},
+      {id:'representante', etiqueta:'Representante legal', tipo:'texto'},
+      {id:'doc_representante', etiqueta:'DNI del representante', tipo:'texto'},
+      {id:'cargo_representante', etiqueta:'Cargo', tipo:'texto', valor:'Director(a)'},
+      {id:'objeto', etiqueta:'Objeto del convenio', tipo:'textarea', filas:4},
+      {id:'servicios', etiqueta:'Servicios que presta el centro', tipo:'textarea', filas:6,
+       ayuda:'Uno por línea. Concretos: evaluaciones, talleres, atención a derivados, '
+           + 'charlas a padres, acompañamiento docente.'},
+      {id:'beneficiarios', etiqueta:'¿A quiénes alcanza?', tipo:'textarea', filas:3},
+      {id:'obligaciones_centro', etiqueta:'Obligaciones del centro', tipo:'textarea', filas:5},
+      {id:'obligaciones_institucion', etiqueta:'Obligaciones de la institución', tipo:'textarea', filas:5,
+       ayuda:'Incluye siempre quién obtiene el consentimiento de los padres: sin eso '
+           + 'no se puede evaluar a un menor, y la responsabilidad tiene que estar '
+           + 'asignada por escrito.'},
+      {id:'costos', etiqueta:'Condiciones económicas', tipo:'textarea', filas:4},
+      {id:'vigencia', etiqueta:'Vigencia', tipo:'texto'},
+      {id:'confidencialidad', etiqueta:'Confidencialidad', tipo:'textarea', filas:4},
+    ],
+  },
+
+  propuesta_empresa: {
+    titulo: 'Propuesta de servicios para empresa',
+    nombre: 'PROPUESTA DE SERVICIOS PSICOLÓGICOS',
+    para: 'La cotización que se envía a una empresa: qué se hace, en cuánto tiempo '
+        + 'y cuánto cuesta.',
+    linea: 'gerencia',
+    firma: 'gerencia',
+    sinPaciente: true,
+    campos: [
+      {id:'empresa', etiqueta:'Empresa', tipo:'texto'},
+      {id:'ruc_empresa', etiqueta:'RUC', tipo:'texto'},
+      {id:'contacto', etiqueta:'Persona de contacto', tipo:'texto'},
+      {id:'cargo_contacto', etiqueta:'Cargo', tipo:'texto'},
+      {id:'necesidad', etiqueta:'Necesidad que plantea la empresa', tipo:'textarea', filas:4},
+      {id:'alcance', etiqueta:'Qué incluye el servicio', tipo:'textarea', filas:7,
+       ayuda:'Uno por línea. Lo que se entrega, no lo que se hace: "informe individual '
+           + 'por trabajador" dice más que "evaluación psicológica".'},
+      {id:'no_incluye', etiqueta:'Qué no incluye', tipo:'textarea', filas:3,
+       ayuda:'Evita el desacuerdo después. Si no incluye seguimiento ni reevaluación, '
+           + 'conviene decirlo ahora.'},
+      {id:'metodologia', etiqueta:'Cómo se trabaja', tipo:'textarea', filas:4},
+      {id:'plazo', etiqueta:'Plazo de ejecución', tipo:'texto'},
+      {id:'inversion', etiqueta:'Inversión', tipo:'textarea', filas:4},
+      {id:'validez', etiqueta:'Validez de la propuesta', tipo:'texto', valor:'15 días calendario'},
+    ],
+  },
+
+  constancia_practicas: {
+    titulo: 'Constancia de prácticas',
+    nombre: 'CONSTANCIA DE PRÁCTICAS PREPROFESIONALES',
+    para: 'Certifica que el practicante cumplió sus horas en el centro. La pide la '
+        + 'universidad al terminar.',
+    linea: 'gerencia',
+    firma: 'gerencia',
+    esPracticante: true,
+    campos: [
+      {id:'universidad', etiqueta:'Universidad', tipo:'texto'},
+      {id:'desde', etiqueta:'Desde', tipo:'date'},
+      {id:'hasta', etiqueta:'Hasta', tipo:'date'},
+      {id:'horas', etiqueta:'Horas acumuladas', tipo:'texto',
+       ayuda:'Viene de las horas registradas en el panel. Revísalo antes de firmar.'},
+      {id:'area', etiqueta:'Área de prácticas', tipo:'select',
+       opciones:['Clínica','Educativa','Organizacional']},
+      {id:'actividades', etiqueta:'Actividades realizadas', tipo:'textarea', filas:6,
+       ayuda:'Una por línea. Vienen de las tareas asignadas en el panel.'},
+      {id:'desempeno', etiqueta:'Desempeño', tipo:'select',
+       opciones:['Sobresaliente','Muy bueno','Bueno','Regular']},
+    ],
+  },
+
+  entrega_documento: {
+    titulo: 'Cargo de entrega de documento',
+    nombre: 'CONSTANCIA DE ENTREGA',
+    para: 'Se firma al entregar un informe: deja constancia de qué se entregó, a '
+        + 'quién y cuándo.',
+    linea: 'gerencia',
+    firma: 'gerencia',
+    firmaPropia: true,   // el cuerpo lleva las dos firmas
+    campos: [
+      {id:'documento', etiqueta:'¿Qué se entrega?', tipo:'texto'},
+      {id:'n_documento', etiqueta:'N° del documento', tipo:'texto'},
+      {id:'recibe', etiqueta:'¿Quién lo recibe?', tipo:'texto'},
+      {id:'doc_recibe', etiqueta:'DNI de quien recibe', tipo:'texto'},
+      {id:'relacion', etiqueta:'¿Qué relación tiene con el paciente?', tipo:'texto',
+       ayuda:'El paciente, su apoderado, un abogado con poder. Importa: un informe '
+           + 'no se entrega a quien pasa a recogerlo sin más.'},
+      {id:'motivo', etiqueta:'¿Para qué lo solicita?', tipo:'textarea', filas:2},
+      {id:'ejemplares', etiqueta:'Número de ejemplares', tipo:'texto', valor:'01'},
+    ],
+  },
+});
+
+/* --- Los cuerpos de los documentos de gerencia ---------------------- */
+
+function encabezadoPartes(izq, der){
+  return `<table style="width:100%;border:none;border-collapse:collapse;
+                        font-size:10.5pt;margin-bottom:12pt">${izq}${der}</table>`;
+}
+
+function cuerpoContratoServicios(pac){
+  const g = docDatos, ci = DB.centerInfo || {};
+  const contratante = g.contratante || (pac.isMinor ? pac.guardianName : pac.name) || '';
+  return `
+  <p style="text-align:justify;margin:0 0 10pt">
+    Conste por el presente documento el contrato de prestación de servicios
+    psicológicos que celebran, de una parte
+    <b>${esc(ci.name||'')}</b>, con domicilio en ${esc(ci.address||'')}, debidamente
+    representado por ${esc(ci.titular_nombre||'')}${ci.titular_documento
+      ? `, identificado con DNI N° ${esc(ci.titular_documento)}` : ''},
+    a quien en adelante se le denominará <b>EL CENTRO</b>; y de la otra parte
+    <b>${esc(contratante)}</b>${g.doc_contratante
+      ? `, identificado(a) con DNI N° ${esc(g.doc_contratante)}` : ''},
+    a quien se le denominará <b>EL CONTRATANTE</b>, en los términos siguientes:</p>
+
+  <div style="font-weight:bold;margin:12pt 0 5pt">PRIMERA — OBJETO</div>
+  <p style="text-align:justify;margin:0 0 8pt">
+    EL CENTRO se obliga a prestar el servicio de <b>${esc(g.servicio||'—')}</b>
+    ${pac.isMinor && pac.name ? `a favor de ${esc(pac.name)}, menor de edad bajo
+      responsabilidad de EL CONTRATANTE,` : ''}
+    en la modalidad ${esc(g.modalidad||'presencial')}.</p>
+
+  <div style="font-weight:bold;margin:12pt 0 5pt">SEGUNDA — SESIONES Y DURACIÓN</div>
+  <table style="width:100%;border:none;border-collapse:collapse;font-size:10.5pt;margin-bottom:8pt">
+    ${filaDato('Número de sesiones', g.n_sesiones)}
+    ${filaDato('Duración de cada sesión', g.duracion)}
+    ${filaDato('Vigencia', g.vigencia)}
+  </table>
+
+  <div style="font-weight:bold;margin:12pt 0 5pt">TERCERA — CONTRAPRESTACIÓN</div>
+  <p style="text-align:justify;margin:0 0 8pt">
+    EL CONTRATANTE abonará la suma de <b>S/ ${esc(g.tarifa||'—')}</b> por sesión.</p>
+  ${g.forma_pago? parrafos(g.forma_pago):''}
+
+  <div style="font-weight:bold;margin:12pt 0 5pt">CUARTA — INASISTENCIAS Y REPROGRAMACIONES</div>
+  ${parrafos(g.politica_inasistencia)}
+
+  <div style="font-weight:bold;margin:12pt 0 5pt">QUINTA — CONFIDENCIALIDAD</div>
+  <p style="text-align:justify;margin:0 0 8pt">
+    EL CENTRO guarda reserva de toda la información conocida con ocasión del
+    servicio, conforme al secreto profesional y a la Ley 29733 de Protección de
+    Datos Personales. La información solo se entrega a EL CONTRATANTE o a quien
+    él autorice por escrito, salvo los casos en que la ley obliga a informar,
+    como el riesgo inminente para la vida o la integridad de una persona.</p>
+
+  ${g.observaciones? `<div style="font-weight:bold;margin:12pt 0 5pt">SEXTA — ACUERDOS ADICIONALES</div>
+    ${parrafos(g.observaciones)}`:''}
+
+  <p style="text-align:justify;margin:12pt 0 0">
+    Ambas partes declaran haber leído el presente documento y suscribirlo en
+    señal de conformidad.</p>
+  ${dobleFirmaDoc('EL CENTRO', ci.titular_nombre||'',
+    docDatos._cargoFirma||'Administrador', 'EL CONTRATANTE')}`;
+}
+
+function cuerpoConvenioColegio(){
+  const g = docDatos, ci = DB.centerInfo || {};
+  return `
+  <p style="text-align:justify;margin:0 0 10pt">
+    Conste por el presente convenio de cooperación interinstitucional que celebran,
+    de una parte <b>${esc(ci.name||'')}</b>, con domicilio en ${esc(ci.address||'')},
+    representado por ${esc(ci.titular_nombre||'')}${ci.titular_documento
+      ? `, identificado con DNI N° ${esc(ci.titular_documento)}` : ''},
+    a quien se denominará <b>EL CENTRO</b>; y de la otra parte
+    <b>${esc(g.institucion||'')}</b>${g.ruc_institucion
+      ? `, con RUC N° ${esc(g.ruc_institucion)}` : ''}${g.direccion_institucion
+      ? `, con domicilio en ${esc(g.direccion_institucion)}` : ''},
+    representada por ${esc(g.representante||'')}${g.doc_representante
+      ? `, identificado(a) con DNI N° ${esc(g.doc_representante)}` : ''},
+    en su calidad de ${esc(g.cargo_representante||'representante legal')},
+    a quien se denominará <b>LA INSTITUCIÓN</b>, en los términos siguientes:</p>
+
+  <div style="font-weight:bold;margin:12pt 0 5pt">PRIMERA — OBJETO</div>
+  ${parrafos(g.objeto)}
+
+  ${g.servicios? `<div style="font-weight:bold;margin:12pt 0 5pt">SEGUNDA — SERVICIOS</div>
+    ${lista(g.servicios)}`:''}
+  ${g.beneficiarios? `<div style="font-weight:bold;margin:12pt 0 5pt">TERCERA — BENEFICIARIOS</div>
+    ${parrafos(g.beneficiarios)}`:''}
+  ${g.obligaciones_centro? `<div style="font-weight:bold;margin:12pt 0 5pt">CUARTA — OBLIGACIONES DE EL CENTRO</div>
+    ${lista(g.obligaciones_centro)}`:''}
+  ${g.obligaciones_institucion? `<div style="font-weight:bold;margin:12pt 0 5pt">QUINTA — OBLIGACIONES DE LA INSTITUCIÓN</div>
+    ${lista(g.obligaciones_institucion)}`:''}
+  ${g.costos? `<div style="font-weight:bold;margin:12pt 0 5pt">SEXTA — CONDICIONES ECONÓMICAS</div>
+    ${parrafos(g.costos)}`:''}
+
+  <div style="font-weight:bold;margin:12pt 0 5pt">SÉPTIMA — CONFIDENCIALIDAD Y DATOS DE MENORES</div>
+  ${g.confidencialidad? parrafos(g.confidencialidad) : `
+    <p style="text-align:justify;margin:0 0 8pt">
+      La información de los estudiantes atendidos es reservada y está protegida por
+      el secreto profesional y por la Ley 29733 de Protección de Datos Personales.
+      La evaluación o atención de un menor requiere el consentimiento informado
+      previo de sus padres o apoderados. Los informes se entregan a quien
+      corresponda según su destinatario y no se incorporan a documentos de acceso
+      general de LA INSTITUCIÓN.</p>`}
+
+  ${g.vigencia? `<div style="font-weight:bold;margin:12pt 0 5pt">OCTAVA — VIGENCIA</div>
+    <p style="margin:0 0 8pt">${esc(g.vigencia)}</p>`:''}
+
+  <p style="text-align:justify;margin:12pt 0 0">
+    En señal de conformidad, las partes suscriben el presente convenio por duplicado.</p>
+  ${dobleFirmaDoc('EL CENTRO', ci.titular_nombre||'',
+    docDatos._cargoFirma||'Administrador', 'LA INSTITUCIÓN')}`;
+}
+
+function cuerpoPropuestaEmpresa(){
+  const g = docDatos, ci = DB.centerInfo || {};
+  return `
+  <table style="width:100%;border:none;border-collapse:collapse;font-size:10.5pt;margin-bottom:12pt">
+    ${filaDato('Dirigido a', g.contacto)}
+    ${filaDato('Cargo', g.cargo_contacto)}
+    ${filaDato('Empresa', g.empresa)}
+    ${filaDato('RUC', g.ruc_empresa)}
+  </table>
+  <p style="text-align:justify;margin:0 0 10pt">
+    Por medio de la presente, <b>${esc(ci.name||'')}</b> pone a su consideración la
+    siguiente propuesta de servicios psicológicos.</p>
+  ${seccion('NECESIDAD IDENTIFICADA', g.necesidad)}
+  ${g.alcance? `<div style="font-weight:bold;margin:12pt 0 5pt">ALCANCE DEL SERVICIO</div>
+    ${lista(g.alcance)}`:''}
+  ${g.no_incluye? `<div style="font-weight:bold;margin:12pt 0 5pt">NO INCLUYE</div>
+    ${lista(g.no_incluye)}`:''}
+  ${seccion('METODOLOGÍA', g.metodologia)}
+  ${g.plazo? `<p style="margin:10pt 0 4pt"><b>Plazo de ejecución:</b> ${esc(g.plazo)}</p>`:''}
+  ${g.inversion? `<div style="font-weight:bold;margin:12pt 0 5pt">INVERSIÓN</div>
+    ${parrafos(g.inversion)}`:''}
+  ${g.validez? `<p style="margin:10pt 0 0;font-size:10pt;color:#555">
+    Propuesta válida por ${esc(g.validez)} desde su emisión.</p>`:''}
+  <p style="text-align:justify;margin:12pt 0 0">
+    Quedamos atentos a sus consultas y a la posibilidad de trabajar juntos.</p>`;
+}
+
+function cuerpoConstanciaPracticas(){
+  const g = docDatos, pr = docDatos._practicante || {}, ci = DB.centerInfo || {};
+  const periodo = (g.desde && g.hasta)
+    ? `desde el ${fmtFechaCorta(g.desde)} hasta el ${fmtFechaCorta(g.hasta)}` : '';
+  return `
+  <p style="text-align:justify;margin:0 0 10pt">
+    Quien suscribe, en representación de <b>${esc(ci.name||'')}</b>, deja constancia
+    de que <b>${esc(pr.name||'')}</b>, estudiante de la carrera profesional de
+    Psicología${g.universidad? ` de ${esc(g.universidad)}` : ''}, realizó sus
+    prácticas preprofesionales en el área ${esc(g.area||'clínica')} de esta
+    institución ${esc(periodo)}${g.horas? `, acumulando un total de
+    <b>${esc(g.horas)} horas</b>` : ''}.</p>
+  ${g.actividades? `<div style="font-weight:bold;margin:12pt 0 5pt">ACTIVIDADES REALIZADAS</div>
+    ${lista(g.actividades)}`:''}
+  ${g.desempeno? `<p style="text-align:justify;margin:10pt 0">
+    Durante su permanencia, su desempeño fue calificado como
+    <b>${esc(g.desempeno)}</b>.</p>`:''}
+  <p style="text-align:justify;margin:10pt 0 0">
+    Se expide la presente a solicitud del interesado, para los fines académicos
+    que estime convenientes.</p>`;
+}
+
+function cuerpoEntregaDocumento(pac){
+  const g = docDatos, ci = DB.centerInfo || {};
+  return `
+  <p style="text-align:justify;margin:0 0 10pt">
+    Se deja constancia de la entrega del siguiente documento:</p>
+  <table style="width:100%;border:none;border-collapse:collapse;font-size:10.5pt;margin-bottom:12pt">
+    ${filaDato('Documento entregado', g.documento)}
+    ${filaDato('N° del documento', g.n_documento)}
+    ${filaDato('Ejemplares', g.ejemplares)}
+    ${filaDato('Corresponde a', pac.name)}
+    ${filaDato('Recibe', g.recibe)}
+    ${filaDato('DNI de quien recibe', g.doc_recibe)}
+    ${filaDato('Relación con el paciente', g.relacion)}
+    ${filaDato('Motivo de la solicitud', g.motivo)}
+    ${filaDato('Fecha de entrega', fmtFechaCorta(todayISO()))}
+  </table>
+  <p style="text-align:justify;margin:0 0 10pt;font-size:10.5pt">
+    Quien recibe declara conocer que el documento contiene información protegida
+    por el secreto profesional y por la Ley 29733 de Protección de Datos
+    Personales, y se compromete a darle el uso para el que fue solicitado.</p>
+  ${dobleFirmaDoc('ENTREGA — ' + (ci.name||''), ci.titular_nombre||'',
+    docDatos._cargoFirma||'Administrador', 'RECIBE CONFORME')}`;
+}
+
 /* --- La ventana desde donde se emite ------------------------------- */
 function abrirDocumento(tipo, patientId){
   const d = DOCUMENTOS_OFICIALES[tipo];
@@ -10269,11 +10682,10 @@ function abrirDocumento(tipo, patientId){
     _historia: (typeof currentHistoriaData !== 'undefined' && currentHistoriaData
                 && currentHistoryPatientId === patientId) ? currentHistoriaData : {},
     _numero: numeroDeDocumento(),
-    // Todos los documentos los firma el profesional por su condición
-    // profesional, con su colegiatura. Un cargo administrativo no habilita
-    // a firmar un documento psicológico: lo que lo respalda es estar
-    // colegiado, y eso es lo que tiene que leerse debajo de la firma.
-    _cargoFirma: 'Psicóloga',
+    // Lo clínico lo firma la psicóloga por su colegiatura —un cargo
+    // administrativo no habilita a firmar un documento psicológico—; lo
+    // administrativo lo firma la gerencia, que es quien obliga al centro.
+    _cargoFirma: d.firma === 'gerencia' ? 'Administrador' : 'Psicóloga',
     desde: primeraAtencionDe(patientId),
     frecuencia: 'sesiones semanales',
     solicitante: 'a solicitud del interesado',
@@ -10289,6 +10701,27 @@ function abrirDocumento(tipo, patientId){
   if(tipo === 'orientacion_vocacional'){
     docDatos.motivo = 'Acude a consulta para realizar una evaluación de '
                     + 'orientación vocacional.';
+  }
+  // Lo que el sistema ya sabe para los documentos de gerencia.
+  if(tipo === 'contrato_servicios'){
+    docDatos.contratante = pac.isMinor ? (pac.guardianName||'') : (pac.name||'');
+    docDatos.doc_contratante = pac.isMinor ? (pac.guardianDocument||'') : (pac.document||'');
+    docDatos.tarifa = pac.sessionPrice || pac.tarifa || '';
+    docDatos.n_sesiones = pac.totalSessions || pac.sesiones || '';
+    docDatos.modalidad = pac.modality || 'Presencial';
+    docDatos.politica_inasistencia =
+      'La reprogramación de una sesión se solicita con al menos 24 horas de '
+    + 'anticipación. La inasistencia sin aviso previo se considera sesión '
+    + 'tomada y no da lugar a devolución ni reprogramación.';
+  }
+  if(tipo === 'constancia_practicas'){
+    docDatos.horas = horasDePracticante(patientId);
+    docDatos.actividades = actividadesDePracticante(patientId);
+  }
+  if(tipo === 'entrega_documento'){
+    docDatos.recibe = pac.isMinor ? (pac.guardianName||'') : (pac.name||'');
+    docDatos.doc_recibe = pac.isMinor ? (pac.guardianDocument||'') : (pac.document||'');
+    docDatos.relacion = pac.isMinor ? (pac.guardianRelationship||'Apoderado') : 'El propio paciente';
   }
   renderDocumentoModal();
 }
@@ -10348,8 +10781,10 @@ function renderDocumentoModal(){
                  oninput="docDatos._numero=this.value; docVistaPrevia()"></div>
         <div class="field"><label>Quién firma</label>
           <select id="doc_cargo" onchange="docDatos._cargoFirma=this.value; docVistaPrevia()">
-            ${['Psicóloga','Psicólogo','Psicóloga tratante','Psicólogo tratante',
-               'Psicóloga responsable de la evaluación','Psicólogo responsable de la evaluación']
+            ${(d.firma === 'gerencia'
+               ? ['Administrador','Administradora','Gerente General','Representante legal']
+               : ['Psicóloga','Psicólogo','Psicóloga tratante','Psicólogo tratante',
+                  'Psicóloga responsable de la evaluación','Psicólogo responsable de la evaluación'])
               .map(c=>`<option${c===docDatos._cargoFirma?' selected':''}>${c}</option>`).join('')}
           </select></div>
       </div>
