@@ -9014,6 +9014,23 @@ function cuerpoDelInforme(a){
     <td style="text-align:right">${v.tb!=null? v.tb : '—'}</td>
     <td>${v.interpretacion||'—'}</td></tr>`).join('');
 
+  // Respuestas que se miran una por una, aparte del total: el ítem 9 del
+  // PHQ-9 pregunta por ideas de muerte, y un total bajo puede esconderlo.
+  const alertaCritica = (r.alertas||[]).length
+    ? `<div class="card" style="border-color:#a3381f;background:#fdeee9;border-width:2px">
+         <h4 style="margin:0 0 6px;color:#a3381f">Atender hoy</h4>
+         ${r.alertas.map(a=>`<p style="margin:0 0 6px">${a.texto}</p>`).join('')}
+       </div>` : '';
+
+  // Escalas cargadas pero no confirmadas todavía contra su protocolo.
+  const porRevisar = r.revisarAntes
+    ? `<div class="card" style="border-color:#d8b48a;background:#fbf6ec">
+         <h4 style="margin:0 0 6px">Confirmar los enunciados antes de usar este resultado</h4>
+         <p class="hint" style="margin:0">Esta escala se cargó con los enunciados de su
+           versión en español, pero nadie los ha contrastado todavía contra el protocolo
+           oficial del centro. Revísalos una vez y el aviso desaparece.</p>
+       </div>` : '';
+
   // Si la prueba todavía no se puede puntuar, se dice y no se muestra nada
   // más: un cuadro de escalas vacío se leería como "salió todo en cero".
   if(r.sinCorregir){
@@ -9049,20 +9066,25 @@ function cuerpoDelInforme(a){
     ['animo_general',  'Componente del estado de ánimo general'],
     ['validez',        'Escalas de impresión'],
   ];
-  // El Millon se lee en tasas base con índices de validez; el BarOn en
-  // cocientes, sin percentiles. Las columnas se nombran según cuál es.
-  const esCociente = !(r.validez||[]).length;
+  // Tres lecturas distintas y tres juegos de columnas:
+  //   el Millon, en tasas base con índices de validez;
+  //   el BarOn, en cocientes donde 100 es el promedio;
+  //   las escalas de tamizaje, en un puntaje sobre su máximo.
+  const esTamizaje = (r.escalas||[]).length === 1 && r.escalas[0].maximo != null;
+  const esCociente = !esTamizaje && !(r.validez||[]).length;
   const bloques = grupos.map(([g, titulo])=>{
     const esc = (r.escalas||[]).filter(e=>e.grupo===g);
     if(!esc.length) return '';
-    return `<h4 style="margin:18px 0 6px">${titulo}</h4>
+    const rotulo = esTamizaje ? 'Resultado' : titulo;
+    return `<h4 style="margin:18px 0 6px">${rotulo}</h4>
       <div class="tablewrap"><table>
-        <thead><tr><th>Cód</th><th>Escala</th>
-          <th style="text-align:right">${esCociente? 'Bruto' : 'PD'}</th>
-          <th style="text-align:right">${esCociente? 'CE' : 'TB'}</th>
-          ${esCociente? '' : '<th style="text-align:right">Pc</th>'}
-          <th style="min-width:160px">Perfil</th><th>Interpretación</th></tr></thead>
-        <tbody>${esc.map(e=>filaEscala(e, esCociente)).join('')}</tbody></table></div>`;
+        <thead><tr>${esTamizaje? '' : '<th>Cód</th>'}<th>Escala</th>
+          ${esTamizaje? '' : `<th style="text-align:right">${esCociente? 'Bruto' : 'PD'}</th>`}
+          <th style="text-align:right">${esTamizaje? 'Puntaje' : (esCociente? 'CE' : 'TB')}</th>
+          ${(esCociente||esTamizaje)? '' : '<th style="text-align:right">Pc</th>'}
+          <th style="min-width:160px">${esTamizaje? 'Sobre el máximo' : 'Perfil'}</th>
+          <th>Interpretación</th></tr></thead>
+        <tbody>${esc.map(e=>filaEscala(e, esCociente, esTamizaje)).join('')}</tbody></table></div>`;
   }).join('');
 
   return `
@@ -9078,7 +9100,7 @@ function cuerpoDelInforme(a){
           a.minutos!=null? ' · '+a.minutos+' min' : ''}</p>
       </div>
     </div>
-    ${aviso}${rapido}
+    ${alertaCritica}${porRevisar}${aviso}${rapido}
     ${filaValidez? `<h4 style="margin:18px 0 6px">Índices de validez</h4>
     <div class="tablewrap"><table>
       <thead><tr><th>Cód</th><th>Índice</th><th style="text-align:right">PD</th>
@@ -9086,7 +9108,12 @@ function cuerpoDelInforme(a){
       <tbody>${filaValidez}</tbody></table></div>` : ''}
     ${bloques}
     <p class="hint" style="margin-top:16px">
-      ${esCociente
+      ${esTamizaje
+        ? 'Una escala de tamizaje indica si conviene evaluar a fondo, no diagnostica: '
+          + 'el puntaje señala la intensidad de lo que la persona reporta en el momento '
+          + 'de responder. Repetirla cada cierto tiempo sirve para ver si el tratamiento '
+          + 'avanza.'
+        : esCociente
         ? 'Bruto: suma de las respuestas · CE: cociente emocional, donde 100 es el '
           + 'promedio y cada 15 puntos una desviación. La línea del perfil marca 70, '
           + '90 y 100.'
@@ -9096,7 +9123,23 @@ function cuerpoDelInforme(a){
     </p>`;
 }
 
-function filaEscala(e, esCociente){
+function filaEscala(e, esCociente, esTamizaje){
+  // En una escala de tamizaje el puntaje se lee sobre su propio máximo:
+  // 18 no significa nada sin saber que el techo es 27.
+  if(esTamizaje){
+    const p = Number(e.pd)||0, max = Number(e.maximo)||1;
+    const parte = Math.max(0, Math.min(100, p/max*100));
+    const color = parte>=70? '#a3381f' : parte>=45? '#c77c26'
+                : parte>=20? '#3f7ca8' : '#3d7a5d';
+    return `<tr>
+      <td>${e.nombre}</td>
+      <td style="text-align:right"><b>${p}</b> <span class="sub">de ${max}</span></td>
+      <td><div style="position:relative;height:12px;background:#eef1f6;border-radius:99px">
+        <i style="position:absolute;left:0;top:0;height:100%;width:${parte}%;
+                  background:${color};border-radius:99px;display:block"></i>
+      </div></td>
+      <td>${e.interpretacion||'—'}</td></tr>`;
+  }
   const v = Number(e.tb)||0;
   // En tasa base lo alto es lo preocupante; en cociente emocional es al
   // revés: 100 es el promedio y lo que hay que mirar es lo bajo.

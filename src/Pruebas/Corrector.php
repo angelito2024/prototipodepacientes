@@ -39,6 +39,12 @@ final class Corrector
         if (($definicion['tipo'] ?? '') === 'likert') {
             return self::corregirLikert($definicion, $respuestas, $contestados, $sinResponder);
         }
+        // Las escalas de tamizaje (PHQ-9, GAD-7, Zung) son más simples: se
+        // suman las respuestas y el total cae en un rango de gravedad. No
+        // tienen baremos ni componentes.
+        if (($definicion['tipo'] ?? '') === 'suma') {
+            return self::corregirSuma($definicion, $respuestas, $contestados, $sinResponder);
+        }
 
         $escalas = [];
         foreach ($definicion['escalas'] as $e) {
@@ -77,6 +83,69 @@ final class Corrector
             'completo'      => $sinResponder === [],
             'validez'       => self::validez($definicion, $respuestas),
             'escalas'       => $escalas,
+        ];
+    }
+
+    /**
+     * Escalas de tamizaje: se suma lo respondido y el total cae en un
+     * rango de gravedad.
+     *
+     * Sirven para decidir si hace falta una evaluación más larga, no para
+     * diagnosticar: por eso el resultado dice "sugiere" y no "presenta".
+     *
+     * Algunas tienen ítems que obligan a mirar aparte del total —el 9 del
+     * PHQ-9 pregunta por ideas de muerte—: si se marcan, el resultado lo
+     * dice arriba, porque un total bajo puede esconder una respuesta que
+     * no se puede dejar pasar.
+     */
+    private static function corregirSuma(
+        array $definicion, array $respuestas, int $contestados, array $sinResponder
+    ): array {
+        $inversos = array_flip($definicion['inversos'] ?? []);
+        $min = (int) ($definicion['valorMinimo'] ?? 0);
+        $max = $min + count($definicion['opciones'] ?? []) - 1;
+
+        $total = 0;
+        foreach ($definicion['items'] as $it) {
+            $r = $respuestas[$it['n']] ?? null;
+            if ($r === null || !is_numeric($r)) {
+                continue;
+            }
+            $v = (int) $r;
+            $total += isset($inversos[$it['n']]) ? ($min + $max - $v) : $v;
+        }
+
+        // Respuestas que se revisan una por una, aparte del total.
+        $alertas = [];
+        foreach ($definicion['itemsCriticos'] ?? [] as $crit) {
+            $r = $respuestas[$crit['item']] ?? null;
+            if ($r !== null && is_numeric($r) && (int) $r >= (int) $crit['desde']) {
+                $alertas[] = ['item' => $crit['item'], 'texto' => $crit['aviso'],
+                              'respuesta' => (int) $r];
+            }
+        }
+
+        $escala = [
+            'codigo'         => $definicion['codigo'],
+            'nombre'         => $definicion['nombreEscala'] ?? $definicion['nombre'],
+            'grupo'          => 'total',
+            'pd'             => $total,
+            'tb'             => $total,
+            'percentil'      => null,
+            'interpretacion' => self::rotulo($definicion['cortes']['total'] ?? [], $total),
+            'maximo'         => (count($definicion['items']) * $max),
+        ];
+
+        return [
+            'corregidoEn'   => date('c'),
+            'nItems'        => (int) $definicion['nItems'],
+            'contestados'   => $contestados,
+            'sinResponder'  => $sinResponder,
+            'completo'      => $sinResponder === [],
+            'validez'       => [],
+            'escalas'       => [$escala],
+            'alertas'       => $alertas,
+            'revisarAntes'  => ($definicion['revisarAntes'] ?? false) === true,
         ];
     }
 
