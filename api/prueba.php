@@ -48,6 +48,12 @@ try {
                 Http::error('La prueba no está disponible. Avísale al centro.', 500);
             }
             $resp = $a['respuestas'] === null ? [] : json_decode((string) $a['respuestas'], true);
+            // El área de cada ítem solo se manda en las pautas de
+            // observación, que las marca el profesional. En una prueba que
+            // responde el paciente, saber a qué escala apunta cada frase es
+            // parte de la clave y no sale de acá.
+            $esCotejo = ($def['tipo'] ?? '') === 'cotejo';
+            $notas = $a['notas'] === null ? [] : json_decode((string) $a['notas'], true);
             Http::ok([
                 'paciente'   => $a['nombre_completo'],
                 'prueba'     => [
@@ -55,14 +61,19 @@ try {
                     'siglas'   => $a['siglas'],
                     'nItems'   => (int) $a['n_items'],
                     'minutos'  => $a['minutos_aprox'] === null ? null : (int) $a['minutos_aprox'],
+                    'tipo'     => $def['tipo'] ?? 'vf',
+                    'areas'    => $esCotejo ? ($def['areas'] ?? []) : null,
                     'opciones' => $def['opciones'],
                     // Solo el enunciado. La clave se queda en el servidor.
                     'items'    => array_map(
-                        static fn(array $i): array => ['n' => $i['n'], 'texto' => $i['texto']],
+                        static fn(array $i): array => $esCotejo
+                            ? ['n' => $i['n'], 'texto' => $i['texto'], 'area' => $i['area'] ?? '']
+                            : ['n' => $i['n'], 'texto' => $i['texto']],
                         $def['items']
                     ),
                 ],
                 'respuestas' => is_array($resp) ? $resp : [],
+                'notas'      => $esCotejo && is_array($notas) ? $notas : [],
             ]);
 
         case 'avance':
@@ -73,7 +84,11 @@ try {
                 Http::error($motivo, 409);
             }
             $c = Http::cuerpo();
-            $n = PruebaAplicaciones::guardarAvance($id, (array) ($c['respuestas'] ?? []));
+            $n = PruebaAplicaciones::guardarAvance(
+                $id,
+                (array) ($c['respuestas'] ?? []),
+                isset($c['notas']) ? (array) $c['notas'] : null
+            );
             Http::ok(['respondidos' => $n]);
 
         case 'terminar':
@@ -88,7 +103,8 @@ try {
                 PruebaAplicaciones::terminar(
                     $id,
                     (array) ($c['respuestas'] ?? []),
-                    isset($c['segundos']) ? (int) $c['segundos'] : null
+                    isset($c['segundos']) ? (int) $c['segundos'] : null,
+                    isset($c['notas']) ? (array) $c['notas'] : null
                 );
             } catch (RuntimeException $e) {
                 // Falta algo: se le dice al paciente, sin cerrar nada.

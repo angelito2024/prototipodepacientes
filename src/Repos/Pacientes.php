@@ -37,10 +37,22 @@ final class Pacientes extends Repositorio
                     pa.estado_informe, pa.fecha_limite_informe, pa.estado_pago_manual,
                     pa.avisar_paciente,
                     pa.consentimiento_fecha, pa.consentimiento_firmante,
-                    prof.uid AS profesional_uid
+                    prof.uid AS profesional_uid,
+                    -- Cuándo se tocó su ficha por última vez, y cuándo se
+                    -- escribió lo último en su historia clínica. Son dos
+                    -- cosas distintas: cambiarle el teléfono no es lo mismo
+                    -- que anotar cómo le fue en la sesión.
+                    p.actualizado_en,
+                    hc.actualizado_en AS historia_actualizada,
+                    ev.ultima_nota
                FROM pacientes pa
                JOIN personas p    ON p.id = pa.persona_id
                LEFT JOIN personas prof ON prof.id = pa.profesional_id
+               LEFT JOIN historias_clinicas hc ON hc.paciente_id = pa.persona_id
+               LEFT JOIN (SELECT h.paciente_id, MAX(e.fecha) AS ultima_nota
+                            FROM hc_evoluciones e
+                            JOIN historias_clinicas h ON h.id = e.historia_id
+                           GROUP BY h.paciente_id) ev ON ev.paciente_id = pa.persona_id
               WHERE p.eliminado_en IS NULL
               ORDER BY p.id"
         );
@@ -71,12 +83,20 @@ final class Pacientes extends Repositorio
                 'modality'           => (string) $f['modalidad_default'],
                 'professionalId'     => (string) ($f['profesional_uid'] ?? ''),
                 'billingType'        => $act['billingType'] ?? 'Paquete',
+                // Cuando dos personas comparten un paquete, aquí va el
+                // titular: el dueño de las sesiones y de la deuda.
+                'packageHolderId'    => $act['packageHolderId'] ?? '',
                 'packageTotal'       => $act['packageTotal'] ?? 0,
                 'sessionsUsed'       => $act['sessionsUsed'] ?? 0,
                 'billedSessions'     => $act['billedSessions'] ?? 0,
                 'pricePerSession'    => $act['pricePerSession'] ?? 0,
+                'packagePrice'       => $act['packagePrice'] ?? 0,
                 'packageStartDate'   => $act['packageStartDate'] ?? '',
                 'paquetesHistorial'  => $pk['historial'],
+                // Para saber de quién no se sabe nada hace tiempo.
+                'fichaActualizada'   => (string) ($f['actualizado_en'] ?? ''),
+                'historiaActualizada'=> (string) ($f['historia_actualizada'] ?? ''),
+                'ultimaNota'         => (string) ($f['ultima_nota'] ?? ''),
                 'paymentStatus'      => (string) $f['estado_pago_manual'],
                 'reportStatus'       => (string) $f['estado_informe'],
                 // Cuándo firmó su consentimiento informado y quién lo firmó.
@@ -173,22 +193,33 @@ final class Pacientes extends Repositorio
     {
         $out = [];
         $filas = Database::todos(
-            'SELECT paciente_id, uid, tipo_facturacion, sesiones_totales, sesiones_usadas,
-                    sesiones_facturadas, precio_sesion, fecha_inicio, fecha_cierre, estado
-               FROM paciente_paquetes
-              WHERE estado <> \'Anulado\'
-              ORDER BY fecha_inicio, id'
+            'SELECT p.paciente_id, p.uid, p.tipo_facturacion, p.sesiones_totales, p.sesiones_usadas,
+                    p.sesiones_facturadas, p.precio_sesion, p.precio_total,
+                    p.fecha_inicio, p.fecha_cierre, p.estado,
+                    p.titular_id, tit.uid AS titular_uid
+               FROM paciente_paquetes p
+          LEFT JOIN personas tit ON tit.id = p.titular_id
+              WHERE p.estado <> \'Anulado\'
+              ORDER BY p.fecha_inicio, p.id'
         );
         foreach ($filas as $f) {
             $pid = (int) $f['paciente_id'];
             $out[$pid] ??= ['activo' => null, 'historial' => []];
             if ($f['estado'] === 'Activo') {
+                // Con titular, esta persona no tiene paquete propio: consume
+                // del de otro. El panel lo llama 'Compartido'.
+                $titular = $f['titular_uid'] === null ? '' : (string) $f['titular_uid'];
                 $out[$pid]['activo'] = [
-                    'billingType'      => (string) $f['tipo_facturacion'],
+                    'billingType'      => $titular !== '' ? 'Compartido' : (string) $f['tipo_facturacion'],
+                    'packageHolderId'  => $titular,
                     'packageTotal'     => (int) ($f['sesiones_totales'] ?? 0),
                     'sessionsUsed'     => (int) $f['sesiones_usadas'],
                     'billedSessions'   => (int) $f['sesiones_facturadas'],
                     'pricePerSession'  => (float) $f['precio_sesion'],
+                    // El precio pactado del paquete entero. Manda sobre la
+                    // multiplicación: un acuerdo de S/290 por seis sesiones
+                    // no son seis veces 48.33.
+                    'packagePrice'     => $f['precio_total'] === null ? 0 : (float) $f['precio_total'],
                     'packageStartDate' => (string) $f['fecha_inicio'],
                 ];
             } else {
@@ -424,7 +455,31 @@ final class Pacientes extends Repositorio
             );
         }
 
-        $tipo  = self::enum($item['billingType'] ?? null, ['Paquete','Individual'], 'Paquete');
+        // 'Compartido' no es un tipo de facturación distinto: es un paquete
+        // normal cuyo dueño es otra persona. Se guarda como 'Paquete' con
+        // el titular apuntado, así el resto del esquema no cambia.
+        $compartido = ($item['billingType'] ?? '') === 'Compartido';
+        $titularId  = null;
+        if ($compartido) {
+            $titularUid = self::nz($item['packageHolderId'] ?? null);
+            if ($titularUid !== null) {
+                $titularId = Database::valor(
+                    'SELECT p.id FROM personas p JOIN pacientes pa ON pa.persona_id = p.id WHERE p.uid = ?',
+                    [$titularUid]
+                );
+                $titularId = $titularId === null ? null : (int) $titularId;
+            }
+            // Sin titular válido no hay paquete compartido que valga: se
+            // guarda como paquete propio antes que dejarlo colgando.
+            if ($titularId === null || $titularId === $pacienteId) {
+                $compartido = false;
+                $titularId  = null;
+            }
+        }
+
+        $tipo  = $compartido
+            ? 'Paquete'
+            : self::enum($item['billingType'] ?? null, ['Paquete','Individual'], 'Paquete');
         $total = self::ent($item['packageTotal'] ?? 0);
 
         $activoUid = Database::valor(
@@ -437,24 +492,35 @@ final class Pacientes extends Repositorio
         Database::query(
             'INSERT INTO paciente_paquetes
                 (uid, paciente_id, tipo_facturacion, sesiones_totales, sesiones_usadas,
-                 sesiones_facturadas, precio_sesion, fecha_inicio, estado)
-             VALUES (?,?,?,?,?,?,?,?,\'Activo\')
+                 sesiones_facturadas, precio_sesion, precio_total, fecha_inicio, estado, titular_id)
+             VALUES (?,?,?,?,?,?,?,?,?,\'Activo\',?)
              ON DUPLICATE KEY UPDATE
                 tipo_facturacion    = VALUES(tipo_facturacion),
                 sesiones_totales    = VALUES(sesiones_totales),
                 sesiones_usadas     = VALUES(sesiones_usadas),
                 sesiones_facturadas = VALUES(sesiones_facturadas),
                 precio_sesion       = VALUES(precio_sesion),
-                fecha_inicio        = VALUES(fecha_inicio)',
+                precio_total        = VALUES(precio_total),
+                fecha_inicio        = VALUES(fecha_inicio),
+                titular_id          = VALUES(titular_id)',
             [
                 $activoUid,
                 $pacienteId,
                 $tipo,
-                $tipo === 'Individual' ? null : ($total > 0 ? $total : null),
+                // El check del esquema exige sesiones > 0 en un paquete. En
+                // uno compartido las sesiones son las del titular; se copia
+                // su total para cumplirlo y para que la fila se entienda
+                // sola si alguien la mira desde la base.
+                $tipo === 'Individual' ? null : ($total > 0 ? $total : 1),
                 self::ent($item['sessionsUsed'] ?? 0),
                 self::ent($item['billedSessions'] ?? 0),
                 self::num($item['pricePerSession'] ?? 0),
+                // Solo tiene sentido en un paquete: sin paquete no hay total
+                // pactado que guardar.
+                ($tipo === 'Individual' || self::num($item['packagePrice'] ?? 0) <= 0)
+                    ? null : self::num($item['packagePrice']),
                 self::fecha($item['packageStartDate'] ?? null) ?? date('Y-m-d'),
+                $titularId,
             ]
         );
 

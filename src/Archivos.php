@@ -82,6 +82,77 @@ final class Archivos
         return Database::ultimoId();
     }
 
+    /**
+     * Trae a la biblioteca un archivo que ya está en el disco de Luis.
+     *
+     * No pasa por el tope de los adjuntos clínicos: ahí el tope existe
+     * porque el archivo llega por el navegador dentro de un JSON, y un PDF
+     * de 20 MB tumbaría la petición. Acá el archivo se copia de una carpeta
+     * a otra, sin pasar por la red ni por la memoria: un video de 140 MB se
+     * copia igual de bien que uno de 2.
+     */
+    public static function importarDesdeDisco(
+        string $ruta,
+        ?string $nombre = null,
+        ?int $usuarioId = null
+    ): int {
+        if (!is_file($ruta)) {
+            throw new RuntimeException("No encuentro el archivo: $ruta");
+        }
+        $nombre ??= basename($ruta);
+        $sha = hash_file('sha256', $ruta);
+
+        // El mismo pictograma en dos carpetas ocupa espacio una sola vez.
+        $existente = Database::valor(
+            'SELECT id FROM archivos WHERE sha256 = ? AND eliminado_en IS NULL LIMIT 1',
+            [$sha]
+        );
+        if ($existente !== null) {
+            return (int) $existente;
+        }
+
+        $uuid = self::uuid();
+        $mime = self::mimePorNombre($nombre);
+        $rel  = 'materiales/' . substr($sha, 0, 2) . '/' . $uuid . self::extension($nombre, $mime);
+        $abs  = self::raiz() . '/' . $rel;
+
+        if (!is_dir(dirname($abs)) && !mkdir(dirname($abs), 0775, true) && !is_dir(dirname($abs))) {
+            throw new RuntimeException('No se pudo crear la carpeta: ' . dirname($abs));
+        }
+        if (!copy($ruta, $abs)) {
+            throw new RuntimeException('No se pudo copiar el archivo a ' . $abs);
+        }
+
+        Database::query(
+            'INSERT INTO archivos (uuid, nombre_original, mime, tamano_bytes, sha256, ruta_relativa, es_enlace, subido_por)
+             VALUES (?, ?, ?, ?, ?, ?, 0, ?)',
+            [$uuid, mb_substr($nombre, 0, 255), $mime, filesize($ruta), $sha, $rel, $usuarioId]
+        );
+        return Database::ultimoId();
+    }
+
+    /** Tipo de archivo deducido de la extensión, para servirlo como debe. */
+    public static function mimePorNombre(string $nombre): string
+    {
+        return match (strtolower((string) pathinfo($nombre, PATHINFO_EXTENSION))) {
+            'pdf'            => 'application/pdf',
+            'jpg', 'jpeg'    => 'image/jpeg',
+            'png'            => 'image/png',
+            'webp'           => 'image/webp',
+            'gif'            => 'image/gif',
+            'mp4'            => 'video/mp4',
+            'webm'           => 'video/webm',
+            'mp3'            => 'audio/mpeg',
+            'ppsx', 'pptx'   => 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            'ppt'            => 'application/vnd.ms-powerpoint',
+            'xlsx'           => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'xls'            => 'application/vnd.ms-excel',
+            'docx'           => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'doc'            => 'application/msword',
+            default          => 'application/octet-stream',
+        };
+    }
+
     /** Registra un enlace externo (Google Drive y similares). */
     public static function desdeEnlace(string $nombre, string $url, ?int $usuarioId = null): int
     {

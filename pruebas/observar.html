@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<meta http-equiv="Cache-Control" content="no-store">
+<title>Pauta de observación</title>
+<style>
+  :root{
+    --tinta:#1f2430; --suave:#5b6577; --linea:#e2e6ee; --fondo:#f4f6fa;
+    --papel:#fff; --si:#2f6f4f; --siSuave:#e8f2ec; --aun:#b06a1c;
+    --aunSuave:#fbf1e3; --nover:#6b7280; --noverSuave:#eef0f4; --alerta:#a3381f;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--fondo);color:var(--tinta);
+       font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+       -webkit-text-size-adjust:100%}
+  .caja{max-width:760px;margin:0 auto;padding:0 14px 150px}
+
+  header{background:var(--papel);border-bottom:1px solid var(--linea);
+         position:sticky;top:0;z-index:6}
+  .cabecera{max-width:760px;margin:0 auto;padding:10px 14px}
+  .titulo{font-size:16px;font-weight:700;margin:0}
+  .sub{font-size:12.5px;color:var(--suave);margin:2px 0 0}
+  .barra{height:6px;background:var(--linea);border-radius:99px;margin-top:9px;
+         overflow:hidden;display:flex}
+  .barra i{display:block;height:100%;transition:width .25s}
+  .barra .bSi{background:var(--si)} .barra .bAun{background:var(--aun)}
+  .barra .bNo{background:var(--nover)}
+
+  /* Las áreas, como pestañas. Permite ir a la que toca sin bajar por toda
+     la hoja: en la sesión no hay tiempo de buscar. */
+  .areas{display:flex;gap:6px;overflow-x:auto;padding:9px 0 2px;
+         scrollbar-width:none}
+  .areas::-webkit-scrollbar{display:none}
+  .areas button{flex:0 0 auto;font:inherit;font-size:13px;font-weight:600;
+      border:1.5px solid var(--linea);background:var(--papel);color:var(--suave);
+      border-radius:99px;padding:7px 13px;cursor:pointer;white-space:nowrap}
+  .areas button.activa{background:var(--tinta);border-color:var(--tinta);color:#fff}
+  .areas button .cuenta{opacity:.7;font-weight:500;margin-left:5px}
+
+  .item{background:var(--papel);border:1px solid var(--linea);border-radius:13px;
+        padding:13px 15px;margin:10px 0}
+  .item.si{border-color:#bcd9c8;background:var(--siSuave)}
+  .item.aun{border-color:#e6cda6;background:var(--aunSuave)}
+  .item.nover{border-color:#d7dbe3;background:var(--noverSuave)}
+  .item .n{font-size:11.5px;color:var(--suave);font-weight:700;letter-spacing:.05em}
+  .item .txt{margin:3px 0 11px;font-size:15.5px;line-height:1.4}
+  .ops{display:flex;gap:7px}
+  .ops button{flex:1 1 0;min-width:0;font:inherit;font-size:14px;font-weight:600;cursor:pointer;
+      border:1.5px solid var(--linea);background:#fbfcfe;color:var(--tinta);
+      border-radius:10px;padding:13px 6px;min-height:48px}
+  .ops button.elegida[data-v="1"]{background:var(--si);border-color:var(--si);color:#fff}
+  .ops button.elegida[data-v="0"]{background:var(--aun);border-color:var(--aun);color:#fff}
+  .ops button.elegida[data-v="X"]{background:var(--nover);border-color:var(--nover);color:#fff}
+  .ops button:focus-visible{outline:3px solid #b9d9c8;outline-offset:2px}
+
+  .notaLink{margin-top:9px;font-size:13px;color:var(--suave);background:none;
+      border:none;padding:0;cursor:pointer;text-decoration:underline;font-family:inherit}
+  .item textarea{width:100%;margin-top:8px;font:inherit;font-size:14px;
+      border:1.5px solid var(--linea);border-radius:9px;padding:9px 11px;
+      resize:vertical;background:var(--papel)}
+
+  .pie{position:fixed;left:0;right:0;bottom:0;background:var(--papel);
+       border-top:1px solid var(--linea);
+       padding:10px 14px calc(10px + env(safe-area-inset-bottom));z-index:6}
+  .pie .caja{padding:0;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .pie button{font:inherit;font-weight:600;border-radius:10px;
+      border:1.5px solid var(--linea);background:var(--papel);color:var(--tinta);
+      padding:12px 14px;cursor:pointer}
+  .pie button.principal{background:var(--si);border-color:var(--si);color:#fff;flex:1;min-width:150px}
+  .pie button:disabled{opacity:.45;cursor:not-allowed}
+  .guardado{font-size:12px;color:var(--suave);text-align:center;width:100%;margin-top:5px}
+
+  .aviso{background:#fdf3ef;border:1px solid #e7c3b6;color:var(--alerta);
+         border-radius:11px;padding:13px 15px;margin:13px 0;font-size:14.5px}
+  .tarjeta{background:var(--papel);border:1px solid var(--linea);border-radius:13px;
+           padding:17px;margin:15px 0}
+  .fin{text-align:center;padding:44px 20px}
+  .fin .tic{font-size:46px}
+  /* En un celular los tres botones en fila quedan angostos y se aprieta el
+     que no era. Apilados se aciertan con el pulgar sin mirar, que es como
+     se marca esto: con una mano y el niño delante. */
+  @media (max-width:560px){
+    .ops{flex-direction:column;gap:6px}
+    .ops button{min-height:46px;text-align:left;padding-left:16px}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="cabecera">
+    <p class="titulo" id="titulo">Cargando…</p>
+    <p class="sub" id="sub"></p>
+    <div class="barra" id="barra"></div>
+    <div class="areas" id="areas"></div>
+  </div>
+</header>
+
+<div class="caja" id="contenido"></div>
+
+<div class="pie" id="pie" hidden>
+  <div class="caja">
+    <button type="button" id="btnResto">El resto, no evaluado</button>
+    <button type="button" id="btnTerminar" class="principal">Terminar y guardar</button>
+    <span class="guardado" id="guardado"></span>
+  </div>
+</div>
+
+<script>
+const token = new URLSearchParams(location.search).get('t') || '';
+let prueba = null;
+let respuestas = {};
+let notas = {};
+let areaActual = null;
+let notaAbierta = {};
+
+function esc(s){
+  return String(s==null?'':s).replace(/[&<>"']/g,
+    c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function itemsDe(area){
+  return prueba.items.filter(i => i.area === area);
+}
+function cuenta(area){
+  const its = itemsDe(area);
+  let si=0, aun=0, nover=0;
+  its.forEach(i=>{
+    const r = respuestas[i.n];
+    if(r==='1') si++; else if(r==='0') aun++; else if(r==='X') nover++;
+  });
+  return {si, aun, nover, total:its.length, marcados:si+aun+nover};
+}
+
+function pintarAviso(texto){
+  document.getElementById('titulo').textContent = 'Pauta de observación';
+  document.getElementById('contenido').innerHTML = `<div class="aviso">${esc(texto)}</div>`;
+  document.getElementById('pie').hidden = true;
+}
+
+/* La barra de arriba muestra las tres cosas a la vez: lo logrado, lo que
+   falta y lo que no se pudo ver. Con una sola barra de avance no se
+   distinguiría un niño que logra todo de uno al que no se le pudo evaluar
+   nada, y son situaciones opuestas. */
+function pintarBarra(){
+  let si=0, aun=0, nover=0;
+  prueba.items.forEach(i=>{
+    const r = respuestas[i.n];
+    if(r==='1') si++; else if(r==='0') aun++; else if(r==='X') nover++;
+  });
+  const t = prueba.items.length || 1;
+  document.getElementById('barra').innerHTML =
+      `<i class="bSi" style="width:${si*100/t}%"></i>`
+    + `<i class="bAun" style="width:${aun*100/t}%"></i>`
+    + `<i class="bNo" style="width:${nover*100/t}%"></i>`;
+  const faltan = t - si - aun - nover;
+  document.getElementById('sub').textContent =
+    faltan > 0 ? `${faltan} de ${t} sin marcar`
+               : `Los ${t} ítems marcados · ${si} logra, ${aun} aún no, ${nover} sin evaluar`;
+  document.getElementById('btnTerminar').disabled = faltan > 0;
+  document.getElementById('btnResto').hidden = faltan === 0;
+}
+
+function pintarAreas(){
+  document.getElementById('areas').innerHTML = prueba.areas.map((a, idx)=>{
+    const c = cuenta(a);
+    return `<button type="button" class="${a===areaActual?'activa':''}"
+              onclick="irArea(${idx})">${esc(a)}
+              <span class="cuenta">${c.marcados}/${c.total}</span></button>`;
+  }).join('');
+}
+
+function irArea(idx){
+  areaActual = prueba.areas[idx] || prueba.areas[0];
+  pintarAreas();
+  pintarItems();
+  window.scrollTo({top:0, behavior:'smooth'});
+}
+
+function pintarItems(){
+  const its = itemsDe(areaActual);
+  document.getElementById('contenido').innerHTML = its.map((i, idx)=>{
+    const r = respuestas[i.n];
+    const clase = r==='1'?'si' : r==='0'?'aun' : r==='X'?'nover' : '';
+    const nota = notas[i.n] || '';
+    const abierta = notaAbierta[i.n] || nota !== '';
+    return `<div class="item ${clase}" id="it${i.n}">
+      <div class="n">${idx+1} DE ${its.length}</div>
+      <div class="txt">${esc(i.texto)}</div>
+      <div class="ops">
+        ${prueba.opciones.map(o=>`<button type="button" data-v="${esc(o.valor)}"
+            class="${r===o.valor?'elegida':''}"
+            onclick="marcar(${i.n}, '${esc(o.valor)}')">${esc(o.texto)}</button>`).join('')}
+      </div>
+      ${abierta
+        ? `<textarea rows="2" placeholder="Cómo lo hizo: con apoyo, a la tercera vez, solo con la mamá…"
+             oninput="anotar(${i.n}, this.value)">${esc(nota)}</textarea>`
+        : `<button type="button" class="notaLink" onclick="abrirNota(${i.n})">+ Anotar cómo lo hizo</button>`}
+    </div>`;
+  }).join('') + siguienteArea();
+}
+
+function siguienteArea(){
+  const i = prueba.areas.indexOf(areaActual);
+  if(i < 0 || i >= prueba.areas.length - 1) return '';
+  const sig = prueba.areas[i+1];
+  return `<div class="tarjeta" style="text-align:center">
+    <button type="button" class="notaLink" style="font-size:15px"
+      onclick="irArea(${i+1})">Seguir con ${esc(sig)} →</button>
+  </div>`;
+}
+
+function marcar(n, valor){
+  // Volver a tocar la misma respuesta la quita: marcar sin querer y no
+  // poder corregirlo es peor que no marcar.
+  respuestas[n] = (respuestas[n] === valor) ? undefined : valor;
+  if(respuestas[n] === undefined) delete respuestas[n];
+  pintarItems(); pintarAreas(); pintarBarra();
+  guardar();
+}
+function abrirNota(n){
+  notaAbierta[n] = true;
+  pintarItems();
+  const t = document.querySelector(`#it${n} textarea`);
+  if(t) t.focus();
+}
+function anotar(n, texto){
+  notas[n] = texto;
+  guardar();
+}
+
+/* Se guarda solo, sin botón: en medio de una sesión con un niño no hay
+   manos libres para acordarse de guardar. */
+let temporizador = null;
+function guardar(){
+  clearTimeout(temporizador);
+  document.getElementById('guardado').textContent = 'Guardando…';
+  temporizador = setTimeout(async ()=>{
+    try{
+      const r = await fetch(`../api/prueba.php?accion=avance&t=${encodeURIComponent(token)}`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({respuestas, notas})
+      });
+      const j = await r.json();
+      document.getElementById('guardado').textContent =
+        (j && j.ok) ? 'Guardado' : 'No se pudo guardar. Revisa la conexión.';
+    }catch(e){
+      document.getElementById('guardado').textContent = 'Sin conexión: se reintenta al marcar de nuevo.';
+    }
+  }, 500);
+}
+
+function restoNoEvaluado(){
+  const faltan = prueba.items.filter(i => !respuestas[i.n]);
+  if(!faltan.length) return;
+  if(!confirm(`Quedan ${faltan.length} ítem(s) sin marcar.\n\n`
+    + `Se van a marcar como «no evaluado», que quiere decir que no se pudo observar hoy `
+    + `— no que el niño no lo logre.\n\n¿Continuar?`)) return;
+  faltan.forEach(i => { respuestas[i.n] = 'X'; });
+  pintarItems(); pintarAreas(); pintarBarra();
+  guardar();
+}
+
+async function terminar(){
+  const btn = document.getElementById('btnTerminar');
+  btn.disabled = true;
+  btn.textContent = 'Guardando…';
+  clearTimeout(temporizador);
+  try{
+    const r = await fetch(`../api/prueba.php?accion=terminar&t=${encodeURIComponent(token)}`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({respuestas, notas,
+        segundos: Math.round((Date.now() - arranque)/1000)})
+    });
+    const j = await r.json();
+    if(!j || !j.ok){
+      btn.disabled = false; btn.textContent = 'Terminar y guardar';
+      alert((j && j.error) || 'No se pudo guardar.');
+      return;
+    }
+    document.getElementById('pie').hidden = true;
+    document.getElementById('areas').innerHTML = '';
+    document.getElementById('contenido').innerHTML = `<div class="fin">
+      <div class="tic">✓</div>
+      <h2>Evaluación guardada</h2>
+      <p>El resultado ya está en la historia de ${esc(datos.paciente)}, con el detalle
+         por área y la lista de lo que queda por trabajar.</p>
+      <p class="sub">Puedes cerrar esta ventana.</p>
+    </div>`;
+    window.scrollTo({top:0});
+  }catch(e){
+    btn.disabled = false; btn.textContent = 'Terminar y guardar';
+    alert('No se pudo conectar. Revisa la conexión y vuelve a intentar.');
+  }
+}
+
+let datos = {};
+const arranque = Date.now();
+
+async function arrancar(){
+  if(!token){ pintarAviso('Falta la clave de esta evaluación. Vuelve a abrirla desde el panel.'); return; }
+  let j;
+  try{
+    const r = await fetch(`../api/prueba.php?accion=abrir&t=${encodeURIComponent(token)}`);
+    j = await r.json();
+  }catch(e){ pintarAviso('No se pudo conectar con el servidor.'); return; }
+  if(!j || !j.ok){ pintarAviso((j && j.error) || 'Esta evaluación ya no está disponible.'); return; }
+
+  datos = j;
+  prueba = j.prueba;
+  respuestas = j.respuestas || {};
+  notas = j.notas || {};
+
+  if(prueba.tipo !== 'cotejo'){
+    pintarAviso('Esta prueba la responde el paciente, no se marca desde aquí. '
+              + 'Ciérrala y usa el enlace del paciente.');
+    return;
+  }
+  if(!prueba.areas || !prueba.areas.length){
+    prueba.areas = [...new Set(prueba.items.map(i => i.area || 'General'))];
+  }
+  prueba.items.forEach(i => { if(!i.area) i.area = 'General'; });
+
+  document.getElementById('titulo').textContent =
+    `${prueba.nombre} — ${j.paciente}`;
+  areaActual = prueba.areas[0];
+  document.getElementById('pie').hidden = false;
+  pintarAreas(); pintarItems(); pintarBarra();
+}
+
+document.getElementById('btnResto').onclick = restoNoEvaluado;
+document.getElementById('btnTerminar').onclick = terminar;
+arrancar();
+</script>
+</body>
+</html>

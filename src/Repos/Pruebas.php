@@ -28,9 +28,10 @@ final class Pruebas extends Repositorio
     {
         $filas = Database::todos(
             'SELECT codigo, nombre, siglas, autor, descripcion, edad_minima, edad_maxima,
-                    minutos_aprox, n_items, activa
+                    minutos_aprox, n_items, activa, aplicador, familia,
+                    edad_meses_min, edad_meses_max, orden
                FROM pruebas
-              ORDER BY nombre'
+              ORDER BY familia IS NULL DESC, familia, orden, nombre'
         );
         return array_map(static fn(array $f): array => [
             'codigo'      => $f['codigo'],
@@ -43,6 +44,13 @@ final class Pruebas extends Repositorio
             'minutos'     => $f['minutos_aprox'] === null ? null : (int) $f['minutos_aprox'],
             'nItems'      => (int) $f['n_items'],
             'activa'      => (int) $f['activa'] === 1,
+            // Quién la marca. El panel lo necesita para saber si genera un
+            // enlace para el paciente o abre la pantalla de observación.
+            'aplicador'   => (string) ($f['aplicador'] ?? 'paciente'),
+            'familia'     => $f['familia'],
+            'mesesMin'    => $f['edad_meses_min'] === null ? null : (int) $f['edad_meses_min'],
+            'mesesMax'    => $f['edad_meses_max'] === null ? null : (int) $f['edad_meses_max'],
+            'orden'       => (int) ($f['orden'] ?? 0),
         ], $filas);
     }
 
@@ -90,13 +98,17 @@ final class Pruebas extends Repositorio
     {
         Database::query(
             'INSERT INTO pruebas (codigo, nombre, siglas, autor, descripcion,
-                                  edad_minima, edad_maxima, minutos_aprox, n_items, definicion)
-             VALUES (?,?,?,?,?,?,?,?,?,?)
+                                  edad_minima, edad_maxima, minutos_aprox, n_items, definicion,
+                                  aplicador, familia, edad_meses_min, edad_meses_max, orden)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
              ON DUPLICATE KEY UPDATE
                 nombre = VALUES(nombre), siglas = VALUES(siglas), autor = VALUES(autor),
                 descripcion = VALUES(descripcion), edad_minima = VALUES(edad_minima),
                 edad_maxima = VALUES(edad_maxima), minutos_aprox = VALUES(minutos_aprox),
-                n_items = VALUES(n_items), definicion = VALUES(definicion)',
+                n_items = VALUES(n_items), definicion = VALUES(definicion),
+                aplicador = VALUES(aplicador), familia = VALUES(familia),
+                edad_meses_min = VALUES(edad_meses_min), edad_meses_max = VALUES(edad_meses_max),
+                orden = VALUES(orden)',
             [
                 $def['codigo'],
                 $def['nombre'],
@@ -108,6 +120,12 @@ final class Pruebas extends Repositorio
                 $ficha['minutos'] ?? null,
                 (int) $def['nItems'],
                 json_encode($def, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                in_array($def['aplicador'] ?? '', ['paciente', 'profesional'], true)
+                    ? $def['aplicador'] : 'paciente',
+                $def['familia'] ?? null,
+                $def['edadMesesMin'] ?? null,
+                $def['edadMesesMax'] ?? null,
+                (int) ($def['orden'] ?? 0),
             ]
         );
         Auth::auditar('CARGAR_PRUEBA', null, ['codigo' => $def['codigo']], 'pruebas');

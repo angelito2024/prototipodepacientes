@@ -197,6 +197,69 @@ try {
             }
             Http::ok($r + ['ipLocal' => ipDeLaRed()]);
 
+        case 'entregar_material':
+            // Le deja material a un paciente y devuelve el enlace para
+            // mandárselo. La clave se muestra una sola vez.
+            if (Http::metodo() !== 'POST') {
+                Http::error('Método no permitido.', 405);
+            }
+            Auth::exigir();
+            if (!Auth::puede('historia.editar')) {
+                Auth::auditar('PERMISO_DENEGADO', Auth::usuarioId(),
+                    ['accion' => 'entregar_material'], 'material_entrega');
+                Http::error('Tu usuario no puede entregar material a los pacientes.', 403);
+            }
+            $c = Http::cuerpo();
+            try {
+                $r = \Centro\Repos\MaterialEntregas::entregar(
+                    (string) ($c['paciente'] ?? ''),
+                    (array) ($c['materiales'] ?? []),
+                    isset($c['profesional']) ? (string) $c['profesional'] : null,
+                    isset($c['dias']) ? (int) $c['dias'] : null,
+                    (string) ($c['titulo'] ?? ''),
+                    (string) ($c['mensaje'] ?? ''),
+                    (string) ($c['via'] ?? 'enlace')
+                );
+            } catch (RuntimeException $e) {
+                Http::error($e->getMessage(), 400);
+            }
+            Http::ok($r + ['ipLocal' => ipDeLaRed()]);
+
+        case 'enlace_material':
+            // Vuelve a generar el enlace de una entrega que sigue vigente.
+            if (Http::metodo() !== 'POST') {
+                Http::error('Método no permitido.', 405);
+            }
+            Auth::exigir();
+            $c = Http::cuerpo();
+            try {
+                $r = \Centro\Repos\MaterialEntregas::regenerarToken(
+                    (string) ($c['id'] ?? ''),
+                    isset($c['dias']) ? (int) $c['dias'] : null
+                );
+            } catch (RuntimeException $e) {
+                Http::error($e->getMessage(), 400);
+            }
+            Http::ok($r + ['ipLocal' => ipDeLaRed()]);
+
+        case 'eliminar_material':
+            // Sacar un material de la biblioteca y borrarlo del disco.
+            if (Http::metodo() !== 'POST') {
+                Http::error('Método no permitido.', 405);
+            }
+            Auth::exigir();
+            if (!Auth::puede('config.editar')) {
+                Auth::auditar('PERMISO_DENEGADO', Auth::usuarioId(),
+                    ['accion' => 'eliminar_material'], 'materiales');
+                Http::error('Solo quien administra el centro puede borrar material.', 403);
+            }
+            try {
+                \Centro\Repos\Materiales::eliminar((string) (Http::cuerpo()['id'] ?? ''));
+            } catch (RuntimeException $e) {
+                Http::error($e->getMessage(), 400);
+            }
+            Http::ok(['eliminado' => true]);
+
         case 'coleccion':
             manejarColeccion();
 

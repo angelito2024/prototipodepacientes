@@ -48,8 +48,9 @@ final class PruebaAplicaciones extends Repositorio
     {
         $filas = Database::todos(
             "SELECT a.uid, a.estado, a.asignada_en, a.abierta_en, a.terminada_en, a.expira_en,
-                    a.n_respondidos, a.resultado, a.observaciones, a.segundos_total,
+                    a.n_respondidos, a.resultado, a.observaciones, a.segundos_total, a.notas,
                     p.codigo AS prueba, p.siglas, p.nombre AS prueba_nombre, p.n_items,
+                    p.aplicador, p.familia, p.edad_meses_min, p.edad_meses_max,
                     pac.uid AS pacienteId, pac.nombre_completo AS pacienteNombre,
                     pro.uid AS profesionalId
                FROM prueba_aplicacion a
@@ -77,6 +78,11 @@ final class PruebaAplicaciones extends Repositorio
                 'minutos'       => $f['segundos_total'] === null ? null : (int) round(((int) $f['segundos_total']) / 60),
                 'resultado'     => $f['resultado'] === null ? null : json_decode((string) $f['resultado'], true),
                 'observaciones' => $f['observaciones'],
+                'notas'         => $f['notas'] === null ? [] : json_decode((string) $f['notas'], true),
+                'aplicador'     => (string) ($f['aplicador'] ?? 'paciente'),
+                'familia'       => $f['familia'],
+                'mesesMin'      => $f['edad_meses_min'] === null ? null : (int) $f['edad_meses_min'],
+                'mesesMax'      => $f['edad_meses_max'] === null ? null : (int) $f['edad_meses_max'],
             ];
         }, $filas);
     }
@@ -248,9 +254,10 @@ final class PruebaAplicaciones extends Repositorio
     }
 
     /** Guarda el avance. No corrige ni cierra nada. */
-    public static function guardarAvance(int $aplicacionId, array $respuestas): int
+    public static function guardarAvance(int $aplicacionId, array $respuestas, ?array $notas = null): int
     {
-        $limpias = self::limpiar($respuestas, self::definicionDe($aplicacionId));
+        $def     = self::definicionDe($aplicacionId);
+        $limpias = self::limpiar($respuestas, $def);
         Database::query(
             "UPDATE prueba_aplicacion
                 SET respuestas = ?, n_respondidos = ?,
@@ -259,7 +266,46 @@ final class PruebaAplicaciones extends Repositorio
               WHERE id = ? AND estado IN ('pendiente','en_curso')",
             [json_encode($limpias, JSON_UNESCAPED_UNICODE), count($limpias), $aplicacionId]
         );
+        if ($notas !== null) {
+            self::guardarNotas($aplicacionId, $notas, $def);
+        }
         return count($limpias);
+    }
+
+    /**
+     * Lo que el profesional anota ítem por ítem mientras observa.
+     *
+     * En la hoja de papel había un solo renglón de OBSERVACIONES al final,
+     * y ahí no entra «lo logró, pero solo con apoyo y a la tercera vez»,
+     * que es justo lo que sirve en la sesión siguiente.
+     */
+    public static function guardarNotas(int $aplicacionId, array $notas, ?array $definicion = null): void
+    {
+        $nItems = (int) (($definicion ?? self::definicionDe($aplicacionId))['nItems'] ?? 0);
+        $out = [];
+        foreach ($notas as $item => $texto) {
+            $n = (int) $item;
+            if ($n < 1 || ($nItems > 0 && $n > $nItems) || !is_scalar($texto)) {
+                continue;
+            }
+            $t = trim((string) $texto);
+            if ($t !== '') {
+                $out[$n] = mb_substr($t, 0, 500);
+            }
+        }
+        ksort($out);
+        Database::query(
+            'UPDATE prueba_aplicacion SET notas = ? WHERE id = ?',
+            [$out === [] ? null : json_encode($out, JSON_UNESCAPED_UNICODE), $aplicacionId]
+        );
+    }
+
+    /** @return array<int,string> */
+    public static function notasDe(string $uid): array
+    {
+        $json = Database::valor('SELECT notas FROM prueba_aplicacion WHERE uid = ?', [$uid]);
+        $n = $json === null ? [] : json_decode((string) $json, true);
+        return is_array($n) ? $n : [];
     }
 
     /**
@@ -269,8 +315,9 @@ final class PruebaAplicaciones extends Repositorio
      * respuesta, no se cierra. Un MCMI-IV con 23 ítems en blanco igual
      * arroja perfil, y ese perfil no se puede usar.
      */
-    public static function terminar(int $aplicacionId, array $respuestas, ?int $segundos = null): array
-    {
+    public static function terminar(
+        int $aplicacionId, array $respuestas, ?int $segundos = null, ?array $notas = null
+    ): array {
         $a = Database::uno(
             'SELECT a.*, p.codigo AS prueba_codigo FROM prueba_aplicacion a
                JOIN pruebas p ON p.id = a.prueba_id WHERE a.id = ?',
@@ -292,12 +339,22 @@ final class PruebaAplicaciones extends Repositorio
             }
         }
         if ($faltan !== []) {
+            // En una pauta de observación «no evaluado» también es una
+            // respuesta, así que el mensaje tiene que decir otra cosa: no
+            // falta contestar, falta decidir qué se pudo ver y qué no.
             throw new RuntimeException(
-                'Faltan ' . count($faltan) . ' respuesta(s). Una prueba incompleta no se puede '
-                . 'corregir: los puntajes saldrían más bajos de lo real.',
+                ($def['tipo'] ?? '') === 'cotejo'
+                    ? 'Quedan ' . count($faltan) . ' ítem(s) sin marcar. Si no se pudieron '
+                      . 'observar, márcalos como «no evaluado»: dejarlos en blanco y dejarlos '
+                      . 'en «aún no» no significan lo mismo.'
+                    : 'Faltan ' . count($faltan) . ' respuesta(s). Una prueba incompleta no se puede '
+                      . 'corregir: los puntajes saldrían más bajos de lo real.',
             );
         }
 
+        if ($notas !== null) {
+            self::guardarNotas($aplicacionId, $notas, $def);
+        }
         $resultado = Corrector::corregir($def, $limpias);
         Database::query(
             "UPDATE prueba_aplicacion

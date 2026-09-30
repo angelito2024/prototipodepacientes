@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<meta http-equiv="Cache-Control" content="no-store">
+<title>Material de trabajo</title>
+<style>
+  :root{
+    --tinta:#1f2430; --suave:#5b6577; --linea:#e2e6ee; --fondo:#f4f6fa;
+    --papel:#fff; --acento:#2f6f4f; --acento2:#e8f2ec; --alerta:#a3381f;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--fondo);color:var(--tinta);
+       font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+       -webkit-text-size-adjust:100%}
+  .caja{max-width:720px;margin:0 auto;padding:0 16px 60px}
+
+  header{background:var(--papel);border-bottom:1px solid var(--linea)}
+  .cabecera{max-width:720px;margin:0 auto;padding:16px}
+  .titulo{font-size:19px;font-weight:700;margin:0}
+  .sub{font-size:13px;color:var(--suave);margin:4px 0 0}
+
+  .tarjeta{background:var(--papel);border:1px solid var(--linea);border-radius:12px;
+           padding:16px 18px;margin:16px 0}
+  .tarjeta h2{font-size:16px;margin:0 0 8px}
+  .tarjeta p{margin:8px 0;font-size:14.5px;color:#39404f}
+  .nota{background:var(--acento2);border:1px solid #c9e0d4;border-radius:12px;
+        padding:14px 16px;margin:16px 0}
+  .nota p{margin:0;font-size:15px;white-space:pre-wrap}
+  .nota .de{font-size:12.5px;color:var(--suave);margin-top:8px}
+
+  .grupo{margin:22px 0 8px;font-size:12.5px;letter-spacing:.06em;
+         text-transform:uppercase;color:var(--suave);font-weight:700}
+
+  .item{background:var(--papel);border:1px solid var(--linea);border-radius:12px;
+        padding:14px 16px;margin:10px 0;display:flex;gap:14px;align-items:center}
+  .item .ico{width:42px;height:42px;flex:0 0 42px;border-radius:10px;
+             background:var(--acento2);color:var(--acento);display:flex;
+             align-items:center;justify-content:center;font-size:11px;
+             font-weight:700;letter-spacing:.03em}
+  .item .cuerpo{flex:1;min-width:0}
+  .item .nom{font-weight:600;font-size:15.5px;overflow-wrap:anywhere}
+  .item .det{font-size:13px;color:var(--suave);margin-top:2px}
+  .item a.btn{flex:0 0 auto;text-decoration:none}
+
+  a.btn,button{font:inherit;font-weight:600;border-radius:9px;
+       border:1.5px solid var(--acento);background:var(--acento);color:#fff;
+       padding:10px 16px;cursor:pointer;display:inline-block}
+  a.btn.claro{background:var(--papel);color:var(--tinta);border-color:var(--linea)}
+
+  .aviso{background:#fdf3ef;border:1px solid #e7c3b6;color:var(--alerta);
+         border-radius:10px;padding:14px 16px;margin:16px 0;font-size:15px}
+  .pie{text-align:center;font-size:12.5px;color:var(--suave);margin-top:28px;
+       padding:0 8px}
+  @media (max-width:430px){
+    .item{flex-wrap:wrap}
+    .item a.btn{width:100%;text-align:center}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="cabecera">
+    <p class="titulo" id="titulo">Cargando…</p>
+    <p class="sub" id="sub"></p>
+  </div>
+</header>
+
+<div class="caja" id="contenido"></div>
+
+<script>
+const token = new URLSearchParams(location.search).get('t') || '';
+
+const ICONO = {
+  pdf:'PDF', video:'VIDEO', imagen:'IMAGEN', presentacion:'PPT',
+  hoja:'HOJA', audio:'AUDIO', enlace:'WEB', otro:'ARCH'
+};
+
+function esc(s){
+  return String(s==null?'':s).replace(/[&<>"']/g,
+    c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function peso(bytes){
+  if(!bytes) return '';
+  const mb = bytes/1048576;
+  return mb >= 1 ? mb.toFixed(1).replace('.',',')+' MB'
+                 : Math.max(1, Math.round(bytes/1024))+' KB';
+}
+function fechaLarga(iso){
+  if(!iso) return '';
+  const d = new Date(String(iso).replace(' ','T'));
+  if(isNaN(d)) return '';
+  const meses = ['enero','febrero','marzo','abril','mayo','junio','julio',
+                 'agosto','setiembre','octubre','noviembre','diciembre'];
+  return d.getDate()+' de '+meses[d.getMonth()]+' de '+d.getFullYear();
+}
+
+function pintarAviso(texto){
+  document.getElementById('titulo').textContent = 'Material de trabajo';
+  document.getElementById('sub').textContent = '';
+  document.getElementById('contenido').innerHTML =
+    `<div class="aviso">${esc(texto)}</div>`;
+}
+
+async function arrancar(){
+  if(!token){ pintarAviso('Este enlace está incompleto. Pídele al centro que te lo envíe de nuevo.'); return; }
+  let j;
+  try{
+    const r = await fetch(`../api/material.php?accion=abrir&t=${encodeURIComponent(token)}`);
+    j = await r.json();
+  }catch(e){
+    pintarAviso('No se pudo conectar. Revisa tu internet y vuelve a intentar.');
+    return;
+  }
+  if(!j || !j.ok){ pintarAviso((j && j.error) || 'Este enlace no es válido.'); return; }
+
+  document.getElementById('titulo').textContent = j.titulo || 'Material de trabajo';
+  document.getElementById('sub').textContent = j.paciente ? ('Para ' + j.paciente) : '';
+
+  const mats = j.materiales || [];
+  let html = '';
+
+  if(j.mensaje){
+    html += `<div class="nota"><p>${esc(j.mensaje)}</p>` +
+            (j.profesional? `<p class="de">${esc(j.profesional)}</p>`:'') + `</div>`;
+  }
+
+  if(mats.length === 0){
+    html += `<div class="aviso">Todavía no hay material en este enlace.</div>`;
+  }else{
+    html += `<p class="grupo">${mats.length===1?'1 archivo':mats.length+' archivos'}</p>`;
+    html += mats.map(m=>{
+      const url = `../api/material.php?accion=bajar&t=${encodeURIComponent(token)}&m=${encodeURIComponent(m.id)}`;
+      const det = [m.detalle, peso(m.peso)].filter(Boolean).join(' · ');
+      return `<div class="item">
+        <span class="ico">${ICONO[m.formato]||'ARCH'}</span>
+        <span class="cuerpo">
+          <span class="nom">${esc(m.titulo)}</span>
+          ${det? `<span class="det">${esc(det)}</span>`:''}
+        </span>
+        <a class="btn" href="${url}" target="_blank" rel="noopener">Abrir</a>
+      </div>`;
+    }).join('');
+  }
+
+  if(j.expira){
+    html += `<p class="pie">Este enlace está disponible hasta el ${esc(fechaLarga(j.expira))}.
+             Si lo necesitas después, pídeselo al centro.</p>`;
+  }
+  html += `<p class="pie">Este material es parte del trabajo de ${esc(j.paciente||'tu familiar')}.
+           Te lo dejamos para que lo uses en casa; no es para compartir ni publicar.</p>`;
+
+  document.getElementById('contenido').innerHTML = html;
+}
+
+arrancar();
+</script>
+</body>
+</html>

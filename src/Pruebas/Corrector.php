@@ -45,6 +45,11 @@ final class Corrector
         if (($definicion['tipo'] ?? '') === 'suma') {
             return self::corregirSuma($definicion, $respuestas, $contestados, $sinResponder);
         }
+        // Las pautas de observación no tienen puntaje ni baremo: se mira,
+        // por área, qué logra el niño y qué todavía no.
+        if (($definicion['tipo'] ?? '') === 'cotejo') {
+            return self::corregirCotejo($definicion, $respuestas, $contestados, $sinResponder);
+        }
 
         $escalas = [];
         foreach ($definicion['escalas'] as $e) {
@@ -147,6 +152,143 @@ final class Corrector
             'alertas'       => $alertas,
             'revisarAntes'  => ($definicion['revisarAntes'] ?? false) === true,
         ];
+    }
+
+    /**
+     * Pautas de observación: las que marca el profesional mirando al niño.
+     *
+     * No dan puntaje ni percentil, y está bien que no lo den: son listas de
+     * cotejo, no tests normados. Lo que dan es otra cosa, y es la que sirve
+     * en la sesión siguiente:
+     *
+     *   · por área, cuánto de lo esperado para su edad ya logra;
+     *   · la lista de lo que todavía no, que es el plan de trabajo;
+     *   · lo que no se pudo evaluar, dicho como tal.
+     *
+     * Ese último punto es el que la hoja de papel no permitía. Con solo SÍ
+     * y NO, un niño que ese día no quiso colaborar quedaba registrado como
+     * que "no lo hace", y eso es falso: no se sabe. Acá el porcentaje se
+     * calcula solo sobre lo que de verdad se observó.
+     */
+    private static function corregirCotejo(
+        array $definicion, array $respuestas, int $contestados, array $sinResponder
+    ): array {
+        $orden = [];
+        $areas = [];
+        foreach ($definicion['items'] as $it) {
+            $area = (string) ($it['area'] ?? 'General');
+            if (!isset($areas[$area])) {
+                $orden[] = $area;
+                $areas[$area] = ['total' => 0, 'logra' => 0, 'aunNo' => 0, 'noEval' => 0,
+                                 'pendientes' => [], 'logrados' => [], 'sinVer' => []];
+            }
+            $areas[$area]['total']++;
+            $r = $respuestas[$it['n']] ?? null;
+            $fila = ['n' => $it['n'], 'texto' => $it['texto']];
+            if ($r === '1') {
+                $areas[$area]['logra']++;
+                $areas[$area]['logrados'][] = $fila;
+            } elseif ($r === '0') {
+                $areas[$area]['aunNo']++;
+                $areas[$area]['pendientes'][] = $fila;
+            } else {
+                $areas[$area]['noEval']++;
+                $areas[$area]['sinVer'][] = $fila;
+            }
+        }
+
+        $cortes = $definicion['cortes']['area'] ?? self::CORTES_COTEJO;
+
+        $escalas = [];
+        $detalle = [];
+        $totalLogra = 0;
+        $totalVisto = 0;
+        foreach ($orden as $area) {
+            $a = $areas[$area];
+            $visto = $a['logra'] + $a['aunNo'];
+            $pct = $visto === 0 ? null : (int) round($a['logra'] * 100 / $visto);
+            $totalLogra += $a['logra'];
+            $totalVisto += $visto;
+
+            $escalas[] = [
+                'codigo'         => self::codigoDeArea($area),
+                'nombre'         => $area,
+                'grupo'          => 'area',
+                'pd'             => $a['logra'],
+                'tb'             => $pct,
+                'percentil'      => null,
+                'maximo'         => $a['total'],
+                'interpretacion' => $pct === null
+                    ? 'No se pudo observar ningún ítem de esta área.'
+                    : self::rotulo($cortes, (float) $pct),
+            ];
+            $detalle[] = ['area' => $area, 'porcentaje' => $pct] + $a;
+        }
+
+        $pctTotal = $totalVisto === 0 ? null : (int) round($totalLogra * 100 / $totalVisto);
+        $escalas[] = [
+            'codigo'         => 'total',
+            'nombre'         => 'Total observado',
+            'grupo'          => 'total',
+            'pd'             => $totalLogra,
+            'tb'             => $pctTotal,
+            'percentil'      => null,
+            'maximo'         => (int) $definicion['nItems'],
+            'interpretacion' => $pctTotal === null ? null : self::rotulo($cortes, (float) $pctTotal),
+        ];
+
+        // Lo que sigue: lo que quedó en «aún no», que es exactamente lo que
+        // hay que trabajar. El profesional ya no tiene que releer la hoja
+        // entera para armar el plan.
+        $porTrabajar = [];
+        foreach ($detalle as $d) {
+            foreach ($d['pendientes'] as $p) {
+                $porTrabajar[] = ['area' => $d['area'], 'n' => $p['n'], 'texto' => $p['texto']];
+            }
+        }
+
+        $noEvaluados = 0;
+        foreach ($detalle as $d) {
+            $noEvaluados += $d['noEval'];
+        }
+
+        return [
+            'corregidoEn'   => date('c'),
+            'tipo'          => 'cotejo',
+            'nItems'        => (int) $definicion['nItems'],
+            'contestados'   => $contestados,
+            'sinResponder'  => $sinResponder,
+            'completo'      => $sinResponder === [],
+            'validez'       => [],
+            'escalas'       => $escalas,
+            'areas'         => $detalle,
+            'porTrabajar'   => $porTrabajar,
+            'noEvaluados'   => $noEvaluados,
+            'observados'    => $totalVisto,
+            'porcentaje'    => $pctTotal,
+        ];
+    }
+
+    /**
+     * Cómo se lee el porcentaje de logro de un área.
+     *
+     * Deliberadamente en palabras del trabajo y no en etiquetas
+     * diagnósticas: una lista de cotejo dice qué hace el niño hoy, no lo
+     * que el niño es.
+     */
+    private const CORTES_COTEJO = [
+        ['hasta' => 39,  'texto' => 'Requiere apoyo en casi toda el área'],
+        ['hasta' => 64,  'texto' => 'En proceso: la mitad del área por trabajar'],
+        ['hasta' => 84,  'texto' => 'Avanzado, con algunos logros pendientes'],
+        ['hasta' => 100, 'texto' => 'Logrado para su edad'],
+    ];
+
+    /** Un código corto y estable para el área, para las tablas del panel. */
+    private static function codigoDeArea(string $area): string
+    {
+        $sin = iconv('UTF-8', 'ASCII//TRANSLIT', $area);
+        $sin = preg_replace('/[^A-Za-z]/', '', (string) $sin) ?: 'AREA';
+        return strtoupper(substr($sin, 0, 6));
     }
 
     /**

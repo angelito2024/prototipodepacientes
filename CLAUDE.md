@@ -23,7 +23,7 @@ Ver [README.md](README.md) y [db/README.md](db/README.md).
   sobre localStorage con prefijo `centroPsicologico_` al abrir el archivo
   con doble clic. Los tres siguen funcionando.
 - **Vistas:** template literals; `renderPanel()` hace un switch sobre `currentTab`.
-- **Módulos:** resumen, alertas, pacientes, citas, profesionales, practicantes, asistencia, tarifas, pagos, informes, talleres, reportes, personal (cuentas personales con clave), finanzas, gráficos, calendario, ideas, historia clínica.
+- **Módulos:** resumen, alertas, pacientes, citas, pruebas psicológicas, materiales, profesionales, practicantes, asistencia, tarifas, pagos, informes, talleres, reportes, personal (cuentas personales con clave), finanzas, gráficos, calendario, ideas, historia clínica.
 
 Al tocar el panel hay que mantener los tres modos: una función nueva que
 guarde algo necesita su rama `'api'`, y una colección nueva necesita además
@@ -41,6 +41,10 @@ Estas no se deducen del código; las definió Luis:
 - **Agenda.** Validar que no se crucen consultorio, profesional ni paciente en la misma fecha y hora.
 - **Gastos.** Fijos y variables van separados, y los variables se suman solo del mes que corresponde: una compra de marzo no debe seguir bajando el margen de setiembre.
 - **Cuentas personales.** Un gasto se puede pagar por partes: lo que importa ver es **cuánto falta**, no si está pagado o no. El **fijo** se renueva cada mes en su día de vencimiento; el **suelto** es un pago único con su propia fecha, y al pagarlo se terminó. Un suelto que quedó debiendo no puede desaparecer al cambiar de mes, pero tampoco vuelve a pesar en el gasto del mes nuevo.
+- **Reprogramaciones.** Mover una cita **no pisa la fecha anterior**: cada cambio queda como antecedente, con la fecha y hora de la que venía, a la que fue, y **quién pidió el cambio** (el paciente, el centro o el profesional). Esa última parte es la que da sentido a todo: el paciente que corrió su hora cuatro veces y la cita que el centro tuvo que mover no merecen la misma conversación. El mensaje que se le manda al paciente lista **solo las que pidió él** — recordarle las que movió el centro sería echárselas en cara.
+- **Paquetes compartidos y sesiones conjuntas.** Una pareja o una familia puede comprar **un** paquete y consumirlo entre varios: cada sesión que toma cualquiera descuenta de la misma bolsa, aunque se atiendan en días y horas distintas. El paquete tiene un **titular**: las sesiones se suman entre todos, pero **la deuda es suya y una sola vez** (si cada uno mostrara el total, el mismo saldo saldría dos veces en las alertas de cobro). Un pago de cualquiera abona al mismo paquete. Aparte están las **sesiones conjuntas**, donde vienen varios a la misma sesión. Ahí el descuento sigue **de dónde sale el dinero, no cuántas personas hubo en la sala**: si comparten paquete —una sola bolsa— la sesión descuenta **una**; si cada uno tiene su propio paquete o se atiende por sesión, a **cada uno se le descuenta la suya**, porque si no el que acompaña recibiría la atención gratis y su paquete nunca bajaría. En los dos casos la sesión se registra en la historia clínica de **cada uno** de los que estuvo.
+- **Pautas de observación.** Hay pruebas que responde el paciente y pautas que marca el profesional mirando al niño (la evaluación pedagógica por edades). En una pauta hay **tres** respuestas, no dos: *sí lo hace*, *aún no* y ***no evaluado***. La tercera no es un adorno: un niño que ese día no colaboró no "falla" el ítem, y el porcentaje de logro se calcula **solo sobre lo que se observó**. El sistema elige la hoja por la fecha de nacimiento, y si se usa otra lo dice por escrito — bajar de hoja es una decisión clínica normal, pero tiene que quedar anotada.
+- **Materiales de trabajo.** Cada material lleva escrito qué se puede hacer con él: *del centro* y *de uso libre* se le pueden entregar a la familia; *solo en sesión* y *reservado* se usan en consulta y no salen de ahí. Los protocolos de pruebas (C.A.R.S y cualquier otro) van siempre como **reservado**: repartirlos infringe los derechos del autor y además arruina la prueba para quien la tenga que responder después. El sistema comprueba esto **en el servidor**, no solo escondiendo el botón. Material ajeno no se vende: lo que el centro cobra es su trabajo.
 
 ## Fechas
 
@@ -74,7 +78,7 @@ inyectando un script de sondeo antes de `</body>` y se vuelca el DOM.
   --dump-dom --virtual-time-budget=8000 --user-data-dir="$S/perfil" "file:///$S/test.html"
 ```
 
-Una sonda útil recorre las 17 pestañas (`currentTab = t; renderPanel()`): si
+Una sonda útil recorre las 18 pestañas (`currentTab = t; renderPanel()`): si
 una vista rompe, se ve ahí.
 
 **El esquema y la capa PHP** se comprueban contra una base desechable, nunca

@@ -12,6 +12,8 @@ use Centro\Repos\Documento;
 use Centro\Repos\Eventos;
 use Centro\Repos\Gastos;
 use Centro\Repos\Historia;
+use Centro\Repos\MaterialEntregas;
+use Centro\Repos\Materiales;
 use Centro\Repos\Pacientes;
 use Centro\Repos\Pagos;
 use Centro\Repos\PersonalConfig;
@@ -51,6 +53,8 @@ final class Colecciones
         // Pruebas psicológicas: el catálogo y cada aplicación a un paciente.
         // Van al final porque una aplicación necesita paciente y profesional.
         'pruebas', 'pruebaAplicaciones',
+        // La biblioteca de materiales y lo que se le dejó a cada familia.
+        'materiales', 'materialEntregas',
     ];
 
     /**
@@ -87,6 +91,11 @@ final class Colecciones
         // historia, no con la agenda.
         'pruebas'            => ['historia.ver',    'config.editar'],
         'pruebaAplicaciones' => ['historia.ver',    'historia.editar'],
+        // La biblioteca: verla es parte de atender; cambiar el catálogo,
+        // no. Quien edita qué se puede repartir y qué no es quien
+        // administra el centro.
+        'materiales'         => ['historia.ver',    'config.editar'],
+        'materialEntregas'   => ['historia.ver',    'historia.editar'],
     ];
 
     /**
@@ -164,6 +173,8 @@ final class Colecciones
             'usuarios'       => new Usuarios(),
             'pruebas'        => new Pruebas(),
             'pruebaAplicaciones' => new PruebaAplicaciones(),
+            'materiales'     => new Materiales(),
+            'materialEntregas' => new MaterialEntregas(),
             default          => null,
         };
     }
