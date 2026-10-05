@@ -92,6 +92,7 @@ final class Pacientes extends Repositorio
                 'pricePerSession'    => $act['pricePerSession'] ?? 0,
                 'packagePrice'       => $act['packagePrice'] ?? 0,
                 'packageStartDate'   => $act['packageStartDate'] ?? '',
+                'packageConcepto'    => $act['concepto'] ?? '',
                 'paquetesHistorial'  => $pk['historial'],
                 // Para saber de quién no se sabe nada hace tiempo.
                 'fichaActualizada'   => (string) ($f['actualizado_en'] ?? ''),
@@ -195,7 +196,7 @@ final class Pacientes extends Repositorio
         $filas = Database::todos(
             'SELECT p.paciente_id, p.uid, p.tipo_facturacion, p.sesiones_totales, p.sesiones_usadas,
                     p.sesiones_facturadas, p.precio_sesion, p.precio_total,
-                    p.fecha_inicio, p.fecha_cierre, p.estado,
+                    p.fecha_inicio, p.fecha_cierre, p.estado, p.concepto,
                     p.titular_id, tit.uid AS titular_uid
                FROM paciente_paquetes p
           LEFT JOIN personas tit ON tit.id = p.titular_id
@@ -221,6 +222,7 @@ final class Pacientes extends Repositorio
                     // no son seis veces 48.33.
                     'packagePrice'     => $f['precio_total'] === null ? 0 : (float) $f['precio_total'],
                     'packageStartDate' => (string) $f['fecha_inicio'],
+                    'concepto'         => (string) ($f['concepto'] ?? ''),
                 ];
             } else {
                 $out[$pid]['historial'][] = [
@@ -228,6 +230,12 @@ final class Pacientes extends Repositorio
                     'packageTotal'    => (int) ($f['sesiones_totales'] ?? 0),
                     'sessionsUsed'    => (int) $f['sesiones_usadas'],
                     'pricePerSession' => (float) $f['precio_sesion'],
+                    // El precio pactado y de qué era el paquete. Sin esto el
+                    // historial es una lista de números sin sentido: cinco
+                    // sesiones, diez sesiones, ¿de qué?
+                    'packagePrice'    => $f['precio_total'] === null ? 0 : (float) $f['precio_total'],
+                    'concepto'        => (string) ($f['concepto'] ?? ''),
+                    'iniciadoEl'      => (string) ($f['fecha_inicio'] ?? ''),
                     'cerradoEl'       => (string) ($f['fecha_cierre'] ?? ''),
                 ];
             }
@@ -434,12 +442,15 @@ final class Pacientes extends Repositorio
             Database::query(
                 'INSERT INTO paciente_paquetes
                     (uid, paciente_id, tipo_facturacion, sesiones_totales, sesiones_usadas,
-                     precio_sesion, fecha_inicio, fecha_cierre, estado)
-                 VALUES (?,?,?,?,?,?,?,?,\'Cerrado\')
+                     precio_sesion, precio_total, concepto, fecha_inicio, fecha_cierre, estado)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,\'Cerrado\')
                  ON DUPLICATE KEY UPDATE
                     sesiones_totales = VALUES(sesiones_totales),
                     sesiones_usadas  = VALUES(sesiones_usadas),
                     precio_sesion    = VALUES(precio_sesion),
+                    precio_total     = VALUES(precio_total),
+                    concepto         = VALUES(concepto),
+                    fecha_inicio     = VALUES(fecha_inicio),
                     fecha_cierre     = VALUES(fecha_cierre),
                     estado           = \'Cerrado\'',
                 [
@@ -449,7 +460,13 @@ final class Pacientes extends Repositorio
                     $total > 0 ? $total : null,
                     self::ent($h['sessionsUsed'] ?? 0),
                     self::num($h['pricePerSession'] ?? 0),
-                    self::fecha($h['cerradoEl'] ?? null) ?? date('Y-m-d'),
+                    self::num($h['packagePrice'] ?? 0) > 0 ? self::num($h['packagePrice']) : null,
+                    self::nz($h['concepto'] ?? null),
+                    // Un paquete cerrado que empieza y termina el mismo día
+                    // no es un paquete: es lo que pasaba cuando la fecha de
+                    // inicio no se guardaba. Si viene, se respeta.
+                    self::fecha($h['iniciadoEl'] ?? null)
+                        ?? self::fecha($h['cerradoEl'] ?? null) ?? date('Y-m-d'),
                     self::fecha($h['cerradoEl'] ?? null) ?? date('Y-m-d'),
                 ]
             );
@@ -492,8 +509,9 @@ final class Pacientes extends Repositorio
         Database::query(
             'INSERT INTO paciente_paquetes
                 (uid, paciente_id, tipo_facturacion, sesiones_totales, sesiones_usadas,
-                 sesiones_facturadas, precio_sesion, precio_total, fecha_inicio, estado, titular_id)
-             VALUES (?,?,?,?,?,?,?,?,?,\'Activo\',?)
+                 sesiones_facturadas, precio_sesion, precio_total, concepto,
+                 fecha_inicio, estado, titular_id)
+             VALUES (?,?,?,?,?,?,?,?,?,?,\'Activo\',?)
              ON DUPLICATE KEY UPDATE
                 tipo_facturacion    = VALUES(tipo_facturacion),
                 sesiones_totales    = VALUES(sesiones_totales),
@@ -501,6 +519,7 @@ final class Pacientes extends Repositorio
                 sesiones_facturadas = VALUES(sesiones_facturadas),
                 precio_sesion       = VALUES(precio_sesion),
                 precio_total        = VALUES(precio_total),
+                concepto            = VALUES(concepto),
                 fecha_inicio        = VALUES(fecha_inicio),
                 titular_id          = VALUES(titular_id)',
             [
@@ -519,6 +538,10 @@ final class Pacientes extends Repositorio
                 // pactado que guardar.
                 ($tipo === 'Individual' || self::num($item['packagePrice'] ?? 0) <= 0)
                     ? null : self::num($item['packagePrice']),
+                // De qué es el paquete: evaluación, terapia, terapia de
+                // lenguaje. Un paciente puede tomar varios, y sin esto el
+                // historial no dice de qué fue cada uno.
+                $tipo === 'Individual' ? null : self::nz($item['packageConcepto'] ?? null),
                 self::fecha($item['packageStartDate'] ?? null) ?? date('Y-m-d'),
                 $titularId,
             ]

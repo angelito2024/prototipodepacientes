@@ -12,6 +12,7 @@ use Centro\Repos\Documento;
 use Centro\Repos\Eventos;
 use Centro\Repos\Gastos;
 use Centro\Repos\Historia;
+use Centro\Repos\InvitacionesPracticante;
 use Centro\Repos\MaterialEntregas;
 use Centro\Repos\Materiales;
 use Centro\Repos\Pacientes;
@@ -55,6 +56,8 @@ final class Colecciones
         'pruebas', 'pruebaAplicaciones',
         // La biblioteca de materiales y lo que se le dejó a cada familia.
         'materiales', 'materialEntregas',
+        // Las invitaciones para que un practicante llene su propia ficha.
+        'practicanteInvitaciones',
     ];
 
     /**
@@ -96,6 +99,9 @@ final class Colecciones
         // administra el centro.
         'materiales'         => ['historia.ver',    'config.editar'],
         'materialEntregas'   => ['historia.ver',    'historia.editar'],
+        // Las invitaciones y las cuentas son administración del equipo:
+        // quien las ve es quien puede dar de alta a alguien.
+        'practicanteInvitaciones' => ['practicantes.editar', 'practicantes.editar'],
     ];
 
     /**
@@ -175,6 +181,7 @@ final class Colecciones
             'pruebaAplicaciones' => new PruebaAplicaciones(),
             'materiales'     => new Materiales(),
             'materialEntregas' => new MaterialEntregas(),
+            'practicanteInvitaciones' => new InvitacionesPracticante(),
             default          => null,
         };
     }

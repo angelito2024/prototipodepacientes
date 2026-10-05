@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<meta http-equiv="Cache-Control" content="no-store">
+<title>Registro de practicante</title>
+<style>
+  :root{
+    --tinta:#1f2430; --suave:#5b6577; --linea:#e2e6ee; --fondo:#f4f6fa;
+    --papel:#fff; --acento:#2f6f4f; --acento2:#e8f2ec; --alerta:#a3381f;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--fondo);color:var(--tinta);
+       font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+       -webkit-text-size-adjust:100%}
+  .caja{max-width:640px;margin:0 auto;padding:0 16px 60px}
+
+  header{background:var(--papel);border-bottom:1px solid var(--linea)}
+  .cabecera{max-width:640px;margin:0 auto;padding:16px}
+  .titulo{font-size:19px;font-weight:700;margin:0}
+  .sub{font-size:13px;color:var(--suave);margin:4px 0 0}
+
+  .tarjeta{background:var(--papel);border:1px solid var(--linea);border-radius:12px;
+           padding:16px 18px;margin:16px 0}
+  .tarjeta h2{font-size:16px;margin:0 0 4px}
+  .tarjeta p.pista{margin:0 0 14px;font-size:13.5px;color:var(--suave)}
+  .nota{background:var(--acento2);border:1px solid #c9e0d4;border-radius:12px;
+        padding:14px 16px;margin:16px 0}
+  .nota p{margin:0;font-size:15px;white-space:pre-wrap}
+
+  label{display:block;font-size:13px;font-weight:600;margin:14px 0 4px}
+  label .opt{font-weight:400;color:var(--suave)}
+  input,select{width:100%;font:inherit;padding:10px 12px;border-radius:9px;
+       border:1.5px solid var(--linea);background:var(--papel);color:var(--tinta)}
+  input:focus,select:focus{outline:none;border-color:var(--acento)}
+  .fila{display:flex;gap:12px;flex-wrap:wrap}
+  .fila > div{flex:1;min-width:150px}
+  .ayuda{font-size:12.5px;color:var(--suave);margin:4px 0 0}
+
+  table{width:100%;border-collapse:collapse;margin-top:6px}
+  th{font-size:11.5px;letter-spacing:.05em;text-transform:uppercase;
+     color:var(--suave);text-align:left;padding:6px 6px;font-weight:700}
+  td{padding:6px 6px;border-top:1px solid var(--linea);vertical-align:middle}
+  td.dia{font-size:14px;white-space:nowrap}
+  td input[type=time]{padding:7px 8px}
+  td input[type=checkbox]{width:20px;height:20px;accent-color:var(--acento)}
+  tr.off td input[type=time]{opacity:.45}
+
+  button{font:inherit;font-weight:600;border-radius:9px;
+       border:1.5px solid var(--acento);background:var(--acento);color:#fff;
+       padding:12px 18px;cursor:pointer;width:100%;margin-top:18px}
+  button[disabled]{opacity:.55;cursor:default}
+
+  .aviso{background:#fdf3ef;border:1px solid #e7c3b6;color:var(--alerta);
+         border-radius:10px;padding:14px 16px;margin:16px 0;font-size:15px}
+  .listo{background:var(--acento2);border:1px solid #c9e0d4;border-radius:12px;
+         padding:22px 18px;margin:16px 0;text-align:center}
+  .listo .tic{font-size:34px;line-height:1}
+  .listo h2{margin:8px 0 6px;font-size:18px}
+  .listo p{margin:0;font-size:14.5px;color:#39404f}
+  .pie{text-align:center;font-size:12.5px;color:var(--suave);margin-top:28px;padding:0 8px}
+  @media (max-width:430px){
+    th.h-hora{display:none}
+    td.dia{font-size:13px}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="cabecera">
+    <p class="titulo" id="titulo">Cargando…</p>
+    <p class="sub" id="sub"></p>
+  </div>
+</header>
+
+<div class="caja" id="caja"></div>
+
+<script>
+const API = '../api/practicante.php';
+const token = new URLSearchParams(location.search).get('t') || '';
+const DIAS = ['Lunes','Martes','Miercoles','Jueves','Viernes','Sabado','Domingo'];
+const ROTULO = {Miercoles:'Miércoles', Sabado:'Sábado'};
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s==null?'':s).replace(/[&<>"']/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function aviso(texto){
+  $('caja').innerHTML = '<div class="aviso">' + esc(texto) + '</div>';
+}
+
+/* --- Abrir el enlace ------------------------------------------------ */
+async function abrir(){
+  if(!token){ $('titulo').textContent = 'Enlace incompleto';
+    aviso('Falta la clave del enlace. Ábrelo tal como te lo mandaron, completo.'); return; }
+  let r;
+  try{
+    r = await (await fetch(API + '?accion=abrir&t=' + encodeURIComponent(token))).json();
+  }catch(e){
+    $('titulo').textContent = 'Sin conexión';
+    aviso('No se pudo conectar. Revisa tu internet y vuelve a intentarlo.'); return;
+  }
+  if(!r.ok){
+    $('titulo').textContent = 'Enlace no disponible';
+    aviso(r.error || 'Este enlace no se puede abrir.'); return;
+  }
+  $('titulo').textContent = r.centro || 'Centro Psicológico';
+  $('sub').textContent = 'Registro de practicante';
+  pintarFormulario(r);
+}
+
+function pintarFormulario(r){
+  const vence = r.expira ? new Date(r.expira.replace(' ','T')) : null;
+  $('caja').innerHTML = `
+    ${r.mensaje ? `<div class="nota"><p>${esc(r.mensaje)}</p></div>` : ''}
+
+    <div class="tarjeta">
+      <h2>Tus datos</h2>
+      <p class="pista">Se llena una sola vez. Al enviarlo, este enlace se cierra.</p>
+
+      <label for="nombre">Nombre completo</label>
+      <input id="nombre" autocomplete="name" placeholder="Nombres y apellidos">
+
+      <div class="fila">
+        <div>
+          <label for="dni">DNI</label>
+          <input id="dni" inputmode="numeric" maxlength="8" autocomplete="off" placeholder="8 números">
+        </div>
+        <div>
+          <label for="telefono">Teléfono</label>
+          <input id="telefono" inputmode="tel" autocomplete="tel" placeholder="999 999 999">
+        </div>
+      </div>
+
+      <label for="email">Correo</label>
+      <input id="email" type="email" autocomplete="email" placeholder="tucorreo@ejemplo.com">
+
+      <div class="fila">
+        <div>
+          <label for="nacimiento">Fecha de nacimiento <span class="opt">(opcional)</span></label>
+          <input id="nacimiento" type="date">
+        </div>
+        <div>
+          <label for="universidad">Universidad o instituto</label>
+          <input id="universidad" placeholder="Dónde estudias">
+        </div>
+      </div>
+    </div>
+
+    <div class="tarjeta">
+      <h2>Tus prácticas</h2>
+      <p class="pista">Si todavía no tienes la fecha de término, déjala en blanco.</p>
+      <div class="fila">
+        <div>
+          <label for="inicio">Fecha de inicio</label>
+          <input id="inicio" type="date">
+        </div>
+        <div>
+          <label for="fin">Fecha de término <span class="opt">(opcional)</span></label>
+          <input id="fin" type="date">
+        </div>
+      </div>
+      <label for="horasMeta">Horas que tienes que cumplir <span class="opt">(opcional)</span></label>
+      <input id="horasMeta" inputmode="numeric" placeholder="Ej: 300">
+      <p class="ayuda">Es la meta que te pide tu universidad. Si no la sabes, déjalo vacío.</p>
+    </div>
+
+    <div class="tarjeta">
+      <h2>Los días que vienes</h2>
+      <p class="pista">Marca los días que asistes y pon tu horario. Se repite cada semana.</p>
+      <table>
+        <tr><th>Día</th><th>Asiste</th><th class="h-hora">Desde</th><th class="h-hora">Hasta</th></tr>
+        ${DIAS.map(d=>`
+          <tr id="fila_${d}" class="off">
+            <td class="dia">${ROTULO[d]||d}</td>
+            <td><input type="checkbox" id="ck_${d}" aria-label="Asiste ${ROTULO[d]||d}"
+                       onchange="marcarDia('${d}')"></td>
+            <td><input type="time" id="de_${d}" value="14:00" aria-label="Desde"></td>
+            <td><input type="time" id="a_${d}" value="18:00" aria-label="Hasta"></td>
+          </tr>`).join('')}
+      </table>
+    </div>
+
+    <div id="error"></div>
+    <button id="enviar" onclick="enviar()">Enviar mis datos</button>
+    <p class="pie">${vence
+      ? 'Este enlace se puede usar hasta el ' + vence.toLocaleDateString('es-PE') + '.'
+      : ''}<br>Tus datos los ve solamente el centro.</p>
+  `;
+}
+
+function marcarDia(d){
+  $('fila_' + d).className = $('ck_' + d).checked ? '' : 'off';
+}
+
+/* --- Enviar --------------------------------------------------------- */
+async function enviar(){
+  const err = $('error');
+  err.innerHTML = '';
+
+  const nombre = $('nombre').value.trim();
+  if(nombre.length < 5 || !nombre.includes(' ')){
+    return falla('Escribe tu nombre y tus apellidos.', 'nombre');
+  }
+  const dni = $('dni').value.replace(/\D/g,'');
+  if(dni && dni.length !== 8){
+    return falla('El DNI tiene ocho números. Revísalo.', 'dni');
+  }
+  const email = $('email').value.trim();
+  if(email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){
+    return falla('Ese correo no parece bien escrito. Revísalo.', 'email');
+  }
+
+  const horario = {};
+  let algunDia = false, horaMala = '';
+  DIAS.forEach(d=>{
+    const asiste = $('ck_' + d).checked;
+    if(asiste){
+      algunDia = true;
+      if($('a_' + d).value <= $('de_' + d).value) horaMala = ROTULO[d] || d;
+    }
+    horario[d] = {asiste, desde: $('de_' + d).value, hasta: $('a_' + d).value};
+  });
+  if(horaMala){
+    return falla('El ' + horaMala + ' la hora de salida tiene que ser después de la de entrada.');
+  }
+  if(!algunDia){
+    return falla('Marca por lo menos un día de la semana.');
+  }
+
+  const b = $('enviar');
+  b.disabled = true; b.textContent = 'Enviando…';
+
+  let r;
+  try{
+    r = await (await fetch(API + '?accion=registrar&t=' + encodeURIComponent(token), {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        nombre, dni, email,
+        telefono:    $('telefono').value.trim(),
+        nacimiento:  $('nacimiento').value,
+        universidad: $('universidad').value.trim(),
+        inicio:      $('inicio').value,
+        fin:         $('fin').value,
+        horasMeta:   parseInt($('horasMeta').value, 10) || 0,
+        horario
+      })
+    })).json();
+  }catch(e){
+    b.disabled = false; b.textContent = 'Enviar mis datos';
+    return falla('No se pudo enviar. Revisa tu internet y vuelve a intentarlo.');
+  }
+
+  if(!r.ok){
+    b.disabled = false; b.textContent = 'Enviar mis datos';
+    return falla(r.error || 'No se pudo guardar.');
+  }
+
+  $('caja').innerHTML = `
+    <div class="listo">
+      <div class="tic">✓</div>
+      <h2>Listo, ${esc(r.nombre.split(' ')[0])}</h2>
+      <p>Tus datos quedaron registrados en el centro.
+         Ya puedes cerrar esta página.</p>
+    </div>
+    <p class="pie">Si algo quedó mal escrito, avísale al centro: ellos lo corrigen.</p>`;
+}
+
+function falla(texto, campo){
+  $('error').innerHTML = '<div class="aviso">' + esc(texto) + '</div>';
+  if(campo && $(campo)) $(campo).focus();
+  $('error').scrollIntoView({behavior:'smooth', block:'center'});
+}
+
+abrir();
+</script>
+</body>
+</html>

@@ -26,7 +26,28 @@ use Centro\Http;
 
 $accion = (string) ($_GET['accion'] ?? 'coleccion');
 
+/* Con la clave prestada, la sesión solo sirve para cambiarla.
+ *
+ * La cuenta de alguien del equipo nace con su DNI como clave, y el DNI no
+ * es un secreto: está en su carné, en su ficha y en la lista de
+ * asistencia. Esa clave solo se aguanta si dura una entrada. Por eso el
+ * bloqueo está acá, en el servidor, y no solo escondiendo pantallas: si
+ * estuviera en el navegador, bastaría con no abrir el panel.
+ *
+ * Lo único que se deja pasar es lo imprescindible para poder cambiarla.
+ */
+const SIN_CLAVE_PROPIA_SE_PERMITE = ['salud', 'login', 'logout', 'sesion', 'credenciales'];
+
 try {
+    if (!in_array($accion, SIN_CLAVE_PROPIA_SE_PERMITE, true) && Auth::debeCambiarClave()) {
+        Http::error(
+            'Antes de usar el sistema tienes que cambiar la clave con la que entraste. '
+          . 'Es la que te dio el centro y la conoce más de una persona.',
+            403,
+            ['debeCambiarClave' => true]
+        );
+    }
+
     switch ($accion) {
         case 'salud':
             Http::ok([
@@ -150,9 +171,69 @@ try {
             }
             Http::ok(['usuario' => $usuario]);
 
+        case 'crear_acceso':
+            // El acceso de alguien que ya tiene ficha: profesional o
+            // practicante. El usuario se arma con su nombre y la clave es
+            // su DNI, marcada para cambiar al entrar.
+            if (Http::metodo() !== 'POST') {
+                Http::error('Método no permitido.', 405);
+            }
+            Auth::exigir();
+            if (!Auth::puede('usuarios.editar')) {
+                Auth::auditar('PERMISO_DENEGADO', Auth::usuarioId(),
+                    ['accion' => 'crear_acceso'], 'usuarios');
+                Http::error('Solo un administrador puede dar acceso al sistema.', 403);
+            }
+            $c = Http::cuerpo();
+            try {
+                $r = \Centro\Repos\Usuarios::crearAcceso(
+                    (string) ($c['personaId'] ?? ''),
+                    (string) ($c['rol'] ?? '')
+                );
+            } catch (RuntimeException $e) {
+                Http::error($e->getMessage(), 400);
+            }
+            Http::ok($r);
+
         case 'roles':
             Auth::exigir();
             Http::ok(['roles' => \Centro\Repos\Usuarios::roles()]);
+
+        case 'invitar_practicante':
+            // Genera el enlace con el que un practicante llena su ficha.
+            // La clave se devuelve una sola vez: después queda su hash.
+            if (Http::metodo() !== 'POST') {
+                Http::error('Método no permitido.', 405);
+            }
+            Auth::exigir();
+            if (!Auth::puede('practicantes.editar')) {
+                Auth::auditar('PERMISO_DENEGADO', Auth::usuarioId(),
+                    ['accion' => 'invitar_practicante'], 'practicantes');
+                Http::error('No tienes permiso para dar de alta practicantes.', 403);
+            }
+            try {
+                $r = \Centro\Repos\InvitacionesPracticante::invitar(Http::cuerpo());
+            } catch (RuntimeException $e) {
+                Http::error($e->getMessage(), 400);
+            }
+            Http::ok($r);
+
+        case 'anular_invitacion':
+            if (Http::metodo() !== 'POST') {
+                Http::error('Método no permitido.', 405);
+            }
+            Auth::exigir();
+            if (!Auth::puede('practicantes.editar')) {
+                Http::error('No tienes permiso para anular invitaciones.', 403);
+            }
+            try {
+                \Centro\Repos\InvitacionesPracticante::anular(
+                    (string) (Http::cuerpo()['id'] ?? '')
+                );
+            } catch (RuntimeException $e) {
+                Http::error($e->getMessage(), 400);
+            }
+            Http::ok([]);
 
         case 'asignar_prueba':
             // Le asigna una prueba a un paciente y devuelve el enlace para

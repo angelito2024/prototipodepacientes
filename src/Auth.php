@@ -165,9 +165,17 @@ final class Auth
             return ['ok' => false, 'error' => 'La clave nueva debe tener al menos 8 caracteres.'];
         }
 
+        // La clave que le dieron no vale como clave nueva: si se pudiera
+        // "cambiar" el DNI por el mismo DNI, la obligación de cambiarla no
+        // serviría de nada.
+        if (password_verify($claveNueva, (string) $fila['password_hash'])) {
+            return ['ok' => false, 'error' => 'La clave nueva tiene que ser distinta de la actual.'];
+        }
+
         Database::query(
             'UPDATE usuarios SET usuario = ?, password_hash = ?, intentos_fallidos = 0,
-                                 bloqueado_hasta = NULL
+                                 bloqueado_hasta = NULL,
+                                 debe_cambiar_clave = 0, clave_cambiada_en = NOW()
               WHERE id = ?',
             [$usuarioNuevo, password_hash($claveNueva, PASSWORD_DEFAULT), $id]
         );
@@ -247,12 +255,33 @@ final class Auth
         return $id;
     }
 
+    /**
+     * ¿Entró con una clave que le puso otro y todavía no la cambió?
+     *
+     * Mientras esto sea cierto, la sesión no sirve para nada más que
+     * cambiarla: lo hace cumplir `api/index.php`. La comprobación va
+     * contra la base y no contra la sesión, para que quitarle la marca
+     * tenga efecto inmediato y no al día siguiente.
+     */
+    public static function debeCambiarClave(): bool
+    {
+        $id = self::usuarioId();
+        if ($id === null) {
+            return false;
+        }
+        return (int) Database::valor(
+            'SELECT debe_cambiar_clave FROM usuarios WHERE id = ?', [$id]
+        ) === 1;
+    }
+
     public static function perfil(int $usuarioId): array
     {
         $u = Database::uno(
-            'SELECT id, usuario, nombre_completo, persona_id FROM usuarios WHERE id = ?',
+            'SELECT id, usuario, nombre_completo, persona_id, debe_cambiar_clave
+               FROM usuarios WHERE id = ?',
             [$usuarioId]
         ) ?? [];
+        $u['debeCambiarClave'] = (int) ($u['debe_cambiar_clave'] ?? 0) === 1;
         $u['roles'] = array_column(Database::todos(
             'SELECT r.clave FROM usuario_roles ur JOIN roles r ON r.id = ur.rol_id WHERE ur.usuario_id = ?',
             [$usuarioId]

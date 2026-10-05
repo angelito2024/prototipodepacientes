@@ -12,6 +12,9 @@ final class Citas extends Repositorio
 {
     private const ESTADOS   = ['Programada','Confirmada','Completada','Cancelada','Reprogramada','No asistió'];
     private const MODALIDADES = ['Presencial','Virtual','Domicilio'];
+    /** Qué fue la sesión. 'Devolución' es la entrega de resultados. */
+    private const TIPOS_SESION = ['Consulta','Evaluacion','Terapia','Seguimiento',
+                                  'Devolucion','Taller','Otro'];
 
     public function clave(): string
     {
@@ -37,7 +40,7 @@ final class Citas extends Repositorio
         $filas = Database::todos(
             "SELECT c.uid, c.inicio, c.duracion_min, c.modalidad, c.estado,
                     c.enlace, c.direccion, c.referencia,
-                    c.recordatorio_enviado, c.cuenta_sesion,
+                    c.recordatorio_enviado, c.cuenta_sesion, c.tipo_sesion,
                     pac.uid AS paciente_uid, pro.uid AS profesional_uid,
                     CASE WHEN co.descripcion IS NULL OR co.descripcion = ''
                          THEN co.nombre
@@ -112,6 +115,10 @@ final class Citas extends Repositorio
                 'reference'      => (string) ($f['referencia'] ?? ''),
                 'reminderSent'   => (int) $f['recordatorio_enviado'] === 1,
                 'countedSession' => (int) $f['cuenta_sesion'] === 1,
+                // Qué fue esa sesión: la consulta inicial, una evaluación,
+                // terapia… Sin esto la agenda de un paciente son nueve
+                // renglones iguales y no se sabe cuál fue cuál.
+                'tipoSesion'     => (string) $f['tipo_sesion'],
             ];
         }
         return $salida;
@@ -157,8 +164,8 @@ final class Citas extends Repositorio
                 'INSERT INTO citas
                     (uid, paciente_id, profesional_id, paquete_id, inicio, duracion_min,
                      modalidad, consultorio_id, enlace, direccion, referencia, estado,
-                     recordatorio_enviado, cuenta_sesion, eliminado_en)
-                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)
+                     recordatorio_enviado, cuenta_sesion, tipo_sesion, eliminado_en)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)
                  ON DUPLICATE KEY UPDATE
                     paciente_id=VALUES(paciente_id), profesional_id=VALUES(profesional_id),
                     paquete_id=VALUES(paquete_id), inicio=VALUES(inicio),
@@ -167,7 +174,8 @@ final class Citas extends Repositorio
                     direccion=VALUES(direccion), referencia=VALUES(referencia),
                     estado=VALUES(estado),
                     recordatorio_enviado=VALUES(recordatorio_enviado),
-                    cuenta_sesion=VALUES(cuenta_sesion), eliminado_en=NULL',
+                    cuenta_sesion=VALUES(cuenta_sesion), tipo_sesion=VALUES(tipo_sesion),
+                    eliminado_en=NULL',
                 [
                     $uid,
                     $pacienteId,
@@ -183,6 +191,7 @@ final class Citas extends Repositorio
                     self::enum($item['status'] ?? null, self::ESTADOS, 'Programada'),
                     self::bool($item['reminderSent'] ?? false),
                     self::bool($item['countedSession'] ?? false),
+                    self::enum($item['tipoSesion'] ?? null, self::TIPOS_SESION, 'Terapia'),
                 ]
             );
 

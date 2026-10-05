@@ -1001,6 +1001,15 @@
   </div>
 </div>
 
+<div class="modalOverlay" id="accesoModal">
+  <div class="receiptCard" style="max-width:600px">
+    <div style="padding:24px 26px;max-height:72vh;overflow-y:auto" id="accesoContent"></div>
+    <div class="receiptActions">
+      <button class="btn secondary" onclick="document.getElementById('accesoModal').classList.remove('open')">Cerrar</button>
+    </div>
+  </div>
+</div>
+
 <div class="modalOverlay" id="availabilityModal">
   <div class="receiptCard" style="max-width:760px">
     <div style="padding:24px 26px;max-height:70vh;overflow-y:auto" id="availabilityContent"></div>
@@ -1608,7 +1617,9 @@ let DB = {
   pruebas:[], pruebaAplicaciones:[],
   //   materiales       la biblioteca de trabajo del centro
   //   materialEntregas lo que se le dejó a cada familia y si lo abrió
-  materiales:[], materialEntregas:[]
+  materiales:[], materialEntregas:[],
+  //   practicanteInvitaciones  los enlaces para que un practicante llene su ficha
+  practicanteInvitaciones:[]
 };
 let currentTab = 'resumen';
 let currentHistoryPatientId = null;
@@ -1840,6 +1851,13 @@ async function loadAll(){
   // La biblioteca de materiales y lo que se le dejó a cada familia.
   DB.materiales         = await getColl('materiales', []);
   DB.materialEntregas   = await getColl('materialEntregas', []);
+  // Los enlaces con que un practicante llena su propia ficha.
+  DB.practicanteInvitaciones = await getColl('practicanteInvitaciones', []);
+  // Quién del equipo tiene acceso al sistema. Hace falta desde el arranque
+  // para poder decirlo en la fila de cada persona, y no solo en Datos del
+  // centro. Quien no administra cuentas recibe una lista vacía y los
+  // botones de acceso no se dibujan.
+  DB.usuarios = await getColl('usuarios', []);
   DB.talleres.forEach(t=>{
     if(!Array.isArray(t.participantes)) t.participantes = [];
     if(!t.billingMode) t.billingMode = 'participante'; // los talleres creados antes de existir el cobro grupal
@@ -2223,6 +2241,12 @@ function toggleForm(id){
       fillApptFromPatient();
     }
     if(id==='payForm' && typeof fillPaymentFromPatient==='function') fillPaymentFromPatient();
+    // Un paciente nuevo no tiene historial de paquetes que mostrar: si no
+    // se limpia, aparece el del paciente que se editó antes.
+    if(id==='patientForm' && !editingPatientId){
+      const paqs = document.getElementById('pf_paquetes');
+      if(paqs) paqs.innerHTML = '';
+    }
     if(id==='profForm' && typeof toggleShareField==='function' && !editingProfId){
       toggleShareField();
       const defSched = defaultWeeklySchedule();
@@ -3703,6 +3727,15 @@ function viewPacientes(){
           </select>
           <p class="hint" style="margin-top:3px" id="pf_serviceHint">Solo tarifas de paciente. Las de talleres y las internas están en <b>Tarifas</b>.</p>
         </div>
+        <div class="field" id="pf_conceptoWrap"><label>¿De qué es el paquete?</label>
+          <input id="pf_paqConcepto" list="pf_conceptosUsados" autocomplete="off"
+                 placeholder="Ej: Terapia, Evaluación, Terapia de lenguaje">
+          <datalist id="pf_conceptosUsados">
+            ${CONCEPTOS_DE_PAQUETE.map(c=>`<option value="${esc(c)}"></option>`).join('')}
+          </datalist>
+          <p class="hint" style="margin-top:3px">Un paciente puede tomar varios a lo largo
+            del tiempo. Esto es lo que después distingue uno de otro en su historial.</p>
+        </div>
         <div class="field" id="pf_totalWrap"><label>Sesiones del paquete</label>
           <input type="number" id="pf_total" value="4" oninput="recalcularDesde('sesiones')"></div>
         <div class="field" id="pf_paqPrecioWrap"><label>Precio del paquete completo (S/)</label>
@@ -3770,6 +3803,10 @@ function viewPacientes(){
         </div>
         <div id="pf_guardiansList" style="margin-top:8px"></div>
         <p class="hint">Puedes registrar a varios (papá y mamá, por ejemplo). El marcado como <b>principal</b> es quien aparece como contacto y recibe los recordatorios; puedes cambiarlo con "Hacer principal".</p>
+        <p class="hint">Si alguno de ellos <b>también se atiende</b> con el paquete del paciente,
+          usa el botón <b>"+ También se atiende"</b> de su tarjeta: queda registrado como
+          paciente, sus sesiones descuentan de la misma bolsa y la deuda sigue siendo
+          una sola. (Aparece una vez que el paquete está guardado.)</p>
       </div>
       <div id="pf_companionsWrap" style="margin-top:8px;display:none">
         <label style="font-size:12px;color:var(--ink-soft);display:block;margin-bottom:6px;font-weight:600">Otras personas registradas (pareja / familia)</label>
@@ -3784,6 +3821,7 @@ function viewPacientes(){
         <p class="hint">Solo una persona paga y aparece en Pagos; aquí registras a los demás con su propio contacto, para poder avisarles también.</p>
       </div>
       <div class="field" style="grid-column:1/-1;margin-top:8px"><label>Notas</label><textarea id="pf_notes" rows="2"></textarea></div>
+      <div id="pf_paquetes" style="grid-column:1/-1"></div>
       <button class="btn" onclick="savePatient()">Guardar paciente</button>
       <button class="btn secondary" onclick="toggleForm('patientForm')">Cancelar</button>
     </div>
@@ -3924,6 +3962,8 @@ function toggleBillingType(){
   // a que después no cuadre con nada.
   const ocultar = (type==='Individual' || compartido) ? 'none' : 'block';
   document.getElementById('pf_totalWrap').style.display = ocultar;
+  const concW = document.getElementById('pf_conceptoWrap');
+  if(concW) concW.style.display = ocultar;
   const paqW = document.getElementById('pf_paqPrecioWrap');
   if(paqW) paqW.style.display = ocultar;
   const titularWrap = document.getElementById('pf_titularWrap');
@@ -3983,7 +4023,7 @@ function toggleConsultaLugar(){
    Por eso el botón de generar usa Jitsi, y al lado queda el atajo a Meet.
 
    El nombre de la sala lleva un pedazo al azar a propósito: en Jitsi quien
-   sepa la dirección entra, y una sala llamada "magusa-rodrigo" la adivina
+   sepa la dirección entra, y una sala con el nombre del paciente se adivina
    cualquiera. Esto es una sesión de terapia. */
 function nombreDeSala(pista){
   const limpio = String(pista||'')
@@ -4109,6 +4149,42 @@ let currentCompanions = [];
 const GUARDIAN_RELATIONS = ['Madre','Padre','Hermano/a','Abuelo/a','Tío/a','Tutor legal','Otro familiar'];
 let currentGuardians = [];
 let editingGuardianId = null;
+/* ----- Cuando el apoderado también se atiende ------------------------
+
+   Pasa seguido: se compra el paquete para el hijo y en el camino la madre
+   empieza a tomar sesiones del mismo paquete. Hasta ahora eso obligaba a
+   registrarla desde cero —nombre, teléfono, DNI otra vez— y a acordarse
+   de marcarla como "comparte el paquete de otra persona". Si no se hacía,
+   sus sesiones no descontaban de ninguna bolsa: atención dada y no
+   contada.
+
+   Acá se hace desde la propia tarjeta del apoderado, con los datos que
+   ya están escritos. La deuda no se duplica: sigue siendo del titular,
+   una sola vez (ver la regla de paquetes compartidos en CLAUDE.md).
+*/
+
+/* ¿Este apoderado ya está registrado como paciente del mismo paquete?
+   No hay un vínculo guardado entre la tarjeta y la ficha, así que se
+   busca por DNI cuando lo tiene, y por nombre cuando no. */
+function apoderadoYaEsPaciente(g, titularId){
+  const dni = String(g.dni||'').replace(/\D/g,'');
+  const nom = sinTildes(String(g.name||'').trim());
+  if(!nom) return null;
+  return DB.patients.find(p=>{
+    if(p.id === titularId) return false;
+    if(dni && String(p.dni||'').replace(/\D/g,'') === dni) return true;
+    return !dni && sinTildes(String(p.name||'').trim()) === nom;
+  }) || null;
+}
+
+/* El titular tal como está GUARDADO, no como está el formulario: un
+   paquete que todavía no se guardó no puede prestar sesiones. */
+function titularGuardado(){
+  return editingPatientId
+    ? (DB.patients.find(p=>p.id===editingPatientId) || null)
+    : null;
+}
+
 function renderGuardians(){
   const el = document.getElementById('pf_guardiansList');
   if(!el) return;
@@ -4116,19 +4192,99 @@ function renderGuardians(){
     el.innerHTML = '<span class="hint">Sin apoderados agregados todavía.</span>';
     return;
   }
-  el.innerHTML = currentGuardians.map((g,i)=>`
+  const titular = titularGuardado();
+  const prestaPaquete = !!titular && titular.billingType !== 'Individual'
+    && Number(titular.packageTotal||0) > 0 && !esAcompanante(titular);
+
+  el.innerHTML = currentGuardians.map((g,i)=>{
+    const ficha = titular ? apoderadoYaEsPaciente(g, titular.id) : null;
+    let bloquePaquete = '';
+    if(ficha && esAcompanante(ficha) && ficha.packageHolderId === titular.id){
+      bloquePaquete = ` <span class="chip ok">También se atiende · del mismo paquete</span>`;
+    } else if(ficha){
+      bloquePaquete = ` <span class="chip neutral">Ya es paciente aparte</span>`;
+    }
+    const boton = (prestaPaquete && !ficha)
+      ? `<button type="button" class="btn small secondary"
+           title="Registrarla como paciente y descontar sus sesiones de este mismo paquete"
+           onclick="apoderadoTambienSeAtiende('${g.id}')">+ También se atiende</button>`
+      : '';
+    return `
     <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:var(--paper);border:1px solid var(--border);border-radius:6px;margin-bottom:4px;flex-wrap:wrap;gap:6px">
       <span>
-        <b>${g.name}</b> <span class="chip neutral">${g.relationship||'Otro familiar'}</span>${i===0? ' <span class="chip ok">Principal</span>':''}
+        <b>${g.name}</b> <span class="chip neutral">${g.relationship||'Otro familiar'}</span>${i===0? ' <span class="chip ok">Principal</span>':''}${bloquePaquete}
         <br><span class="hint">DNI: ${g.dni||'—'} · ${g.phone||'sin tel.'} · ${g.email||'sin correo'}</span>
       </span>
       <span style="display:flex;gap:6px;flex-wrap:wrap">
+        ${boton}
         <button type="button" class="btn small secondary" onclick="editGuardian('${g.id}')">Editar</button>
         ${i>0? `<button type="button" class="btn small secondary" onclick="makeGuardianPrimary('${g.id}')">Hacer principal</button>`:''}
         <button type="button" class="btn small danger" onclick="removeGuardian('${g.id}')">Eliminar</button>
       </span>
     </div>
-  `).join('');
+  `;}).join('');
+}
+
+async function apoderadoTambienSeAtiende(gid){
+  const g = currentGuardians.find(x=>x.id===gid);
+  const titular = titularGuardado();
+  if(!g || !titular) return;
+
+  if(!g.name || !g.name.trim()){
+    alert('Escríbele el nombre primero: con eso se arma su ficha.');
+    return;
+  }
+  const paq = paqueteDe(titular);
+  const restantes = paq ? paq.restantes : Number(titular.packageTotal||0);
+
+  if(!confirm(
+      `Registrar a ${g.name} como paciente dentro del paquete de ${titular.name}.\n\n`
+    + `· Sus sesiones van a descontar de las mismas ${titular.packageTotal} `
+    + `(quedan ${restantes} por usar).\n`
+    + `· La deuda sigue siendo de ${titular.name}, una sola vez: a ella no se le cobra aparte.\n`
+    + `· Cada una tendrá su propia historia clínica.\n\n`
+    + `¿La registro?`)) return;
+
+  const nueva = {
+    id: uid(),
+    name: g.name.trim(),
+    dni: (g.dni||'').trim(),
+    phone: (g.phone||'').trim(),
+    email: (g.email||'').trim(),
+    type: titular.type || 'Particular',
+    modality: titular.modality || 'Presencial',
+    professionalId: titular.professionalId || '',
+    billingType: 'Compartido',
+    packageHolderId: titular.id,
+    // Las sesiones y el precio son del titular: guardárselos acá dejaría
+    // dos verdades para un mismo paquete.
+    packageTotal: 0, packagePrice: 0, pricePerSession: 0,
+    sessionsUsed: 0, serviceId: '',
+    paymentStatus: 'Pendiente',
+    reportStatus: 'No aplica', reportDueDate: '',
+    birthday: '', birthDate: '',
+    isMinor: false, sex: '',
+    guardians: [], guardianName: '', guardianPhone: '', guardianEmail: '', guardianDni: '',
+    defaultMeetingLink: titular.defaultMeetingLink || '',
+    defaultAddress: titular.defaultAddress || '',
+    defaultReference: titular.defaultReference || '',
+    companions: [],
+    notes: `Se atiende dentro del paquete de ${titular.name} `
+         + `(${(g.relationship||'familiar').toLowerCase()} del paciente).`,
+    packageStartDate: titular.packageStartDate || todayISO(),
+    paquetesHistorial: [],
+    notifyOverrides: {},
+    active: true,
+  };
+
+  DB.patients.push(nueva);
+  if(!await setColl('patients', DB.patients)){
+    DB.patients = DB.patients.filter(p=>p.id!==nueva.id);
+    alert('No se pudo guardar. Revisa la conexión y vuelve a intentarlo.');
+    return;
+  }
+  renderGuardians();
+  showToast(`${nueva.name} ya descuenta del paquete de ${titular.name}.`);
 }
 function leerFormApoderado(){
   return {
@@ -4265,6 +4421,12 @@ function editPatient(id){
   document.getElementById('pf_paqPrecio').value = Number(p.packagePrice||0) > 0
     ? Number(p.packagePrice).toFixed(2) : '';
   precioPactadoDelPaquete = Number(p.packagePrice||0) > 0;
+  const conc = document.getElementById('pf_paqConcepto');
+  if(conc) conc.value = p.packageConcepto || '';
+  // Todo lo que este paciente contrató a lo largo del tiempo. Solo al
+  // editar: un paciente nuevo todavía no tiene historia que mostrar.
+  const paqs = document.getElementById('pf_paquetes');
+  if(paqs) paqs.innerHTML = bloqueDePaquetes(p);
   // El titular se llena antes de toggleBillingType(), que es quien arma la
   // lista; si no, el valor guardado no tendría dónde posarse.
   if(p.packageHolderId){
@@ -4385,6 +4547,10 @@ async function savePatient(){
     // El precio pactado del paquete entero: manda sobre la multiplicación.
     packagePrice: document.getElementById('pf_billingType').value==='Individual'
       ? 0 : (Number(document.getElementById('pf_paqPrecio').value)||0),
+    // De qué es el paquete: lo que después distingue el de evaluación
+    // del de terapia en su historial.
+    packageConcepto: document.getElementById('pf_billingType').value==='Individual'
+      ? '' : ((document.getElementById('pf_paqConcepto')||{}).value||'').trim(),
     // No se toma del formulario: se cuenta de las citas completadas, que es
     // el dato real. Editar la ficha ya no puede descuadrar el contador.
     sessionsUsed: editingPatientId? sesionesAtendidas(DB.patients.find(x=>x.id===editingPatientId)) : 0,
@@ -4454,6 +4620,8 @@ async function savePatient(){
         reference: data.modality==='Domicilio'? (data.defaultReference||'') : '',
         reminderSent: false,
         countedSession: true,
+        // La primera cita del paciente es, por definición, su consulta.
+        tipoSesion: 'Consulta',
       };
       DB.appointments.push(primeraCita);
       data.sessionsUsed = sesionesAtendidas(data);
@@ -4661,39 +4829,282 @@ function irACobrarPaciente(patientId, tipoSugerido){
     if(monto){ monto.focus(); monto.scrollIntoView({block:'center', behavior:'smooth'}); }
   }, 120);
 }
+/* Los conceptos con que el centro vende paquetes. Es una lista abierta:
+   el campo se puede escribir, esto solo evita teclear lo de siempre. */
+const CONCEPTOS_DE_PAQUETE = ['Terapia', 'Evaluación', 'Terapia de lenguaje',
+  'Terapia de aprendizaje', 'Terapia conductual', 'Orientación familiar',
+  'Evaluación y terapia'];
+
+/* Todos los paquetes del paciente en orden, el vigente al final.
+   El historial guarda los cerrados; el vigente vive en la ficha. */
+function paquetesDe(p){
+  if(!p) return [];
+  const lista = (p.paquetesHistorial||[]).map(h=>({
+    id: h.id,
+    concepto: h.concepto || '',
+    sesiones: Number(h.packageTotal||0),
+    usadas:   Number(h.sessionsUsed||0),
+    precio:   Number(h.packagePrice||0) || redondear(Number(h.packageTotal||0) * Number(h.pricePerSession||0)),
+    desde:    h.iniciadoEl || '',
+    hasta:    h.cerradoEl || '',
+    vigente:  false,
+  }));
+  if(p.billingType !== 'Individual' && Number(p.packageTotal||0) > 0){
+    const paq = paqueteDe(p);
+    lista.push({
+      id: 'vigente',
+      concepto: p.packageConcepto || '',
+      sesiones: Number(p.packageTotal||0),
+      usadas:   paq ? paq.usadas : Number(p.sessionsUsed||0),
+      precio:   precioDelPaquete(p),
+      desde:    p.packageStartDate || '',
+      hasta:    '',
+      vigente:  true,
+    });
+  }
+  return lista.sort((a,b)=>String(a.desde||'').localeCompare(String(b.desde||'')));
+}
+
+/* Qué le pasó a este paciente, paquete por paquete. Sin esto el historial
+   son números sin sentido: cinco sesiones, diez sesiones, ¿de qué? */
+function bloqueDePaquetes(p){
+  const lista = paquetesDe(p);
+  if(esAcompanante(p)){
+    const t = titularDelPaquete(p);
+    return `<div class="card"><h3 style="margin-top:0">Paquetes</h3>
+      <p class="hint">${esc(p.name)} consume del paquete de
+        <b>${esc((t||{}).name||'otra persona')}</b>. Los paquetes se administran
+        desde la ficha de ${esc((t||{}).name||'esa persona')}.</p></div>`;
+  }
+
+  const filas = lista.map(q=>`<tr${q.vigente? '' : ' style="opacity:.72"'}>
+    <td><b>${esc(q.concepto || 'Sin concepto')}</b>
+      ${q.vigente? ' <span class="chip ok">En curso</span>' : ''}</td>
+    <td style="white-space:nowrap">${q.usadas} de ${q.sesiones}</td>
+    <td style="white-space:nowrap">${q.precio>0? fmtMoney(q.precio) : '—'}</td>
+    <td style="white-space:nowrap">${esc(q.desde||'—')}${
+      q.hasta? ` <span class="hint">a ${esc(q.hasta)}</span>` : ''}</td>
+    <td style="white-space:nowrap">${q.vigente
+      ? `<button class="btn small secondary" onclick="editPatient('${p.id}')">Editar</button>`
+      : `<button class="btn small secondary" onclick="editarPaqueteAnterior('${p.id}','${q.id}')">Editar</button>
+         <button class="btn small danger" onclick="borrarPaqueteAnterior('${p.id}','${q.id}')">Quitar</button>`}</td>
+  </tr>`).join('');
+
+  return `<div class="card">
+    <h3 style="margin-top:0">Paquetes de ${esc(p.name)}</h3>
+    ${lista.length? `<div class="tablewrap"><table>
+      <tr><th>De qué</th><th>Sesiones</th><th>Precio</th><th>Desde</th><th></th></tr>
+      ${filas}</table></div>`
+     : `<p class="hint">Todavía no tiene ningún paquete registrado.</p>`}
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+      <button class="btn secondary" onclick="abrirPaqueteAnterior('${p.id}')">
+        + Registrar un paquete anterior</button>
+      ${(p.billingType!=='Individual' && Number(p.packageTotal||0)>0)
+        ? `<button class="btn secondary" onclick="startNewPackage('${p.id}')">
+             Cerrar este e iniciar uno nuevo</button>` : ''}
+    </div>
+    <p class="hint" style="margin-top:8px">Un paquete anterior sirve para dejar
+      registrado lo que ya pasó —por ejemplo las 5 sesiones de evaluación de agosto—
+      sin tocar el que está en curso.</p>
+  </div>`;
+}
+
+/* ----- Un paquete que ya ocurrió -----------------------------------
+   No reabre nada ni cambia el contador del vigente: entra derecho al
+   historial, con sus propias fechas. Es memoria, no una operación. */
+function abrirPaqueteAnterior(pid, hid){
+  const p = DB.patients.find(x=>x.id===pid);
+  if(!p) return;
+  const h = hid ? (p.paquetesHistorial||[]).find(x=>x.id===hid) : null;
+  const caja = document.getElementById('accesoContent');
+  document.getElementById('accesoModal').classList.add('open');
+  caja.innerHTML = `
+    <h2 style="margin-top:0">${h? 'Editar' : 'Registrar'} un paquete anterior de ${esc(p.name)}</h2>
+    <p class="hint">Lo que ya terminó. No toca el paquete en curso ni el contador
+      de sesiones: queda como antecedente en su historial.</p>
+    <div class="formgrid">
+      <div class="field" style="grid-column:1/-1"><label>¿De qué fue?</label>
+        <input id="pa_concepto" list="pf_conceptosUsados" autocomplete="off"
+               value="${esc((h&&h.concepto)||'')}" placeholder="Ej: Evaluación"></div>
+      <div class="field"><label>Sesiones que tenía</label>
+        <input type="number" id="pa_sesiones" min="1" step="1"
+               value="${h? Number(h.packageTotal||0) : 5}"></div>
+      <div class="field"><label>Sesiones que llegó a usar</label>
+        <input type="number" id="pa_usadas" min="0" step="1"
+               value="${h? Number(h.sessionsUsed||0) : 5}"></div>
+      <div class="field"><label>Precio del paquete completo (S/)</label>
+        <input type="number" id="pa_precio" step="0.01"
+               value="${h? (Number(h.packagePrice||0) || redondear(Number(h.packageTotal||0)*Number(h.pricePerSession||0))) : ''}"
+               placeholder="Ej: 250"></div>
+      <div class="field"><label>Fecha de inicio</label>
+        <input type="date" id="pa_desde" value="${esc((h&&h.iniciadoEl)||'')}"></div>
+      <div class="field"><label>Fecha en que terminó</label>
+        <input type="date" id="pa_hasta" value="${esc((h&&h.cerradoEl)||'')}"></div>
+    </div>
+    <div id="pa_aviso"></div>
+    <button class="btn" style="margin-top:12px"
+            onclick="guardarPaqueteAnterior('${pid}', ${h? `'${hid}'` : 'null'})">
+      ${h? 'Guardar los cambios' : 'Registrar el paquete'}</button>`;
+}
+function editarPaqueteAnterior(pid, hid){ abrirPaqueteAnterior(pid, hid); }
+
+async function guardarPaqueteAnterior(pid, hid){
+  const p = DB.patients.find(x=>x.id===pid);
+  if(!p) return;
+  const aviso = document.getElementById('pa_aviso');
+  const decir = t => { aviso.innerHTML = `<p class="hint alert">${esc(t)}</p>`; };
+
+  const v = id => (document.getElementById(id)||{}).value || '';
+  const sesiones = parseInt(v('pa_sesiones'), 10) || 0;
+  const usadas   = parseInt(v('pa_usadas'), 10) || 0;
+  const precio   = Number(v('pa_precio')) || 0;
+  const desde = v('pa_desde'), hasta = v('pa_hasta');
+
+  if(sesiones < 1) return decir('Pon cuántas sesiones tenía el paquete.');
+  if(usadas > sesiones) return decir('No puede haber usado más sesiones de las que tenía.');
+  if(!hasta) return decir('Pon la fecha en que terminó: es la que lo separa del paquete siguiente.');
+  if(desde && desde > hasta) return decir('La fecha de inicio es posterior a la de término.');
+  // Un paquete anterior que termina después de que empezó el actual dejaría
+  // dos paquetes vivos a la vez y las sesiones no sabrían a cuál ir.
+  if(p.packageStartDate && hasta > p.packageStartDate){
+    return decir(`Ese paquete terminaría después de que empezó el actual `
+      + `(${p.packageStartDate}). Corrige la fecha, o el inicio del paquete en curso.`);
+  }
+
+  const fila = {
+    id: hid || uid(),
+    concepto: v('pa_concepto').trim(),
+    packageTotal: sesiones,
+    sessionsUsed: usadas,
+    packagePrice: precio,
+    pricePerSession: sesiones>0 ? redondear(precio/sesiones) : 0,
+    iniciadoEl: desde,
+    cerradoEl: hasta,
+  };
+
+  p.paquetesHistorial = p.paquetesHistorial || [];
+  p.paquetesHistorial = hid
+    ? p.paquetesHistorial.map(h=>h.id===hid? fila : h)
+    : [...p.paquetesHistorial, fila];
+
+  DB.patients = DB.patients.map(x=>x.id===pid? p : x);
+  const ok = await setColl('patients', DB.patients);
+  if(!ok){ decir('No se pudo guardar. Revisa la conexión.'); return; }
+  document.getElementById('accesoModal').classList.remove('open');
+  showToast(hid? 'Paquete anterior actualizado.' : 'Paquete anterior registrado en su historial.');
+  renderPanel();
+}
+
+async function borrarPaqueteAnterior(pid, hid){
+  const p = DB.patients.find(x=>x.id===pid);
+  if(!p) return;
+  const h = (p.paquetesHistorial||[]).find(x=>x.id===hid);
+  if(!h) return;
+  if(!confirm(`Quitar del historial el paquete de ${h.packageTotal} sesiones`
+    + `${h.concepto? ' de '+h.concepto : ''}.\n\n`
+    + 'Las citas de esa época no se borran; lo que se pierde es el registro '
+    + 'de que hubo ese acuerdo.\n\n¿Lo quito?')) return;
+  p.paquetesHistorial = (p.paquetesHistorial||[]).filter(x=>x.id!==hid);
+  DB.patients = DB.patients.map(x=>x.id===pid? p : x);
+  const ok = await setColl('patients', DB.patients);
+  showToast(ok? 'Quitado del historial.' : 'No se pudo guardar.', ok);
+  renderPanel();
+}
+
+/* ----- Cerrar el que está en curso y abrir el siguiente -------------
+   Antes cerraba y dejaba el nuevo con los mismos números del viejo, con
+   un "después entra a Editar" que nadie hacía: el tercer paquete
+   quedaba con el precio del segundo. Ahora se piden acá. */
 async function startNewPackage(id){
   const p = DB.patients.find(x=>x.id===id);
   if(!p) return;
   const paq = paqueteDe(p);
   const acompanantes = acompanantesDe(id);
-  const quienes = paq && paq.compartido
-    ? `\n\nEl paquete lo comparte con ${acompanantes.map(a=>a.name).join(', ')}: `
-      + `se cierra para los dos y el contador vuelve a cero para los dos.`
-    : '';
-  if(!confirm(`${p.name} ya completó su paquete anterior (${paq? paq.usadas : p.sessionsUsed}/${p.packageTotal} sesiones).${quienes}\n\nEsto guardará ese paquete como historial (queda registrado, no se pierde) y reiniciará el contador de sesiones a 0 para uno nuevo. Después puedes entrar a "Editar" para ajustar el número de sesiones o el precio si cambian.\n\n¿Continuar?`)) return;
-  p.paquetesHistorial = p.paquetesHistorial || [];
-  p.paquetesHistorial.push({id:uid(), packageTotal:p.packageTotal,
-    sessionsUsed: paq? paq.usadas : p.sessionsUsed,
-    pricePerSession:p.pricePerSession, cerradoEl: todayISO()});
+  const caja = document.getElementById('accesoContent');
+  document.getElementById('accesoModal').classList.add('open');
+  caja.innerHTML = `
+    <h2 style="margin-top:0">Nuevo paquete para ${esc(p.name)}</h2>
+    <p>Se cierra el que está en curso —<b>${esc(p.packageConcepto||'sin concepto')},
+      ${paq? paq.usadas : p.sessionsUsed} de ${p.packageTotal} sesiones</b>— y queda
+      guardado en su historial. El contador vuelve a cero para el nuevo.</p>
+    ${acompanantes.length? `<p class="hint alert">Ese paquete lo comparte con
+      ${acompanantes.map(a=>esc(a.name)).join(', ')}: se cierra para todos y el
+      contador vuelve a cero para todos.</p>` : ''}
+    <div class="formgrid" style="margin-top:12px">
+      <div class="field" style="grid-column:1/-1"><label>¿De qué es el nuevo?</label>
+        <input id="np_concepto" list="pf_conceptosUsados" autocomplete="off"
+               value="${esc(p.packageConcepto||'')}" placeholder="Ej: Terapia"></div>
+      <div class="field"><label>Sesiones</label>
+        <input type="number" id="np_sesiones" min="1" step="1" value="${Number(p.packageTotal||0)||10}"></div>
+      <div class="field"><label>Precio del paquete completo (S/)</label>
+        <input type="number" id="np_precio" step="0.01" value="${precioDelPaquete(p)||''}"
+               placeholder="Ej: 450"></div>
+      <div class="field"><label>Desde cuándo cuenta</label>
+        <input type="date" id="np_desde" value="${todayISO()}">
+        <p class="hint" style="margin-top:3px">Las sesiones posteriores a esta fecha
+          cuentan para el paquete nuevo.</p></div>
+    </div>
+    <div id="np_aviso"></div>
+    <button class="btn" style="margin-top:12px" onclick="confirmarNuevoPaquete('${id}')">
+      Cerrar el actual e iniciar el nuevo</button>`;
+}
+
+async function confirmarNuevoPaquete(id){
+  const p = DB.patients.find(x=>x.id===id);
+  if(!p) return;
+  const aviso = document.getElementById('np_aviso');
+  const decir = t => { aviso.innerHTML = `<p class="hint alert">${esc(t)}</p>`; };
+  const v = i => (document.getElementById(i)||{}).value || '';
+  const sesiones = parseInt(v('np_sesiones'), 10) || 0;
+  const precio   = Number(v('np_precio')) || 0;
+  const desde    = v('np_desde') || todayISO();
+  if(sesiones < 1) return decir('Pon cuántas sesiones tiene el paquete nuevo.');
+
+  const paq = paqueteDe(p);
+  const acompanantes = acompanantesDe(id);
+  const cerrado = {
+    id: uid(),
+    concepto: p.packageConcepto || '',
+    packageTotal: Number(p.packageTotal||0),
+    sessionsUsed: paq ? paq.usadas : Number(p.sessionsUsed||0),
+    packagePrice: precioDelPaquete(p),
+    pricePerSession: Number(p.pricePerSession||0),
+    iniciadoEl: p.packageStartDate || '',
+    cerradoEl: desde,
+  };
+  p.paquetesHistorial = [...(p.paquetesHistorial||[]), cerrado];
+  p.packageTotal = sesiones;
+  p.packagePrice = precio;
+  p.pricePerSession = sesiones>0 ? redondear(precio/sesiones) : 0;
+  p.packageConcepto = v('np_concepto').trim();
   p.sessionsUsed = 0;
-  p.packageStartDate = todayISO();
+  p.packageStartDate = desde;
   // El paquete es uno solo: si se cierra, se cierra para todos sus
   // miembros. Si no, el acompañante seguiría contando sesiones del paquete
   // viejo contra el nuevo.
-  const hoy = todayISO();
   acompanantes.forEach(a=>{
     a.paquetesHistorial = a.paquetesHistorial || [];
-    a.paquetesHistorial.push({id:uid(), packageTotal:p.packageTotal,
-      sessionsUsed: sesionesAtendidas(a), pricePerSession:0, cerradoEl: hoy});
+    // El total que se guarda es el del paquete que se CIERRA, no el del
+    // nuevo: a esta altura p.packageTotal ya tiene el número nuevo.
+    a.paquetesHistorial.push({id:uid(), concepto: cerrado.concepto,
+      packageTotal: cerrado.packageTotal,
+      sessionsUsed: sesionesAtendidas(a), pricePerSession:0, packagePrice:0,
+      iniciadoEl: a.packageStartDate || '', cerradoEl: desde});
     a.sessionsUsed = 0;
-    a.packageStartDate = hoy;
+    a.packageStartDate = desde;
   });
   const tocados = new Set([id, ...acompanantes.map(a=>a.id)]);
   DB.patients = DB.patients.map(x=> tocados.has(x.id)
     ? (x.id===id ? p : acompanantes.find(a=>a.id===x.id)) : x);
   const ok = await setColl('patients', DB.patients);
-  showToast(ok? 'Nuevo paquete iniciado. Revisa "Editar" si cambia el número de sesiones o el precio.' : 'No se pudo guardar, reintentando…', ok);
+  if(ok) document.getElementById('accesoModal').classList.remove('open');
+  showToast(ok
+    ? `Paquete nuevo: ${sesionesDeTexto(sesiones)} de ${p.packageConcepto||'terapia'}.`
+    : 'No se pudo guardar, reintentando…', ok);
   renderPanel();
+}
+function sesionesDeTexto(n){
+  return `${n} ${n===1? 'sesión' : 'sesiones'}`;
 }
 async function deletePatient(id){
   if(!confirm('¿Eliminar este paciente? Esta acción no se puede deshacer.')) return;
@@ -4876,7 +5287,7 @@ function filaDeCita(a, grupo){
         <span class="sub">${participantesDeCita(a).every(id=>mismoPaquete(id, a.patientId))
           ? 'Mismo paquete: descuenta 1 sola sesión'
           : 'A cada uno le descuenta de su propia cuenta'}</span>` : ''}</td>
-    <td>${nombreCortoProfesional(professional)}</td>
+    <td>${nombreCortoProfesional(professional)}${chipDeSesion(a)}</td>
     <td>${a.modality}${a.modality==='Presencial'&&a.room? `<br><span class="hint">🏠 ${a.room}</span>`:''}${a.modality==='Virtual'&&a.room? `<br><span class="sub" style="color:var(--alert)">Dice virtual pero tiene ${a.room}. Al profesional se le paga distinto según cuál sea.</span>`:''}${a.modality==='Virtual'? (a.meetingLink? `<br><a href="${a.meetingLink}" target="_blank" rel="noopener" class="hint">🔗 Enlace</a>` : `<br><button class="btn small secondary" onclick="editMeetingLink('${a.id}')">+ Enlace</button>`):''}${a.modality==='Domicilio'? (a.address? `<br><span class="hint">📍 ${a.address}${a.reference?` (${a.reference})`:''}</span>` : `<br><button class="btn small secondary" onclick="editAppt('${a.id}')">+ Dirección</button>`):''}</td>
     <td>${statusChip(a.status)}</td>
     <td style="white-space:nowrap">
@@ -5536,6 +5947,12 @@ function viewCitasHtml(rows, visibles){
         </div>
         <div class="field"><label>Fecha</label><input type="date" id="af_date" value="${todayISO()}" onchange="checkProfAvailabilityHint()"></div>
         <div class="field"><label>Hora</label><input type="time" id="af_time" value="09:00" onchange="checkProfAvailabilityHint()"></div>
+        <div class="field"><label>¿Qué es esta sesión?</label>
+          <select id="af_tipoSesion" onchange="pintarQueEsLaSesion()">
+            ${TIPOS_DE_SESION.map(t=>`<option value="${t.clave}">${t.texto}</option>`).join('')}
+          </select>
+          <p class="hint" style="margin-top:3px" id="af_tipoHint"></p>
+        </div>
         <div class="field"><label>Modalidad</label>
           <select id="af_modality" onchange="toggleMeetingLinkField(); toggleRoomField(); checkProfAvailabilityHint()"><option>Presencial</option><option>Virtual</option><option>Domicilio</option><option>Colegio</option></select>
         </div>
@@ -5592,6 +6009,8 @@ function editAppt(id){
   document.getElementById('af_modality').value = a.modality;
   document.getElementById('af_room').value = a.room||'';
   toggleRoomField();
+  document.getElementById('af_tipoSesion').value = tipoDeSesion(a);
+  pintarQueEsLaSesion();
   document.getElementById('af_status').value = a.status;
   document.getElementById('af_status').disabled = true;
   document.getElementById('af_statusHint').style.display = 'block';
@@ -5753,6 +6172,7 @@ async function saveAppt(){
       meetingLink: document.getElementById('af_meetingLink').value.trim(),
       address: document.getElementById('af_address').value.trim(),
       reference: document.getElementById('af_reference').value.trim(),
+      tipoSesion: document.getElementById('af_tipoSesion').value,
       participantes: [...citaJuntos],
       // el estado no se toca aquí: se mantiene el que ya tenía (se cambia desde la tabla)
     };
@@ -5776,6 +6196,7 @@ async function saveAppt(){
     meetingLink: document.getElementById('af_meetingLink').value.trim(),
     address: document.getElementById('af_address').value.trim(),
     reference: document.getElementById('af_reference').value.trim(),
+    tipoSesion: document.getElementById('af_tipoSesion').value,
     participantes: [...citaJuntos],
     reminderSent: false,
   };
@@ -6240,6 +6661,14 @@ function mostrarAvanceDelPaquete(){
   const p = DB.patients.find(x=>x.id===pid);
   if(!p){ el.innerHTML=''; return; }
 
+  // Qué clase de sesión sería: la primera de alguien es su consulta. Solo
+  // se propone al agendar una nueva; editando una vieja manda lo guardado.
+  const selTipo = document.getElementById('af_tipoSesion');
+  if(selTipo && !editingApptId){
+    selTipo.value = tipoSugeridoPara(pid);
+    pintarQueEsLaSesion();
+  }
+
   // Las que ya atendió más las que ya tiene agendadas por delante: esta cita
   // nueva sería la siguiente de la fila. Si el paquete lo comparte con
   // alguien, cuentan las sesiones de todos: es una sola bolsa.
@@ -6427,6 +6856,7 @@ function viewProfesionales(){
         <button class="btn small" onclick="abrirRolProfesional('${pr.id}')">📋 Enviarle su rol</button>
         <button class="btn small secondary" onclick="showAvailability('${pr.id}')">📅 Ver disponibilidad</button>
         <button class="btn small secondary" onclick="editProf('${pr.id}')">Editar</button>
+        ${botonDeAcceso(pr.id, 'professionals')}
         <button class="btn small secondary" onclick="toggleActive('professionals','${pr.id}')">${pr.active===false?'Habilitar':'Inhabilitar'}</button>
         <button class="btn small danger" onclick="deleteProf('${pr.id}')">Eliminar</button>
       </td>
@@ -7492,6 +7922,479 @@ function exportAttendanceCSV(){
   downloadCSV('asistencia.csv', toCSV(headers, rows));
 }
 
+/* ===================== QUÉ FUE CADA SESIÓN ==========================
+
+   Mirando la agenda de un paciente, nueve renglones iguales no dicen
+   cuál fue la consulta y cuáles la terapia. Importa para leer su
+   historia, para el informe que pide el colegio y para cobrar: una
+   consulta y una sesión de terapia no valen lo mismo.
+
+   El sistema propone: si es su primera cita, Consulta; si ya tuvo
+   consulta y tiene un paquete de evaluación, Evaluación; si no,
+   Terapia. Siempre se puede cambiar.
+*/
+/* Las claves van SIN tildes a propósito: viajan a un ENUM de la base, y
+   el cargador de SQL rompe los acentos de un ENUM (fue un error real:
+   'Evaluación' llegaba como 'Evaluaci├│n' y no entraba ninguna cita).
+   Las tildes las pone la pantalla, que es donde se leen. */
+const TIPOS_DE_SESION = [
+  {clave:'Consulta',    etiqueta:'Consulta',
+   texto:'Consulta (la primera, para ver qué necesita)',
+   explica:'La entrevista inicial. Suele cobrarse aparte del paquete.'},
+  {clave:'Evaluacion',  etiqueta:'Evaluación',
+   texto:'Evaluación (aplicación de pruebas)',
+   explica:'Sesión de aplicación de pruebas o pautas de observación.'},
+  {clave:'Terapia',     etiqueta:'Terapia',
+   texto:'Terapia (sesión de trabajo)',
+   explica:'La sesión de trabajo habitual.'},
+  {clave:'Seguimiento', etiqueta:'Seguimiento',
+   texto:'Seguimiento (control después del alta)',
+   explica:'Control posterior, cuando ya terminó el tratamiento.'},
+  {clave:'Devolucion',  etiqueta:'Devolución',
+   texto:'Devolución de resultados',
+   explica:'Donde se le entregan y explican los resultados a la familia.'},
+  {clave:'Taller', etiqueta:'Taller', texto:'Taller', explica:'Actividad grupal.'},
+  {clave:'Otro',   etiqueta:'Otro',   texto:'Otro',   explica:''},
+];
+
+function tipoDeSesion(a){
+  return (a && a.tipoSesion) || 'Terapia';
+}
+function etiquetaDeSesion(clave){
+  const t = TIPOS_DE_SESION.find(x=>x.clave===clave);
+  return t ? t.etiqueta : 'Terapia';
+}
+/* El color dice de un vistazo qué clase de sesión fue. */
+function chipDeSesion(a){
+  const t = tipoDeSesion(a);
+  if(t === 'Terapia') return '';          // lo habitual no necesita adorno
+  const clase = t==='Consulta'? 'ok'
+              : (t==='Devolucion'||t==='Evaluacion'? 'warn' : 'neutral');
+  return ` <span class="chip ${clase}">${esc(etiquetaDeSesion(t))}</span>`;
+}
+
+/* Lo que el sistema propone para una cita nueva de este paciente. */
+function tipoSugeridoPara(patientId){
+  const previas = DB.appointments.filter(a=>a.patientId===patientId && a.status!=='Cancelada');
+  if(!previas.length) return 'Consulta';
+  const p = DB.patients.find(x=>x.id===patientId);
+  const concepto = ((p||{}).packageConcepto||'').toLowerCase();
+  if(concepto.includes('evalua')) return 'Evaluacion';
+  return 'Terapia';
+}
+
+function pintarQueEsLaSesion(){
+  const sel = document.getElementById('af_tipoSesion');
+  const hint = document.getElementById('af_tipoHint');
+  if(!sel || !hint) return;
+  const t = TIPOS_DE_SESION.find(x=>x.clave===sel.value);
+  hint.textContent = t ? t.explica : '';
+}
+
+/* ===================== EL ACCESO DE CADA UNO ========================
+
+   Antes las cuentas se creaban sueltas, en Datos del centro, escribiendo
+   el nombre otra vez y pensando una clave. Nadie las ligaba a la persona,
+   así que no se podía saber si «rosa.diaz» era la profesional Rosa o
+   alguna otra Rosa, ni quién del equipo tenía acceso y quién no.
+
+   Ahora el acceso se da desde su propia ficha, y la clave con la que
+   entra la primera vez es su DNI. Eso no es un secreto —está en su
+   carné, en su ficha y en la lista de asistencia—, y por eso nace
+   marcada para cambiar: mientras no ponga la suya, la sesión no le sirve
+   para nada más. Lo comprueba el servidor, no la pantalla.
+*/
+
+const ROL_SUGERIDO = {professionals:'profesional', practicantes:'practicante'};
+
+function accesoDe(personaId){
+  return (DB.usuarios||[]).find(u => u.personaId === personaId) || null;
+}
+
+/* El botón que va en la fila de la persona: cambia según tenga cuenta o
+   no, y según si ya puso su propia clave. */
+function botonDeAcceso(personaId, coleccion){
+  if(STORAGE_MODE !== 'api') return '';
+  const u = accesoDe(personaId);
+  if(!u){
+    return `<button class="btn small secondary" onclick="verAcceso('${personaId}','${coleccion}')"
+      title="Crearle usuario y clave para que entre al sistema">🔑 Darle acceso</button>`;
+  }
+  const señal = !u.activo            ? '<span class="chip neutral">acceso desactivado</span>'
+              : u.debeCambiarClave   ? '<span class="chip warn">no cambió su clave</span>'
+                                     : '<span class="chip ok">con acceso</span>';
+  return `<button class="btn small secondary" onclick="verAcceso('${personaId}','${coleccion}')"
+    title="Ver o quitar su acceso">🔑 ${esc(u.usuario)}</button> ${señal}`;
+}
+
+async function verAcceso(personaId, coleccion){
+  const caja = document.getElementById('accesoContent');
+  document.getElementById('accesoModal').classList.add('open');
+  caja.innerHTML = `<p class="hint">Cargando…</p>`;
+
+  // Las cuentas pueden haber cambiado desde que se dibujó la tabla.
+  if(!rolesDelSistema.length){
+    try{
+      const j = await (await fetch(`${API_URL}?accion=roles`, {credentials:'same-origin'})).json();
+      rolesDelSistema = j.ok ? (j.roles||[]) : [];
+    }catch(e){ rolesDelSistema = []; }
+  }
+  DB.usuarios = await getColl('usuarios', []);
+
+  const persona = (DB[coleccion]||[]).find(p => p.id === personaId);
+  if(!persona){ caja.innerHTML = `<p class="hint alert">No encuentro a esa persona.</p>`; return; }
+  caja.innerHTML = cuerpoDeAcceso(persona, coleccion);
+}
+
+function cuerpoDeAcceso(persona, coleccion){
+  const u = accesoDe(persona.id);
+  const nombre = persona.name || (typeof professionalDisplayName === 'function' && coleccion==='professionals'
+    ? professionalDisplayName(persona) : persona.name) || '—';
+
+  if(!u){
+    const dni = String(persona.dni||'').replace(/\D/g,'');
+    if(dni.length !== 8){
+      return `<h2 style="margin-top:0">Acceso de ${esc(nombre)}</h2>
+        <p class="hint alert">Para darle acceso hace falta su <b>DNI</b>: es la clave con
+          la que va a entrar la primera vez. Anótalo en su ficha y vuelve acá.</p>`;
+    }
+    const rol = ROL_SUGERIDO[coleccion] || 'practicante';
+    return `<h2 style="margin-top:0">Darle acceso a ${esc(nombre)}</h2>
+      <p>Va a entrar con su <b>DNI</b> como clave, y el sistema le va a pedir que la
+         cambie antes de poder hacer nada. Tú no vas a conocer la que elija.</p>
+      <div class="field" style="margin-top:14px">
+        <label>¿Qué va a poder hacer?</label>
+        <select id="ac_rol" onchange="pintarQuePuede()">
+          ${rolesDelSistema.map(r=>`<option value="${r.clave}"${r.clave===rol?' selected':''}>${esc(r.nombre)}</option>`).join('')}
+        </select>
+        <p class="hint" id="ac_quePuede" style="margin-top:4px"></p>
+      </div>
+      <div class="card" style="background:var(--surface-alt);margin:14px 0">
+        <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap">
+          <div><span class="hint">Usuario</span><br><b>se arma con su nombre</b></div>
+          <div><span class="hint">Clave la primera vez</span><br><b>${esc(dni)}</b></div>
+        </div>
+      </div>
+      <button class="btn" onclick="crearAcceso('${persona.id}','${coleccion}')">Crear el acceso</button>
+      <div id="ac_resultado"></div>`;
+  }
+
+  const cambio = u.debeCambiarClave
+    ? `<span class="chip warn">Todavía entra con la clave que le diste</span>`
+    : `<span class="chip ok">Ya puso su propia clave${u.claveCambiadaEn? ' el '+String(u.claveCambiadaEn).slice(0,10):''}</span>`;
+
+  return `<h2 style="margin-top:0">Acceso de ${esc(nombre)}</h2>
+    <div class="card" style="background:var(--surface-alt);margin:0 0 14px">
+      <div><span class="hint">Usuario</span><br><b style="font-size:16px">${esc(u.usuario)}</b></div>
+      <p style="margin:10px 0 0">${u.activo
+        ? '<span class="chip ok">Puede entrar</span>'
+        : '<span class="chip neutral">No puede entrar</span>'} ${cambio}</p>
+      <p class="hint" style="margin:8px 0 0">${u.ultimoAcceso
+        ? 'Entró por última vez el '+String(u.ultimoAcceso).slice(0,10)
+        : 'Todavía no ha entrado ni una vez.'}</p>
+    </div>
+
+    <div class="field">
+      <label>¿Qué puede hacer?</label>
+      <select onchange="cambiarRolDesdeAcceso(${u.id}, this.value, '${persona.id}', '${coleccion}')"
+              ${u.soyYo? 'disabled':''}>
+        ${rolesDelSistema.map(r=>`<option value="${r.clave}"${(u.roles||[])[0]===r.clave?' selected':''}>${esc(r.nombre)}</option>`).join('')}
+      </select>
+      <p class="hint" style="margin-top:4px">${ROL_EXPLICADO[(u.roles||[])[0]]||''}</p>
+      ${u.soyYo? '<p class="hint">Es tu propia cuenta: no puedes cambiarte el rol a ti mismo.</p>':''}
+    </div>
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px">
+      <button class="btn secondary" onclick="reiniciarClaveAcceso(${u.id}, '${esc(u.usuario)}', '${persona.id}', '${coleccion}')">
+        Volver a ponerle su DNI de clave</button>
+      ${u.soyYo? '' : `<button class="btn ${u.activo?'danger':''}"
+        onclick="cambiarEstadoAcceso(${u.id}, ${u.activo? 'false':'true'}, '${persona.id}', '${coleccion}')">
+        ${u.activo? 'Quitarle el acceso' : 'Devolverle el acceso'}</button>`}
+    </div>
+    <p class="hint" style="margin-top:10px">Quitarle el acceso no borra nada suyo: sus citas,
+      sus horas y lo que hizo se quedan. Solo deja de poder entrar.</p>
+    <div id="ac_resultado"></div>`;
+}
+
+function pintarQuePuede(){
+  const sel = document.getElementById('ac_rol');
+  const caja = document.getElementById('ac_quePuede');
+  if(sel && caja) caja.textContent = ROL_EXPLICADO[sel.value] || '';
+}
+
+async function crearAcceso(personaId, coleccion){
+  const caja = document.getElementById('ac_resultado');
+  const rol = (document.getElementById('ac_rol')||{}).value || '';
+  caja.innerHTML = `<p class="hint">Creando…</p>`;
+  try{
+    const r = await fetch(`${API_URL}?accion=crear_acceso`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      credentials:'same-origin', body: JSON.stringify({personaId, rol})
+    });
+    const j = await r.json();
+    if(!j.ok){ caja.innerHTML = `<p class="hint alert">${esc(j.error||'No se pudo crear.')}</p>`; return; }
+    DB.usuarios = await getColl('usuarios', []);
+    const persona = (DB[coleccion]||[]).find(p=>p.id===personaId) || {};
+    caja.innerHTML = cajaCredenciales(j, persona);
+    renderPanel();
+  }catch(e){
+    caja.innerHTML = `<p class="hint alert">No se pudo conectar con el servidor.</p>`;
+  }
+}
+
+function mensajeDeCredenciales(j, persona){
+  const centro = (DB.centerInfo||{}).name || 'el Centro Psicológico MAGUSA';
+  return `Hola ${String(j.nombre||'').split(' ')[0]}, te escribo de ${centro}.\n\n`
+    + `Ya tienes tu acceso al sistema:\n\n`
+    + `Usuario: ${j.usuario}\n`
+    + `Clave: ${j.clave} (tu DNI)\n\n`
+    + `${baseDelSistema()}/\n\n`
+    + `Al entrar te va a pedir que cambies la clave por una tuya. `
+    + `Hazlo de una vez: esa que te paso la conocemos varios.`;
+}
+
+function cajaCredenciales(j, persona){
+  const texto = mensajeDeCredenciales(j, persona);
+  const wa   = waLink(persona.phone, texto);
+  const mail = mailLink(persona.email, 'Tu acceso al sistema del centro', texto);
+  return `<div class="card" style="margin-top:14px;border-color:#bcd9c8;background:#f4faf6">
+    <h3 style="margin-top:0">Listo. Estos son sus datos para entrar</h3>
+    <div style="display:flex;gap:18px;flex-wrap:wrap;margin:10px 0">
+      <div><span class="hint">Usuario</span><br><b style="font-size:17px">${esc(j.usuario)}</b></div>
+      <div><span class="hint">Clave</span><br><b style="font-size:17px">${esc(j.clave)}</b>
+        <span class="hint"> (su DNI)</span></div>
+    </div>
+    <p class="hint">Al entrar, el sistema no lo va a dejar hacer nada hasta que cambie
+      esa clave por una suya. Desde ahí la maneja él y tú ya no la conoces.</p>
+    <div style="display:flex;gap:8px;align-items:center;margin:10px 0;flex-wrap:wrap">
+      <input readonly id="ac_texto" value="${esc(texto.replace(/\n/g,' '))}"
+             style="flex:1;min-width:230px;font-size:12px" onclick="this.select()">
+      <button class="btn small secondary" onclick="copyToClipboard(${JSON.stringify(texto).replace(/"/g,'&quot;')}, this)">Copiar el mensaje</button>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      ${wa? `<a class="btn" href="${wa}" target="_blank" rel="noopener">Enviárselo por WhatsApp</a>`:''}
+      ${mail? `<a class="btn secondary" href="${mail}">Enviárselo por correo</a>`:''}
+    </div>
+    ${(!wa && !mail)? `<p class="hint">No tiene teléfono ni correo en su ficha:
+      copia el mensaje y mándaselo por donde prefieras.</p>`:''}
+  </div>`;
+}
+
+async function cambiarRolDesdeAcceso(id, rol, personaId, coleccion){
+  DB.usuarios = (DB.usuarios||[]).map(u=> u.id===id? {...u, roles:[rol]} : u);
+  if(await setColl('usuarios', DB.usuarios)) showToast('Listo, ya puede hacer otras cosas.');
+  await verAcceso(personaId, coleccion);
+  renderPanel();
+}
+
+async function cambiarEstadoAcceso(id, activar, personaId, coleccion){
+  if(!activar && !confirm('¿Quitarle el acceso al sistema?\n\n'
+      + 'No va a poder entrar más. Sus citas, sus horas y todo lo que hizo se quedan.')) return;
+  DB.usuarios = (DB.usuarios||[]).map(u=> u.id===id? {...u, activo:!!activar} : u);
+  if(await setColl('usuarios', DB.usuarios)){
+    showToast(activar? 'Ya puede volver a entrar.' : 'Listo, ya no puede entrar.');
+  }
+  await verAcceso(personaId, coleccion);
+  renderPanel();
+}
+
+/* Cuando alguien olvidó su clave: se le vuelve a poner su DNI y el
+   sistema le exige cambiarla otra vez al entrar. Así la clave que Luis
+   conoce solo sirve para una entrada, la de recuperar la cuenta. */
+async function reiniciarClaveAcceso(id, usuario, personaId, coleccion){
+  const persona = (DB[coleccion]||[]).find(p=>p.id===personaId) || {};
+  const dni = String(persona.dni||'').replace(/\D/g,'');
+  if(dni.length !== 8){ alert('No tiene DNI en su ficha: no hay con qué reiniciarle la clave.'); return; }
+  if(!confirm(`Volver a ponerle su DNI (${dni}) como clave de «${usuario}».\n\n`
+    + 'La clave que tenga ahora deja de servir, y al entrar el sistema le va a '
+    + 'pedir que ponga una nueva.')) return;
+  try{
+    const r = await fetch(`${API_URL}?accion=restablecer_clave`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      credentials:'same-origin', body: JSON.stringify({id, clave: dni})
+    });
+    const j = await r.json();
+    if(!j.ok){ alert(j.error||'No se pudo.'); return; }
+    DB.usuarios = await getColl('usuarios', []);
+    showToast(`Su clave volvió a ser su DNI. Dísela a ${persona.name||usuario}.`);
+    await verAcceso(personaId, coleccion);
+    renderPanel();
+  }catch(e){ alert('No se pudo conectar con el servidor.'); }
+}
+
+/* ===================== INVITAR A UN PRACTICANTE =====================
+
+   Antes Luis copiaba a mano doce campos por persona desde un WhatsApp:
+   nombre, DNI, teléfono, correo, universidad, las fechas de prácticas y
+   el horario de la semana. Es el trabajo de otro, hecho por él, y con el
+   DNI mal tipeado cada tanto.
+
+   Acá se manda un enlace y lo llena el practicante. El enlace vence,
+   sirve una sola vez y queda anotado si lo abrió — que es lo que uno
+   quiere saber cuando lo mandó hace tres días y no llega nada.
+
+   Registrarse NO da acceso al sistema: deja una ficha, nada más. La
+   cuenta con usuario y clave es otra cosa y se da desde Accesos.
+*/
+
+let ultimaInvitacion = null;
+
+function urlDeRegistro(token){
+  return `${baseDelSistema()}/practicantes/registro.html?t=${token}`;
+}
+
+const ESTADO_INVITACION = {
+  enviada:    {texto:'Enviada, sin abrir', clase:'warn'},
+  abierta:    {texto:'La abrió, no la llenó', clase:'warn'},
+  registrado: {texto:'Registrado', clase:'ok'},
+  vencida:    {texto:'Venció', clase:'neutral'},
+  anulada:    {texto:'Anulada', clase:'neutral'},
+};
+
+/* Las que todavía esperan respuesta. Son las que importan: una vencida o
+   una ya usada no pide nada de nadie. */
+function invitacionesPendientes(){
+  return (DB.practicanteInvitaciones||[])
+    .filter(i => i.estado==='enviada' || i.estado==='abierta');
+}
+
+async function generarInvitacion(){
+  const caja = document.getElementById('pi_resultado');
+  const dias = Math.max(1, Math.min(90,
+    parseInt((document.getElementById('pi_dias')||{}).value, 10) || 7));
+
+  caja.innerHTML = `<p class="hint">Preparando…</p>`;
+  try{
+    const r = await fetch(`${API_URL}?accion=invitar_practicante`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      credentials:'same-origin',
+      body: JSON.stringify({
+        referencia: (document.getElementById('pi_referencia').value||'').trim(),
+        telefono:   (document.getElementById('pi_telefono').value||'').trim(),
+        email:      (document.getElementById('pi_email').value||'').trim(),
+        mensaje:    (document.getElementById('pi_mensaje').value||'').trim(),
+        dias
+      })
+    });
+    const j = await r.json();
+    if(!j.ok){ caja.innerHTML = `<p class="hint alert">${esc(j.error||'No se pudo generar.')}</p>`; return; }
+
+    ultimaInvitacion = {
+      url:        urlDeRegistro(j.token),
+      referencia: (document.getElementById('pi_referencia').value||'').trim(),
+      telefono:   (document.getElementById('pi_telefono').value||'').trim(),
+      email:      (document.getElementById('pi_email').value||'').trim(),
+      dias:       j.dias
+    };
+    caja.innerHTML = cajaInvitacion(ultimaInvitacion);
+    ['pi_referencia','pi_telefono','pi_email','pi_mensaje'].forEach(id=>{
+      const c = document.getElementById(id); if(c) c.value = '';
+    });
+    DB.practicanteInvitaciones = await getColl('practicanteInvitaciones', []);
+    pintarInvitaciones();
+  }catch(e){
+    caja.innerHTML = `<p class="hint alert">No se pudo conectar con el servidor.</p>`;
+  }
+}
+
+function mensajeDeInvitacion(info){
+  const centro = (DB.centerInfo||{}).name || 'el Centro Psicológico MAGUSA';
+  const hola = info.referencia ? `Hola ${info.referencia.split(' ')[0]}` : 'Hola';
+  return `${hola}, te escribo de ${centro}.\n\n`
+    + `Para registrarte como practicante, entra a este enlace y llena tus datos. `
+    + `Son unos minutos y se hace una sola vez:\n\n`
+    + `${info.url}\n\n`
+    + `El enlace es personal y está disponible `
+    + `${info.dias===1?'hasta mañana':`por ${info.dias} días`}. `
+    + `Cualquier duda, escríbeme por aquí.`;
+}
+
+function cajaInvitacion(info){
+  const texto = mensajeDeInvitacion(info);
+  const wa    = waLink(info.telefono, texto);
+  const mail  = mailLink(info.email, 'Registro de practicante', texto);
+  const sirve = enlaceSirveAfuera();
+
+  return `<div class="card" style="margin-top:14px;border-color:${sirve?'#bcd9c8':'#e7c3b6'};
+              background:${sirve?'#f4faf6':'#fdf3ef'}">
+    <h3 style="margin-top:0">Enlace listo${info.referencia? ' para '+esc(info.referencia):''}</h3>
+    ${sirve? '' : `<p class="hint alert" style="margin-top:0">Ojo: este enlace lleva
+      <b>localhost</b> y no le va a abrir en su celular. Para que le llegue bien,
+      anota la dirección de esta computadora en <b>Datos del centro</b>.</p>`}
+    <p class="hint">Se muestra una sola vez. Si lo pierdes, genera otra invitación.</p>
+    <div style="display:flex;gap:8px;align-items:center;margin:10px 0;flex-wrap:wrap">
+      <input readonly value="${esc(info.url)}" id="pi_url"
+             style="flex:1;min-width:240px;font-size:12px" onclick="this.select()">
+      <button class="btn small secondary"
+              onclick="copyToClipboard(document.getElementById('pi_url').value, this)">Copiar</button>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      ${wa? `<a class="btn" href="${wa}" target="_blank" rel="noopener">Enviar por WhatsApp</a>`:''}
+      ${mail? `<a class="btn secondary" href="${mail}">Enviar por correo</a>`:''}
+    </div>
+    ${(!wa && !mail)? `<p class="hint">No pusiste teléfono ni correo: copia el enlace
+      y mándalo por donde prefieras.</p>`:''}
+  </div>`;
+}
+
+function pintarInvitaciones(){
+  const caja = document.getElementById('pi_lista');
+  if(caja) caja.innerHTML = bloqueInvitaciones();
+}
+
+function bloqueInvitaciones(){
+  const lista = DB.practicanteInvitaciones||[];
+  if(!lista.length) return '';
+
+  const filas = lista.map(i=>{
+    const e = ESTADO_INVITACION[i.estado] || ESTADO_INVITACION.enviada;
+    const quien = i.practicante || i.referencia || '—';
+    const contacto = [i.telefono, i.email].filter(Boolean).join(' · ');
+    const cuando = i.usadaEn ? `Se registró el ${String(i.usadaEn).slice(0,10)}`
+                 : i.abiertaEn ? `La abrió el ${String(i.abiertaEn).slice(0,10)}`
+                 : i.expiraEn ? `Vence el ${String(i.expiraEn).slice(0,10)}` : '';
+    const puedeAnular = i.estado==='enviada' || i.estado==='abierta';
+    return `<tr>
+      <td><b>${esc(quien)}</b>${contacto? `<span class="sub">${esc(contacto)}</span>`:''}</td>
+      <td><span class="chip ${e.clase}">${e.texto}</span></td>
+      <td>${esc(cuando)}${i.aperturas>1? `<span class="sub">la abrió ${i.aperturas} veces</span>`:''}</td>
+      <td style="white-space:nowrap">${puedeAnular
+        ? `<button class="btn small danger" onclick="anularInvitacion('${i.id}')">Anular</button>`
+        : ''}</td>
+    </tr>`;
+  }).join('');
+
+  const pend = invitacionesPendientes().length;
+  return `<div class="card">
+    <h3 style="margin-top:0">Invitaciones enviadas
+      ${pend? `<span class="chip warn" style="font-weight:400">${pend} sin llenar</span>`:''}</h3>
+    <div class="tablewrap"><table>
+      <tr><th>A quién</th><th>En qué quedó</th><th>Cuándo</th><th></th></tr>
+      ${filas}
+    </table></div>
+    <p class="hint">Una invitación anulada deja de abrir al instante. Anular no borra
+      la ficha de quien ya se registró.</p>
+  </div>`;
+}
+
+async function anularInvitacion(id){
+  if(!confirm('¿Anular esta invitación?\n\nEl enlace deja de abrir de inmediato. '
+            + 'Si ya se lo mandaste, va a tener que pedirte otro.')) return;
+  try{
+    const r = await fetch(`${API_URL}?accion=anular_invitacion`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      credentials:'same-origin', body: JSON.stringify({id})
+    });
+    const j = await r.json();
+    if(!j.ok){ showToast(j.error||'No se pudo anular.', false); return; }
+    DB.practicanteInvitaciones = await getColl('practicanteInvitaciones', []);
+    pintarInvitaciones();
+    showToast('Invitación anulada: ese enlace ya no abre.');
+  }catch(e){
+    showToast('No se pudo conectar con el servidor.', false);
+  }
+}
+
 function viewPracticantes(){
   const filteredPract = filterByActive(DB.practicantes, 'practicantes');
   const rows = filteredPract.map(pt=>{
@@ -7511,6 +8414,7 @@ function viewPracticantes(){
       <button class="btn small secondary" onclick="menuDocsPracticante('${pt.id}')"
         title="La ficha de desempeño y la encuesta que pide la universidad">📄 Formatos</button>
       <button class="btn small secondary" onclick="editPract('${pt.id}')">Editar / asignar tarea</button>
+      ${botonDeAcceso(pt.id, 'practicantes')}
       <button class="btn small secondary" onclick="toggleActive('practicantes','${pt.id}')">${pt.active===false?'Habilitar':'Inhabilitar'}</button>
       <button class="btn small danger" onclick="deletePract('${pt.id}')">Eliminar</button>
     </td>
@@ -7520,9 +8424,41 @@ function viewPracticantes(){
       <div style="display:flex;gap:8px;align-items:center">
         ${activeFilterOptions((window._activeFilter&&window._activeFilter['practicantes'])||'activos')}
         <button class="btn secondary" onclick="exportPracticantesCSV()">Exportar CSV</button>
+        ${STORAGE_MODE==='api'? `<button class="btn secondary" onclick="toggleForm('invitarForm')"
+            title="Le mandas un enlace y él llena sus propios datos">✉️ Invitar a que se registre</button>`:''}
         <button class="btn" onclick="toggleForm('practForm')">+ Nuevo practicante</button>
       </div>
     </div>
+
+    ${STORAGE_MODE==='api'? `
+    <div class="formpanel" id="invitarForm">
+      <h3 style="margin-top:0">Que llene sus datos él mismo</h3>
+      <p class="hint" style="margin-top:-4px">Le mandas un enlace por WhatsApp o correo.
+        Él pone su nombre, DNI, universidad, fechas y los días que viene, y eso entra
+        derecho a su ficha. Se usa <b>una sola vez</b> y después el enlace se cierra solo.</p>
+      <div class="formgrid">
+        <div class="field"><label>¿A quién se la mandas? <span class="hint">(para reconocerla)</span></label>
+          <input id="pi_referencia" placeholder="Ej: Andrea, la de la San Marcos"></div>
+        <div class="field"><label>Teléfono <span class="hint">(para el botón de WhatsApp)</span></label>
+          <input id="pi_telefono" placeholder="999 999 999"></div>
+        <div class="field"><label>Correo <span class="hint">(opcional)</span></label>
+          <input type="email" id="pi_email" placeholder="correo@ejemplo.com"></div>
+        <div class="field"><label>¿Cuántos días puede abrirlo?</label>
+          <input type="number" id="pi_dias" value="7" min="1" max="90" step="1" style="width:92px"></div>
+        <div class="field" style="grid-column:1/-1">
+          <label>Un mensaje para él <span class="hint">(opcional, lo va a leer al abrir)</span></label>
+          <input id="pi_mensaje" placeholder="Ej: Andrea, llena esto antes del lunes para dejarte todo listo."></div>
+      </div>
+      <p class="hint">Registrarse <b>no</b> le da acceso al sistema: solo deja su ficha.
+        Si además quieres que entre al panel, la cuenta se le da aparte, en
+        <b>Datos del centro → Quién entra al sistema</b>, y ahí mismo se le quita
+        cuando termine sus prácticas.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+        <button class="btn" onclick="generarInvitacion()">Generar el enlace</button>
+        <button class="btn secondary" onclick="toggleForm('invitarForm')">Cancelar</button>
+      </div>
+      <div id="pi_resultado"></div>
+    </div>` : ''}
     <div style="position:relative;max-width:440px;margin-bottom:16px">
       <input type="text" id="practSearchInput" placeholder="🔍 Buscar practicante por nombre o DNI (para asignar tareas)…" oninput="searchPracticantes(this.value)" autocomplete="off">
       <div id="practSearchResults" class="searchDropdown" style="display:none"></div>
@@ -7586,6 +8522,7 @@ function viewPracticantes(){
       ${DB.practicantes.length? `<table><tr><th>Practicante</th><th>Horario</th><th>Contacto</th><th>Producción</th><th>Cumple</th><th></th></tr>${rows}</table>`
       : `<div class="empty">Aún no hay practicantes registrados.</div>`}
     </div>
+    <div id="pi_lista">${STORAGE_MODE==='api'? bloqueInvitaciones() : ''}</div>
     <input type="file" id="practFileInput" style="display:none" onchange="handlePractFileUpload(event)">
   `;
 }
@@ -19052,6 +19989,13 @@ async function attemptLogin(){
         return;
       }
       errEl.style.display = 'none';
+      // Si entró con la clave que le dio el centro, no pasa de acá: el
+      // servidor le rechaza cualquier otra cosa hasta que ponga la suya,
+      // así que mostrarle el panel sería mostrarle una pantalla rota.
+      if(d.usuario && d.usuario.debeCambiarClave){
+        pedirClavePropia(d.usuario);
+        return;
+      }
       bootApp();
     }catch(e){
       errEl.textContent = 'No se pudo contactar con el servidor.';
@@ -19074,6 +20018,70 @@ async function attemptLogin(){
     errEl.style.display = 'block';
   }
 }
+/* Entró con la clave que le dio el centro. No ve el panel hasta que ponga
+   la suya: el servidor le va a rechazar todo lo demás igual, así que
+   dejarlo pasar sería enseñarle una pantalla que no funciona.
+
+   El usuario también lo puede cambiar de una vez: el que se le armó con
+   su nombre puede no gustarle, y este es el único momento en que lo tiene
+   delante. */
+function pedirClavePropia(usuario){
+  const caja = document.querySelector('#loginScreen .loginCard');
+  if(!caja){ bootApp(); return; }
+  caja.innerHTML = `
+    <img id="loginLogo" src="${CENTER_LOGO_DATA_URL||''}" alt="">
+    <h2>Elige tu clave</h2>
+    <p class="hint" style="margin:0 0 18px;text-align:left">
+      Hola ${esc(String(usuario.nombre_completo||'').split(' ')[0]||'')}. Entraste con la clave
+      que te dio el centro, y esa la conoce más de una persona.
+      Pon una tuya para seguir.</p>
+    <div class="field" style="text-align:left"><label for="cc_actual">La clave con la que acabas de entrar</label>
+      <input type="password" id="cc_actual" autocomplete="current-password"></div>
+    <div class="field" style="text-align:left"><label for="cc_usuario">Tu usuario</label>
+      <input id="cc_usuario" value="${esc(usuario.usuario||'')}" autocomplete="username">
+      <p class="hint" style="margin-top:3px">Lo puedes dejar así o cambiarlo.</p></div>
+    <div class="field" style="text-align:left"><label for="cc_nueva">Tu clave nueva</label>
+      <input type="password" id="cc_nueva" autocomplete="new-password"
+             placeholder="al menos 8 caracteres"></div>
+    <div class="field" style="text-align:left"><label for="cc_nueva2">Escríbela otra vez</label>
+      <input type="password" id="cc_nueva2" autocomplete="new-password"
+             onkeydown="if(event.key==='Enter') guardarClavePropia()"></div>
+    <p id="cc_error" class="hint" style="color:var(--alert);display:none;margin-top:4px" role="alert"></p>
+    <button class="btn" style="width:100%;margin-top:14px" onclick="guardarClavePropia()">Guardar y entrar</button>
+    <p class="hint" style="margin-top:12px">Desde ahora la clave la manejas tú. Si la olvidas,
+      pídele al centro que te la reinicie: te la vuelven a poner como tu DNI y eliges otra.</p>`;
+  document.getElementById('cc_actual').focus();
+}
+
+async function guardarClavePropia(){
+  const err = document.getElementById('cc_error');
+  const decir = t => { err.textContent = t; err.style.display = 'block'; };
+  const actual  = document.getElementById('cc_actual').value;
+  const usuario = document.getElementById('cc_usuario').value.trim();
+  const nueva   = document.getElementById('cc_nueva').value;
+  const nueva2  = document.getElementById('cc_nueva2').value;
+
+  if(!actual){ decir('Escribe la clave con la que acabas de entrar.'); return; }
+  if(nueva.length < 8){ decir('Tu clave nueva necesita al menos 8 caracteres.'); return; }
+  if(nueva !== nueva2){ decir('Las dos claves nuevas no coinciden.'); return; }
+  if(nueva === actual){ decir('Tiene que ser distinta de la que te dieron.'); return; }
+
+  try{
+    const r = await fetch(`${API_URL}?accion=credenciales`, {
+      method:'POST', credentials:'same-origin',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({claveActual: actual, usuario, claveNueva: nueva}),
+    });
+    const d = await r.json();
+    if(!r.ok || !d.ok){ decir(d.error || 'No se pudo cambiar.'); return; }
+    err.style.display = 'none';
+    showToast('Listo. Desde ahora entras con tu propia clave.');
+    bootApp();
+  }catch(e){
+    decir('No se pudo contactar con el servidor.');
+  }
+}
+
 async function logout(){
   if(STORAGE_MODE==='api'){
     try{ await fetch(`${API_URL}?accion=logout`, {method:'POST', credentials:'same-origin'}); }catch(e){}
@@ -19121,6 +20129,12 @@ async function logout(){
       document.getElementById('loginLogo').src = CENTER_LOGO_DATA_URL;
       document.getElementById('loginTitle').textContent = DB.centerInfo.name || 'Centro Psicológico';
       document.getElementById('loginScreen').style.display = 'flex';
+    } else if(sesion.usuario && sesion.usuario.debeCambiarClave){
+      // Recargó la página con la sesión abierta pero sin haber puesto su
+      // clave. El servidor le sigue rechazando todo, así que se le vuelve
+      // a pedir en vez de dejarlo entrar a un panel que no responde.
+      document.getElementById('loginScreen').style.display = 'flex';
+      pedirClavePropia(sesion.usuario);
     } else {
       bootApp();
     }
