@@ -50,6 +50,16 @@ final class Corrector
         if (($definicion['tipo'] ?? '') === 'cotejo') {
             return self::corregirCotejo($definicion, $respuestas, $contestados, $sinResponder);
         }
+        // Verdadero/Falso contra una clave, repartido en subescalas, con
+        // una escala de mentiras que puede invalidar todo (Coopersmith).
+        if (($definicion['tipo'] ?? '') === 'clave') {
+            return self::corregirClave($definicion, $respuestas, $contestados, $sinResponder);
+        }
+        // Varias escalas que se suman directo, algunas con ítems
+        // invertidos, y un baremo por sexo y curso (STAIC).
+        if (($definicion['tipo'] ?? '') === 'escalas_directas') {
+            return self::corregirEscalasDirectas($definicion, $respuestas, $contestados, $sinResponder);
+        }
 
         $escalas = [];
         foreach ($definicion['escalas'] as $e) {
@@ -170,6 +180,213 @@ final class Corrector
      * que "no lo hace", y eso es falso: no se sabe. Acá el porcentaje se
      * calcula solo sobre lo que de verdad se observó.
      */
+    /**
+     * Verdadero/Falso contra una clave, repartido en subescalas.
+     *
+     * Es la forma del Inventario de Autoestima de Coopersmith y de varias
+     * pruebas de su época: cada ítem acierta o no contra una clave fija,
+     * los aciertos se agrupan por área, y el total se multiplica para
+     * llevarlo a una escala de 0 a 100.
+     *
+     * Lo que distingue a esta familia es la **escala de validez** —en
+     * Coopersmith, la de mentiras—. No mide autoestima: mide si el chico
+     * contestó de verdad. Si pasa del corte, el inventario **no se
+     * interpreta**, y eso tiene que decirse arriba y sin rodeos, no como
+     * una nota al pie que se lee después de haber sacado conclusiones.
+     *
+     * Por eso acá la validez no es un adorno: cuando se pasa, las escalas
+     * siguen calculándose —el profesional tiene derecho a verlas— pero
+     * cada una viene marcada como no interpretable.
+     */
+    private static function corregirClave(
+        array $definicion, array $respuestas, int $contestados, array $sinResponder
+    ): array {
+        $clave = $definicion['clave'] ?? [];          // n => 'V' | 'F'
+        $factor = (int) ($definicion['factor'] ?? 1); // Coopersmith: ×2
+
+        // Primero la escala de validez: de ella depende cómo se lee todo.
+        $validez = [];
+        $invalida = false;
+        $vDef = $definicion['validez'] ?? null;
+        if (is_array($vDef)) {
+            $pdV = 0;
+            foreach ($vDef['items'] as $n) {
+                if (isset($respuestas[$n]) && (string) $respuestas[$n] === (string) ($clave[$n] ?? '')) {
+                    $pdV++;
+                }
+            }
+            $invalida = $pdV > (int) $vDef['maximo'];
+            $validez[] = [
+                'codigo' => (string) ($vDef['codigo'] ?? 'validez'),
+                'nombre' => (string) ($vDef['nombre'] ?? 'Escala de validez'),
+                'pd'     => $pdV,
+                'maximo' => count($vDef['items']),
+                'corte'  => (int) $vDef['maximo'],
+                'alerta' => $invalida,
+                'texto'  => $invalida
+                    ? (string) ($vDef['siSupera'] ?? 'El inventario no es interpretable.')
+                    : (string) ($vDef['siPasa'] ?? 'Respondió de forma confiable.'),
+            ];
+        }
+
+        $escalas = [];
+        $totalPd = 0;
+        foreach ($definicion['subescalas'] ?? [] as $sub) {
+            $pd = 0;
+            foreach ($sub['items'] as $n) {
+                if (isset($respuestas[$n]) && (string) $respuestas[$n] === (string) ($clave[$n] ?? '')) {
+                    $pd++;
+                }
+            }
+            $totalPd += $pd;
+            $maximo = count($sub['items']);
+            $escalas[] = [
+                'codigo'         => (string) $sub['codigo'],
+                'nombre'         => (string) $sub['nombre'],
+                'grupo'          => 'subescala',
+                'pd'             => $pd,
+                'tb'             => $pd * $factor,
+                'percentil'      => null,
+                'maximo'         => $maximo * $factor,
+                // Cuánto de esa área se afirma, para poder compararlas
+                // entre sí aunque tengan distinto número de ítems.
+                'porcentaje'     => $maximo > 0 ? (int) round($pd * 100 / $maximo) : 0,
+                'interpretacion' => $invalida
+                    ? 'No interpretable: la escala de validez quedó fuera de rango.'
+                    : self::rotulo($definicion['cortes']['subescala'] ?? [],
+                                   $maximo > 0 ? (int) round($pd * 100 / $maximo) : 0),
+            ];
+        }
+
+        $total = $totalPd * $factor;
+        $escalas[] = [
+            'codigo'         => 'total',
+            'nombre'         => (string) ($definicion['nombreEscala'] ?? 'Autoestima total'),
+            'grupo'          => 'total',
+            'pd'             => $totalPd,
+            'tb'             => $total,
+            'percentil'      => null,
+            'maximo'         => (int) ($definicion['maximoTotal'] ?? ($totalPd * $factor)),
+            'porcentaje'     => null,
+            'interpretacion' => $invalida
+                ? 'No interpretable: la escala de validez quedó fuera de rango.'
+                : self::rotulo($definicion['cortes']['total'] ?? [], $total),
+        ];
+
+        $alertas = [];
+        if ($invalida) {
+            $alertas[] = ['item' => 0, 'respuesta' => null,
+                          'texto' => (string) ($vDef['siSupera'] ?? 'Inventario no interpretable.')];
+        }
+        if ($sinResponder !== []) {
+            $alertas[] = ['item' => 0, 'respuesta' => null,
+                'texto' => 'Quedaron ' . count($sinResponder) . ' ítem(s) sin responder: '
+                         . 'los puntajes salen más bajos de lo que corresponde.'];
+        }
+
+        return [
+            'corregidoEn'   => date('c'),
+            'nItems'        => (int) $definicion['nItems'],
+            'contestados'   => $contestados,
+            'sinResponder'  => $sinResponder,
+            'completo'      => $sinResponder === [],
+            'validez'       => $validez,
+            'escalas'       => $escalas,
+            'alertas'       => $alertas,
+            'revisarAntes'  => ($definicion['revisarAntes'] ?? false) === true,
+        ];
+    }
+
+    /**
+     * Escalas que se suman directo, con ítems invertidos y baremo propio.
+     *
+     * Es la forma del STAIC: dos escalas de 20 ítems que se responden de
+     * 1 a 3. En Ansiedad-Rasgo todos los ítems apuntan a la ansiedad y se
+     * suman tal cual. En Ansiedad-Estado la mitad están redactados al
+     * revés —en "Me siento seguro", responder *Mucho* significa MENOS
+     * ansiedad— y esos se invierten antes de sumar.
+     *
+     * El baremo depende del sexo y del curso, así que el percentil solo
+     * sale si esos dos datos están. Si faltan, se devuelve la puntuación
+     * directa y se dice que falta el dato: una puntuación directa sin
+     * percentil sigue sirviendo para comparar al niño consigo mismo en
+     * dos momentos, que es la mitad de para lo que se usa esta prueba.
+     *
+     * Y una cosa más: el resultado lleva escrito qué ítems se invirtieron.
+     * Una clave de corrección mal puesta no se nota mirando el puntaje —
+     * se nota años después. Si está a la vista, se nota el primer día.
+     */
+    private static function corregirEscalasDirectas(
+        array $definicion, array $respuestas, int $contestados, array $sinResponder
+    ): array {
+        $min = (int) ($definicion['valorMinimo'] ?? 1);
+        $max = $min + count($definicion['opciones'] ?? []) - 1;
+        $sexo  = strtoupper((string) ($definicion['_sexo'] ?? ''));
+        $grupo = (string) ($definicion['_grupo'] ?? '');
+
+        $escalas = [];
+        $alertas = [];
+        foreach ($definicion['escalas'] ?? [] as $e) {
+            $inversos = array_flip($e['inversos'] ?? []);
+            $pd = 0;
+            $faltan = 0;
+            foreach ($e['items'] as $n) {
+                $r = $respuestas[$n] ?? null;
+                if ($r === null || !is_numeric($r)) { $faltan++; continue; }
+                $v = (int) $r;
+                $pd += isset($inversos[$n]) ? ($min + $max - $v) : $v;
+            }
+
+            // Baremo: tabla de centiles por sexo y curso.
+            $centil = null;
+            $tabla = $e['baremos'][$grupo][$sexo] ?? null;
+            if (is_array($tabla)) {
+                foreach ($tabla as $fila) {
+                    if ($pd >= (int) $fila['desde'] && $pd <= (int) $fila['hasta']) {
+                        $centil = (int) $fila['centil'];
+                        break;
+                    }
+                }
+            }
+
+            $escalas[] = [
+                'codigo'         => (string) $e['codigo'],
+                'nombre'         => (string) $e['nombre'],
+                'grupo'          => 'escala',
+                'pd'             => $pd,
+                'tb'             => $pd,
+                'percentil'      => $centil,
+                'maximo'         => count($e['items']) * $max,
+                'minimo'         => count($e['items']) * $min,
+                'invertidos'     => array_values($e['inversos'] ?? []),
+                'interpretacion' => $centil === null
+                    ? ($tabla === null
+                        ? 'Falta el sexo o el curso del paciente para poder dar el percentil.'
+                        : 'Puntuación fuera de la tabla de baremos.')
+                    : self::rotulo($definicion['cortes']['centil'] ?? [], $centil),
+            ];
+
+            if ($faltan > 0) {
+                $alertas[] = ['item' => 0, 'respuesta' => null,
+                    'texto' => sprintf('En %s quedaron %d ítem(s) sin responder. '
+                        . 'El manual admite prorratear hasta dos; con más, el resultado '
+                        . 'de esa escala no se debe usar.', $e['nombre'], $faltan)];
+            }
+        }
+
+        return [
+            'corregidoEn'   => date('c'),
+            'nItems'        => (int) $definicion['nItems'],
+            'contestados'   => $contestados,
+            'sinResponder'  => $sinResponder,
+            'completo'      => $sinResponder === [],
+            'validez'       => [],
+            'escalas'       => $escalas,
+            'alertas'       => $alertas,
+            'revisarAntes'  => ($definicion['revisarAntes'] ?? false) === true,
+        ];
+    }
+
     private static function corregirCotejo(
         array $definicion, array $respuestas, int $contestados, array $sinResponder
     ): array {

@@ -1454,10 +1454,384 @@ function backupIsUrgent(){
   const d = daysSinceBackup();
   return backupMeta.changes >= BACKUP_AVISO_CAMBIOS || (d!==null && d >= BACKUP_AVISO_DIAS);
 }
+/* ----- El estado de las copias de verdad ---------------------------
+
+   El botón de arriba contaba los cambios hechos desde la última vez que
+   alguien descargó el JSON a mano. Con base de datos eso ya no es el
+   respaldo: el respaldo lo hace una tarea de Windows todas las noches,
+   que vuelca la base entera y sube una copia cifrada a OneDrive.
+
+   El problema es que cuando esa tarea no corre —la PC apagada, el
+   portátil en batería, un error— no pasa nada visible. El registro queda
+   en un .txt que nadie abre. Así se llega a nueve días sin copia
+   creyendo que todo va bien. Esto lo pone en la barra, donde sí se ve.
+*/
+let estadoDeCopias = null;
+
+async function cargarEstadoDeCopias(){
+  if(STORAGE_MODE !== 'api') return;
+  try{
+    const r = await fetch('api/respaldo.php?accion=estado', {credentials:'same-origin'});
+    const j = await r.json();
+    estadoDeCopias = j.ok ? j : null;
+  }catch(e){ estadoDeCopias = null; }
+  renderBackupIndicator();
+  // Alertas dibuja el aviso grande: si ya está abierta, hay que repintarla.
+  if(currentTab === 'alertas') renderPanel();
+}
+
+/* Cuántos días hace de la última copia que SALIÓ de esta computadora.
+   La local y la de la nube son dos cosas: un disco malogrado se lleva
+   la base y las copias locales de una sola vez. */
+function diasSinCopiaFuera(){
+  if(!estadoDeCopias || !estadoDeCopias.fuera) return null;
+  return estadoDeCopias.fuera.dias;
+}
+
+function pintarEstadoDeCopias(btn, txt){
+  const e = estadoDeCopias;
+  btn.classList.remove('ok','warn','alert');
+
+  if(!e || !e.local){
+    btn.classList.add('alert');
+    txt.textContent = 'Sin copias de la base';
+    btn.title = 'No encuentro ninguna copia de la base. Corre respaldo\\respaldar.ps1 '
+      + '(clic derecho → Ejecutar con PowerShell) y avísame si da error.';
+    return;
+  }
+
+  const dL = e.local.dias;
+  const dF = diasSinCopiaFuera();
+  const fuera = dF === null
+    ? 'Ninguna copia ha salido de esta computadora.'
+    : (dF === 0 ? 'La de hoy ya está en OneDrive.'
+                : `La última que salió a OneDrive es de hace ${dF} ${dF===1?'día':'días'}.`);
+
+  // Lo que importa no es la copia local sino la que está afuera: si se
+  // malogra el disco, las locales se van con la base.
+  const peor = dF === null ? 99 : Math.max(dL, dF);
+  btn.classList.add(peor >= 3 ? 'alert' : (peor >= 1 ? 'warn' : 'ok'));
+
+  txt.textContent = peor === 0 ? 'Copia de hoy'
+    : (peor === 1 ? 'Copia de ayer'
+                  : `Copia de hace ${peor} días`);
+
+  btn.title = `Última copia: ${e.local.cuando} (${e.local.mb} MB). `
+    + `Se guardan ${e.local.cuantas} en esta PC.\n${fuera}\n`
+    + (e.tieneClave ? '' : 'OJO: falta respaldo\\clave.txt, así que nada sale cifrado ni sube.\n')
+    + (e.fallas && e.fallas.length ? `\nÚltimos avisos:\n${e.fallas.join('\n')}\n` : '')
+    + '\nClic para descargar además una copia en JSON.';
+}
+
+/* ===================== CÓMO VA SU PAQUETE ===========================
+
+   El centro sabe que a un paciente le queda una sesión, pero él no. Y la
+   psicóloga tampoco, hasta que abre la ficha. Las dos conversaciones que
+   salen de ahí —"¿renovamos?" y "cierro con un informe"— llegan tarde si
+   nadie se entera hasta que el paciente se presenta y ya no le quedan.
+
+   Esto lo pone en Alertas, que es donde Luis mira lo que hay que enviar,
+   con el mensaje ya escrito para el paciente y para la profesional.
+
+   Reglas que se respetan acá:
+     · a un menor se le escribe al apoderado, nombrando al paciente;
+     · del dinero se nombra SOLO el saldo pendiente, nunca el total;
+     · en un paquete compartido la deuda es del titular y se dice una
+       sola vez: al acompañante no se le reclama lo que no debe.
+*/
+
+/* Los pacientes con paquete, ordenados por los que están por terminar:
+   son los que hay que atender primero. */
+function avanceDeLosPaquetes(){
+  return DB.patients
+    .filter(p => p.active !== false && p.billingType !== 'Individual' && !esAcompanante(p))
+    .map(p => {
+      const paq = paqueteDe(p);
+      if(!paq || paq.total <= 0) return null;
+      return {paciente: p, paq, restantes: paq.restantes};
+    })
+    .filter(Boolean)
+    .sort((a,b) => a.restantes - b.restantes || (a.paciente.name||'').localeCompare(b.paciente.name||''));
+}
+
+function estadoDelPaquete(d){
+  if(d.restantes === 0) return {texto:'Paquete completo', clase:'alert'};
+  if(d.restantes === 1) return {texto:'Le queda la última', clase:'warn'};
+  if(d.restantes === 2) return {texto:'Le quedan 2', clase:'warn'};
+  return {texto:`Le quedan ${d.restantes}`, clase:'ok'};
+}
+
+/* El mensaje para el paciente (o para su apoderado, si es menor). */
+function mensajeDeAvancePaciente(patientId){
+  const p = DB.patients.find(x=>x.id===patientId);
+  if(!p) return '';
+  const paq = paqueteDe(p);
+  if(!paq || paq.total <= 0) return '';
+  const {greetName, mentionName} = greetingFor(p);
+  const deQuien = mentionName ? `el paquete de ${mentionName}` : 'su paquete';
+  const concepto = (paq.titular.packageConcepto || '').trim();
+
+  let t = `Hola ${greetName}, le escribo del ${nombreDelCentro()}.\n\n`
+        + `Le cuento cómo va ${deQuien}:\n\n`
+        + `Paquete de ${paq.total} sesiones${concepto? ` de ${concepto.toLowerCase()}` : ''}\n`
+        + `Lleva ${paq.usadas} atendida${paq.usadas===1?'':'s'}`;
+
+  if(paq.restantes > 0){
+    t += ` y le queda${paq.restantes===1?'':'n'} ${paq.restantes}.\n`;
+  } else {
+    t += ` — ya completó las ${paq.total}.\n`;
+  }
+
+  // Si lo comparten, decir con quién: si no, los números no le cuadran.
+  if(paq.compartido){
+    t += `\nEs el mismo paquete de ${paq.miembros.map(m=>nombreDePila(m.name)).join(' y ')}, `
+       + `así que las sesiones de los dos descuentan de las mismas ${paq.total}.\n`;
+  }
+
+  const ultima = ultimaSesionDe(p);
+  if(ultima) t += `\nSu última sesión fue el ${fechaEnPalabras(ultima)}.\n`;
+
+  if(paq.restantes === 0){
+    t += `\nCuando guste coordinamos la continuidad: podemos abrir un paquete nuevo `
+       + `o conversar el cierre del proceso.\n`;
+  } else if(paq.restantes === 1){
+    t += `\nCon la próxima sesión completa el paquete. Ahí vemos juntos cómo seguir.\n`;
+  }
+
+  // Del dinero, solo lo que falta. El total ya se habló cuando se contrató.
+  const bal = patientBalance(paq.titular);
+  const saldo = Math.max(0, Number(bal.saldo || 0));
+  if(saldo > 0){
+    t += `\nQueda un saldo pendiente de ${fmtMoney(saldo)} del paquete.\n`;
+  } else {
+    t += `\nEl paquete está pagado por completo.\n`;
+  }
+  return t + `\nCualquier duda, escríbame por aquí. ¡Gracias!`;
+}
+
+/* La fecha de su última sesión atendida, para que el mensaje ubique. */
+function ultimaSesionDe(p){
+  const desde = inicioDelPaqueteVigente(p);
+  const suyas = DB.appointments
+    .filter(a => a.status === 'Completada'
+      && (a.patientId === p.id || participantesDeCita(a).includes(p.id))
+      && (!desde || a.date > desde))
+    .map(a => a.date).sort();
+  return suyas.length ? suyas[suyas.length - 1] : '';
+}
+
+/* El mensaje para la profesional: todos sus paquetes de un vistazo. */
+function mensajeDeAvanceProfesional(profId){
+  const pr = DB.professionals.find(x=>x.id===profId);
+  const lista = avanceDeLosPaquetes().filter(d =>
+    !profId || d.paq.miembros.some(m => m.professionalId === profId));
+  const saludo = pr ? `Hola ${nombreDePila(pr.name)}, ` : 'Hola, ';
+
+  if(!lista.length){
+    return saludo + `por ahora no hay pacientes con paquete en curso.`;
+  }
+
+  let t = saludo + `este es el avance de los paquetes en el ${nombreDelCentro()}:\n`;
+
+  const porCerrar = lista.filter(d => d.restantes <= 1);
+  const enCurso   = lista.filter(d => d.restantes > 1);
+
+  if(porCerrar.length){
+    t += `\nPARA CONVERSAR CON LA FAMILIA\n`;
+    porCerrar.forEach(d => {
+      t += `  ${(d.paciente.name||'').toUpperCase()} — ${d.paq.usadas} de ${d.paq.total}`;
+      t += d.restantes === 0
+        ? ` · completó el paquete, toca informe de cierre o abrirle otro\n`
+        : ` · le queda la última\n`;
+    });
+  }
+  if(enCurso.length){
+    t += `\nEN CURSO\n`;
+    enCurso.forEach(d => {
+      t += `  ${d.paciente.name} — ${d.paq.usadas} de ${d.paq.total}, le quedan ${d.restantes}\n`;
+    });
+  }
+  return t + `\nSon ${lista.length} paquete(s) activo(s).`;
+}
+
+function bloqueAvanceDePaquetes(){
+  const lista = avanceDeLosPaquetes();
+  if(!lista.length) return '';
+
+  const filas = lista.map(d => {
+    const p = d.paciente;
+    const e = estadoDelPaquete(d);
+    const pct = Math.min(100, Math.round(d.paq.usadas * 100 / d.paq.total));
+    const destinos = reminderRecipients(p).filter(r => r.notify);
+    const conTel = destinos.filter(r => r.phone);
+    return `<tr>
+      <td><span class="nom" title="${esc(p.name)}"><b>${esc(p.name)}</b></span>
+        ${p.isMinor? `<span class="sub">apoderado: ${esc(p.guardianName||'—')}</span>`:''}
+        ${d.paq.compartido? `<span class="sub">comparte con ${
+          esc(d.paq.miembros.filter(m=>m.id!==p.id).map(m=>nombreDePila(m.name)).join(', '))}</span>`:''}</td>
+      <td style="white-space:nowrap"><b>${d.paq.usadas} de ${d.paq.total}</b>
+        <div class="barwrap" style="margin-top:4px;width:110px">
+          <div class="bar ${pct<100?'':'alertbar'}" style="width:${pct}%"></div></div></td>
+      <td><span class="chip ${e.clase}">${e.texto}</span></td>
+      <td style="white-space:nowrap">
+        <button class="btn small ${d.restantes<=1?'':'secondary'}"
+                onclick="enviarAvanceAPaciente('${p.id}')">💬 Avisarle cómo va</button>
+        <button class="btn small secondary" title="La lista de sesiones con fecha y hora"
+                onclick="enviarSesionesDelPaquete('${p.id}','vigente')">📋 Sesiones</button>
+        <span class="sub">${conTel.length
+          ? `a ${esc(conTel.map(r=>r.name.split(' ')[0]).join(', '))}`
+          : 'sin teléfono registrado'}</span>
+      </td>
+    </tr>`;
+  }).join('');
+
+  const porCerrar = lista.filter(d => d.restantes <= 1).length;
+  const profs = DB.professionals.filter(pr => pr.active !== false);
+
+  return `<div class="card">
+    <h3 style="margin-top:0">Cómo va cada paquete
+      ${porCerrar? `<span class="chip warn" style="font-weight:400">${porCerrar} por terminar</span>`:''}</h3>
+    <p class="hint" style="margin-top:-4px">El centro sabe cuántas sesiones le quedan a cada
+      uno; el paciente no. Desde acá se le avisa, con el mensaje ya escrito.</p>
+    <div class="tablewrap"><table>
+      <tr><th>Paciente</th><th>Avance</th><th>Estado</th><th>Avisar</th></tr>
+      ${filas}
+    </table></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center">
+      <span class="hint">Mandarle el resumen completo a:</span>
+      ${profs.map(pr=>`<button class="btn small secondary"
+          onclick="enviarAvanceAProfesional('${pr.id}')">📋 ${esc(nombreDePila(pr.name))}</button>`).join('')}
+    </div>
+  </div>`;
+}
+
+function enviarAvanceAPaciente(patientId){
+  const p = DB.patients.find(x=>x.id===patientId);
+  if(!p) return;
+  const texto = mensajeDeAvancePaciente(patientId);
+  abrirEnvioDeTexto(`Cómo va el paquete de ${p.name}`, texto,
+    reminderRecipients(p).filter(r => r.notify),
+    `Avance del paquete — ${p.name}`);
+}
+
+function enviarAvanceAProfesional(profId){
+  const pr = DB.professionals.find(x=>x.id===profId);
+  if(!pr) return;
+  const texto = mensajeDeAvanceProfesional(profId);
+  abrirEnvioDeTexto(`Avance de los paquetes — para ${nombreDePila(pr.name)}`, texto,
+    [{name: pr.name, role:'Profesional', phone: pr.phone||'', email: pr.email||''}],
+    'Avance de los paquetes');
+}
+
+/* Una ventana para revisar el mensaje antes de mandarlo, y mandarlo por
+   donde se pueda. Se revisa primero porque lo que sale de acá lo lee una
+   familia: un número mal puesto se arregla antes, no después. */
+function abrirEnvioDeTexto(titulo, texto, destinos, asunto){
+  const caja = document.getElementById('accesoContent');
+  document.getElementById('accesoModal').classList.add('open');
+  const id = 'env_' + Math.random().toString(36).slice(2, 8);
+  caja.innerHTML = `
+    <h2 style="margin-top:0">${esc(titulo)}</h2>
+    <p class="hint">Revísalo antes de enviarlo: puedes cambiar lo que quieras.</p>
+    <textarea id="${id}" rows="16" style="width:100%;font-size:13px">${esc(texto)}</textarea>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+      <button class="btn small secondary"
+              onclick="copyToClipboard(document.getElementById('${id}').value, this)">Copiar</button>
+    </div>
+    <div style="margin-top:12px">
+      ${destinos.length
+        ? destinos.map(r=>`<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;
+             border-top:1px solid var(--border-soft);padding:8px 0">
+            <span style="flex:1;min-width:140px"><b>${esc(r.name)}</b>
+              <span class="sub">${esc(r.role||'')}</span></span>
+            ${r.phone? `<button class="btn small" onclick="abrirWaCon('${id}','${esc(r.phone)}')">WhatsApp</button>`
+                     : '<span class="hint">sin teléfono</span>'}
+            ${r.email? `<button class="btn small secondary" onclick="abrirCorreoCon('${id}','${esc(r.email)}','${esc(asunto)}')">Correo</button>`
+                     : ''}
+          </div>`).join('')
+        : `<p class="hint alert">No tiene teléfono ni correo registrado: copia el mensaje
+             y mándalo por donde prefieras.</p>`}
+    </div>`;
+}
+
+function abrirWaCon(idCaja, telefono){
+  const t = (document.getElementById(idCaja)||{}).value || '';
+  const url = waLink(telefono, t);
+  if(!url){ alert('Ese teléfono no parece válido. Revísalo en su ficha.'); return; }
+  window.open(url, '_blank', 'noopener');
+}
+function abrirCorreoCon(idCaja, correo, asunto){
+  const t = (document.getElementById(idCaja)||{}).value || '';
+  const url = mailLink(correo, asunto, t);
+  if(!url){ alert('Ese correo no parece válido. Revísalo en su ficha.'); return; }
+  window.location.href = url;
+}
+
+/* El aviso grande, en Alertas, que es donde se mira lo que hay que
+   atender. Solo aparece cuando hay algo que atender. */
+function avisoDeCopias(){
+  if(STORAGE_MODE !== 'api') return '';
+  const e = estadoDeCopias;
+  if(!e) return '';
+
+  const rojo = `border-color:#e7c3b6;background:#fdf3ef`;
+  const caja = (titulo, cuerpo) => `<div class="card" style="${rojo}">
+    <h3 style="margin-top:0;color:var(--alert)">${titulo}</h3>${cuerpo}</div>`;
+
+  if(!e.local){
+    return caja('No hay ninguna copia de la base',
+      `<p>Si esta computadora falla hoy, se pierden los pacientes, las citas y los pagos:
+         el programa está en GitHub, los datos no están en ningún lado.</p>
+       <p class="hint">Abre la carpeta <b>respaldo</b>, clic derecho en
+         <b>respaldar.ps1</b> → Ejecutar con PowerShell, y dime qué sale.</p>`);
+  }
+  if(!e.tieneClave){
+    return caja('Las copias no están saliendo de esta computadora',
+      `<p>Falta el archivo <b>respaldo\\clave.txt</b> con la contraseña de cifrado.
+         Sin él no se cifra, y sin cifrar no se sube: una copia sin cifrar en la nube
+         son historias clínicas legibles para quien entre a esa cuenta.</p>
+       <p class="hint">Crea ese archivo con una contraseña de 12 caracteres o más
+         y <b>anótala en papel</b>: sin ella las copias cifradas no se pueden abrir.</p>`);
+  }
+
+  // Lo que el propio respaldo anotó que le pasó la última vez.
+  if(e.problema){
+    return caja('El último respaldo no terminó bien',
+      `<p>${esc(e.problema)}</p>
+       <p class="hint">Fue el ${esc(e.corrioEn||'—')}. Para intentarlo ahora:
+         carpeta <b>respaldo</b> → clic derecho en <b>respaldar.ps1</b> →
+         Ejecutar con PowerShell.</p>`);
+  }
+
+  const dF = diasSinCopiaFuera();
+  if(dF === null){
+    return caja('Las copias están, pero ninguna salió de esta computadora',
+      `<p>Todas viven en el mismo disco que la base que respaldan. Un disco malogrado,
+         un robo o un virus que cifre el equipo se lleva el original y las copias de
+         una sola vez.</p>
+       <p class="hint">Revisa que OneDrive esté instalado y con sesión iniciada.</p>`);
+  }
+  if(dF >= 3){
+    return caja(`Hace ${dF} días que no sale una copia de esta computadora`,
+      `<p>La última que llegó a OneDrive es del <b>${esc(e.fuera.cuando)}</b>.
+         Todo lo que registraste desde entonces existe solo en este disco.</p>
+       ${e.fallas && e.fallas.length
+         ? `<p class="hint">Lo último que anotó el respaldo:<br>
+             ${e.fallas.map(f=>esc(f)).join('<br>')}</p>` : ''}
+       <p class="hint">Suele ser que la computadora estuvo apagada a las 9:30 de la noche.
+         Para forzarla ahora: carpeta <b>respaldo</b> → clic derecho en
+         <b>respaldar.ps1</b> → Ejecutar con PowerShell.</p>`);
+  }
+  return '';
+}
+
 function renderBackupIndicator(){
   const btn = document.getElementById('backupBtn');
   const txt = document.getElementById('backupBtnText');
   if(!btn || !txt) return;
+  // Con base de datos, el respaldo que vale es el de la tarea de la
+  // noche, no el JSON que alguien recuerde descargar.
+  if(STORAGE_MODE === 'api'){ pintarEstadoDeCopias(btn, txt); renderBackupBanner(); return; }
   const n = backupMeta.changes;
   const d = daysSinceBackup();
   btn.classList.remove('ok','warn','alert');
@@ -1780,6 +2154,23 @@ const DEFAULT_EXPENSES = [
 ];
 
 async function loadAll(){
+  // El panel personal tiene su propia base, donde no existen pacientes ni
+  // citas: pedirlos daría error en cada una. Carga solo lo suyo.
+  if(SOLO_PERSONAL){
+    DB.personalEntries = await getColl('personalEntries', []);
+    DB.personalEntries = DB.personalEntries.map(normalizarPersonal);
+    DB.categoriasPersonales = await getColl('categoriasPersonales', {});
+    DB.personalConfig  = await getColl('personalConfig', {pinEnabled:false, pin:''});
+    DB.prestamos       = await getColl('prestamos', []);
+    DB.recaudaciones   = await getColl('recaudaciones', []);
+    DB.juntas          = await getColl('juntas', []);
+    // La cascada del mes empieza por el consultorio, que acá no existe:
+    // esas listas quedan vacías y el resumen muestra solo lo personal.
+    DB.payments = []; DB.expenses = []; DB.products = [];
+    DB.patients = []; DB.appointments = []; DB.professionals = [];
+    currentTab = 'personal';
+    return;
+  }
   DB.patients = await getColl('patients', []);
   // Migración: acompañantes que antes eran texto libre ("Nombre - DNI" por línea) se convierten
   // en una lista estructurada con nombre/DNI/teléfono/correo, para poder contactarlos también.
@@ -2078,6 +2469,42 @@ function icon(name){
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]||''}</svg>`;
 }
 
+/* ===================== DOS PANELES, UN SOLO PROGRAMA ================
+
+   Las cuentas de Luis —sus gastos de casa, sus préstamos, sus juntas— no
+   tienen por qué vivir en el sistema del centro. El día que entre una
+   recepcionista o la psicóloga, eso no debería estar ahí ni siquiera
+   detrás de una clave: debería no estar.
+
+   Así que hay dos instalaciones, cada una con SU PROPIA BASE DE DATOS:
+
+     /prototipodepacientes/   el centro      (base centro_psicologico)
+     /misfinanzas/            lo suyo        (base finanzas_personales)
+
+   El programa es el mismo archivo para no mantener dos copias que se
+   van separando con el tiempo. Lo que cambia es de dónde se abre: esta
+   constante lo decide, y a partir de ahí cada panel muestra lo suyo y
+   solo pide a su base las colecciones que le tocan.
+*/
+const SOLO_PERSONAL = /\/misfinanzas(\/|$)/i.test(location.pathname);
+
+const TABS_PERSONALES = ['personal'];
+
+/* El logo del panel personal. El del centro no pinta nada en una pantalla
+   de prestamos y gastos de casa: la cabecera decia "Centro Psicologico
+   MAGUSA" encima de las cuentas de su casa. */
+const LOGO_FINANZAS = 'data:image/png;base64,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';
+const NOMBRE_PERSONAL = 'Mis finanzas';
+
+/* El logo y el nombre que le tocan a este panel. */
+function logoDeEstePanel(){
+  return SOLO_PERSONAL ? LOGO_FINANZAS : CENTER_LOGO_DATA_URL;
+}
+function nombreDeEstePanel(){
+  return SOLO_PERSONAL ? NOMBRE_PERSONAL
+                       : ((DB.centerInfo && DB.centerInfo.name) || 'Centro Psicológico');
+}
+
 const TABS = [
   {id:'resumen', label:'Resumen', group:'Hoy'},
   {id:'alertas', label:'Alertas', group:'Hoy'},
@@ -2118,11 +2545,21 @@ function pendingAlertCount(){
   }catch(e){ return 0; }
 }
 
+/* Las pestañas que le tocan a este panel. En el del centro no aparece
+   "Cuentas personales" —sus datos ya no están en esa base, así que la
+   pestaña solo mostraría una pantalla vacía— y en el personal no
+   aparece nada del centro. */
+function tabsDeEstePanel(){
+  return SOLO_PERSONAL
+    ? TABS.filter(t => TABS_PERSONALES.includes(t.id))
+    : TABS.filter(t => !TABS_PERSONALES.includes(t.id));
+}
+
 function renderTabs(){
   const nav = document.getElementById('tabs');
   const alertas = pendingAlertCount();
   const groups = [];
-  TABS.forEach(t=>{
+  tabsDeEstePanel().forEach(t=>{
     let g = groups.find(x=>x.label===t.group);
     if(!g){ g = {label:t.group, items:[]}; groups.push(g); }
     g.items.push(t);
@@ -4865,6 +5302,106 @@ function paquetesDe(p){
   return lista.sort((a,b)=>String(a.desde||'').localeCompare(String(b.desde||'')));
 }
 
+/* ----- Las sesiones que de verdad se dieron en un paquete -----------
+
+   Cuando un paquete se cierra, el paciente ha pagado por diez sesiones y
+   el centro dice que se dieron diez. "Dice" no alcanza: la familia tiene
+   derecho a ver cuáles fueron, con su fecha y su hora, y la profesional
+   a tener el mismo papel por si alguien pregunta después.
+
+   Cada paquete se separa por sus cierres: las sesiones de un paquete son
+   las que caen entre el cierre del anterior y el suyo. Se usa el mismo
+   criterio que el contador (`inicioDelPaqueteVigente`), para que el
+   detalle no contradiga al número que se muestra en pantalla.
+*/
+function sesionesDelPaquete(p, paqueteId){
+  if(!p) return [];
+  const cortes = (p.paquetesHistorial||[])
+    .map(h=>h.cerradoEl).filter(Boolean).sort();
+
+  let desde = '', hasta = '';
+  if(paqueteId === 'vigente'){
+    desde = cortes.length ? cortes[cortes.length-1] : '';
+  } else {
+    const h = (p.paquetesHistorial||[]).find(x=>x.id===paqueteId);
+    if(!h) return [];
+    hasta = h.cerradoEl || '';
+    const i = cortes.indexOf(hasta);
+    desde = i > 0 ? cortes[i-1] : '';
+  }
+
+  return DB.appointments
+    .filter(a => a.status === 'Completada'
+      && (a.patientId === p.id || participantesDeCita(a).includes(p.id))
+      && (!desde || a.date > desde)
+      && (!hasta || a.date <= hasta))
+    .sort((a,b) => (a.date+a.time).localeCompare(b.date+b.time));
+}
+
+/* El detalle para mandar: nombre, fechas y horas. Nada más.
+   Nada de diagnósticos ni de lo que se trabajó: eso es historia clínica
+   y no viaja por WhatsApp. */
+function mensajeDeSesionesDelPaquete(patientId, paqueteId){
+  const p = DB.patients.find(x=>x.id===patientId);
+  if(!p) return '';
+  const q = paquetesDe(p).find(x=>x.id===paqueteId);
+  const sesiones = sesionesDelPaquete(p, paqueteId);
+
+  let t = `Detalle de sesiones — ${(p.name||'').toUpperCase()}\n`;
+  t += `${nombreDelCentro()}\n\n`;
+  if(q){
+    t += `Paquete de ${q.sesiones} sesiones`
+       + (q.concepto ? ` de ${q.concepto.toLowerCase()}` : '') + '\n';
+
+    // El rango sale de las sesiones que se están listando, no de la fecha
+    // en que se registró el paquete en el sistema. Son dos cosas: hubo un
+    // caso donde se registró el 12 y la primera sesión fue el 6, así
+    // que el encabezado decía "desde el 12" encima de una lista que
+    // empezaba el 6. Un papel que se manda para dar transparencia no
+    // puede contradecirse a sí mismo en la segunda línea.
+    const primera = (sesiones[0] || {}).date || '';
+    const ultima  = (sesiones[sesiones.length - 1] || {}).date || '';
+    if(primera){
+      t += primera === ultima
+        ? `Sesión del ${fechaEnPalabras(primera)}\n`
+        : `Del ${fechaEnPalabras(primera)} al ${fechaEnPalabras(ultima)}\n`;
+    } else if(q.desde){
+      // Sin sesiones todavía: ahí sí vale la fecha en que se contrató.
+      t += `Contratado el ${fechaEnPalabras(q.desde)}\n`;
+    }
+    t += '\n';
+  }
+
+  if(!sesiones.length){
+    return t + 'Todavía no hay sesiones atendidas en este paquete.';
+  }
+
+  sesiones.forEach((a, i) => {
+    t += `${String(i+1).padStart(2, ' ')}. ${fechaEnPalabras(a.date)} · ${a.time}\n`;
+  });
+
+  t += `\nTotal: ${sesiones.length} sesión(es) atendida(s)`;
+  if(q && q.sesiones) t += ` de ${q.sesiones}`;
+  return t + '.';
+}
+
+function enviarSesionesDelPaquete(patientId, paqueteId){
+  const p = DB.patients.find(x=>x.id===patientId);
+  if(!p) return;
+  const texto = mensajeDeSesionesDelPaquete(patientId, paqueteId);
+
+  // A la familia y a la profesional que lo atendió: los dos deben poder
+  // mirar la misma lista.
+  const destinos = reminderRecipients(p).filter(r => r.notify);
+  const pr = DB.professionals.find(x=>x.id===p.professionalId);
+  if(pr && (pr.phone || pr.email)){
+    destinos.push({name: pr.name, role: 'Profesional',
+                   phone: pr.phone||'', email: pr.email||''});
+  }
+  abrirEnvioDeTexto(`Sesiones atendidas — ${p.name}`, texto, destinos,
+                    `Detalle de sesiones — ${p.name}`);
+}
+
 /* Qué le pasó a este paciente, paquete por paquete. Sin esto el historial
    son números sin sentido: cinco sesiones, diez sesiones, ¿de qué? */
 function bloqueDePaquetes(p){
@@ -4884,7 +5421,10 @@ function bloqueDePaquetes(p){
     <td style="white-space:nowrap">${q.precio>0? fmtMoney(q.precio) : '—'}</td>
     <td style="white-space:nowrap">${esc(q.desde||'—')}${
       q.hasta? ` <span class="hint">a ${esc(q.hasta)}</span>` : ''}</td>
-    <td style="white-space:nowrap">${q.vigente
+    <td style="white-space:nowrap">
+      <button class="btn small" title="Mandar la lista de sesiones con su fecha y hora"
+              onclick="enviarSesionesDelPaquete('${p.id}','${q.id}')">📋 Enviar sesiones</button>
+      ${q.vigente
       ? `<button class="btn small secondary" onclick="editPatient('${p.id}')">Editar</button>`
       : `<button class="btn small secondary" onclick="editarPaqueteAnterior('${p.id}','${q.id}')">Editar</button>
          <button class="btn small danger" onclick="borrarPaqueteAnterior('${p.id}','${q.id}')">Quitar</button>`}</td>
@@ -5101,7 +5641,25 @@ async function confirmarNuevoPaquete(id){
   showToast(ok
     ? `Paquete nuevo: ${sesionesDeTexto(sesiones)} de ${p.packageConcepto||'terapia'}.`
     : 'No se pudo guardar, reintentando…', ok);
+
+  // El paquete se suele abrir desde la agenda, en el momento en que uno
+  // se da cuenta de que al paciente ya no le quedan sesiones. Repintar
+  // la pantalla ahí borraría la cita a medio agendar, así que se deja
+  // puesto el paciente y se vuelve a calcular el aviso.
+  const seguiaAgendando = currentTab === 'citas';
   renderPanel();
+  if(seguiaAgendando){
+    setTimeout(()=>{
+      const form = document.getElementById('apptForm');
+      if(form && !form.classList.contains('open')) toggleForm('apptForm');
+      const sel = document.getElementById('af_patient');
+      if(sel){
+        sel.value = id;
+        if(typeof pintarPacienteDeCita === 'function') pintarPacienteDeCita();
+        fillApptFromPatient();
+      }
+    }, 60);
+  }
 }
 function sesionesDeTexto(n){
   return `${n} ${n===1? 'sesión' : 'sesiones'}`;
@@ -6697,9 +7255,18 @@ function mostrarAvanceDelPaquete(){
     ? `<br>Usadas: ${paq.detalle.map(d=>`${nombreDePila(d.paciente.name)} ${d.usadas}`).join(' · ')}.`
     : '';
   if(numero > total){
+    // Antes decía "desde la ficha" y ahí terminaba: había que acordarse de
+    // dónde, salir de la agenda y volver. El botón abre el paquete nuevo
+    // sin moverse de acá, que es donde uno se da cuenta de que hace falta.
     el.innerHTML = `<p class="hint" style="color:var(--alert)"><b>⚠ El paquete de ${total} sesiones ya está completo</b>`
       + ` (${atendidas} atendidas, ${agendadas} agendadas).${desglose}<br>`
-      + `Esta cita quedaría fuera del paquete: corresponde iniciar uno nuevo desde la ficha, o cobrarla aparte.</p>`;
+      + `Esta cita quedaría fuera del paquete: o le abres uno nuevo, o la cobras aparte.</p>`
+      + `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 4px">
+           <button type="button" class="btn small" onclick="startNewPackage('${
+             (paq && paq.titular ? paq.titular.id : p.id)}')">+ Abrirle un paquete nuevo</button>
+           <button type="button" class="btn small secondary"
+                   onclick="enviarAvanceAPaciente('${p.id}')">💬 Avisarle que terminó</button>
+         </div>`;
     return;
   }
   const esUltima = numero === total;
@@ -10997,6 +11564,8 @@ function viewAlertas(){
 
   return `
     <div class="sectiontitle"><h2>Alertas y avisos</h2></div>
+    ${avisoDeCopias()}
+    ${bloqueAvanceDePaquetes()}
     <p class="hint">Estos botones abren WhatsApp o tu correo con el mensaje ya redactado — solo confirmas el envío. No hay envío 100% automático sin intervención humana porque este panel no tiene un servidor propio de mensajería; esta es la forma más práctica de lograrlo sin contratar un servicio externo de pago. <b>El número/correo al que se enviará aparece escrito en el propio botón</b> — verifícalo antes de hacer clic; si dice "Tel. inválido" o no aparece botón, revisa el dato en la ficha del paciente o profesional.</p>
 
     <h3>Recordatorios de citas próximas (48 horas)</h3>
@@ -15768,7 +16337,7 @@ function bloquearPersonal(){
    un cronograma de cuotas. Dos formas de pago:
      'cuotas'  cuota fija que amortiza capital e intereses (sistema francés)
      'interes' solo se paga el interés cada mes; el capital queda entero
-               hasta que se cancela. Así son los de SS IRMA y ramiro.
+               hasta que se cancela. Así son varios de los que tiene.
    La "liquidación" de una cuota es lo que costaría cancelar todo ese mes:
    el capital que queda más el interés de ese periodo.                      */
 function prestamosLista(){ return Array.isArray(DB.prestamos)? DB.prestamos : []; }
@@ -19289,9 +19858,42 @@ function filaMaterial(m){
         </select></td>
     <td style="white-space:nowrap">
       ${m.url? `<a class="btn small secondary" href="${m.url}" target="_blank" rel="noopener">Abrir</a>`:''}
+      <button class="btn small danger" onclick="eliminarMaterial('${m.id}')"
+              title="Sacarlo de la biblioteca y borrarlo del disco">Quitar</button>
       ${m.veces>0? `<span class="hint" style="margin-left:6px">entregado ${m.veces}×</span>`:''}
     </td>
   </tr>`;
+}
+
+/* Sacar un material de la biblioteca.
+   Hacía falta porque la importación detecta el archivo repetido por su
+   contenido, pero no el mismo material vuelto a guardar con otro nombre:
+   ese entra como nuevo y sin esto no había forma de sacarlo. */
+async function eliminarMaterial(id){
+  const m = materialPorId(id);
+  if(!m) return;
+  const veces = Number(m.veces||0);
+  if(!confirm(`Quitar «${m.titulo}» de la biblioteca.\n\n`
+    + (veces > 0
+        ? `OJO: se le entregó ${veces} ${veces===1?'vez':'veces'} a familias. `
+          + `Los enlaces que ya mandaste dejarán de abrir ese archivo.\n\n`
+        : '')
+    + 'El archivo se borra del disco y no se puede deshacer.\n\n¿Lo quito?')) return;
+  try{
+    const r = await fetch(`${API_URL}?accion=eliminar_material`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      credentials:'same-origin', body: JSON.stringify({id})
+    });
+    const j = await r.json();
+    if(!j.ok){ showToast(j.error||'No se pudo quitar.', false); return; }
+    DB.materiales = await getColl('materiales', []);
+    DB.materialEntregas = await getColl('materialEntregas', []);
+    materialesElegidos.delete(id);
+    renderPanel();
+    showToast(`«${m.titulo}» salió de la biblioteca.`);
+  }catch(e){
+    showToast('No se pudo conectar con el servidor.', false);
+  }
 }
 
 function marcarMaterial(id, on){
@@ -19914,10 +20516,11 @@ async function bootApp(){
   avisarSiNoEsBaseDeDatos();
   await loadAll();
   renderTabs();
-  document.getElementById('headerLogo').src = CENTER_LOGO_DATA_URL;
-  document.getElementById('headerTitle').textContent = DB.centerInfo.name || 'Centro Psicológico';
+  document.getElementById('headerLogo').src = logoDeEstePanel();
+  document.getElementById('headerTitle').textContent = nombreDeEstePanel();
   renderPanel();
   updateSaveStatusUI();
+  cargarEstadoDeCopias();   // en segundo plano: no detiene la pantalla
   document.getElementById('logoutLinkWrap').style.display = (DB.authConfig && DB.authConfig.enabled) ? 'inline' : 'none';
   document.getElementById('loginScreen').style.display = 'none';
   document.getElementById('app').style.display = 'block';
@@ -20029,7 +20632,7 @@ function pedirClavePropia(usuario){
   const caja = document.querySelector('#loginScreen .loginCard');
   if(!caja){ bootApp(); return; }
   caja.innerHTML = `
-    <img id="loginLogo" src="${CENTER_LOGO_DATA_URL||''}" alt="">
+    <img id="loginLogo" src="${logoDeEstePanel()||''}" alt="">
     <h2>Elige tu clave</h2>
     <p class="hint" style="margin:0 0 18px;text-align:left">
       Hola ${esc(String(usuario.nombre_completo||'').split(' ')[0]||'')}. Entraste con la clave
@@ -20126,8 +20729,8 @@ async function logout(){
     }
     DB.authConfig = {enabled: !!sesion.loginRequerido, username:'', password:''};
     if(sesion.loginRequerido && !sesion.autenticado){
-      document.getElementById('loginLogo').src = CENTER_LOGO_DATA_URL;
-      document.getElementById('loginTitle').textContent = DB.centerInfo.name || 'Centro Psicológico';
+      document.getElementById('loginLogo').src = logoDeEstePanel();
+      document.getElementById('loginTitle').textContent = nombreDeEstePanel();
       document.getElementById('loginScreen').style.display = 'flex';
     } else if(sesion.usuario && sesion.usuario.debeCambiarClave){
       // Recargó la página con la sesión abierta pero sin haber puesto su
@@ -20143,8 +20746,8 @@ async function logout(){
 
   DB.authConfig = await getColl('authConfig', DEFAULT_AUTH_CONFIG);
   if(DB.authConfig && DB.authConfig.enabled){
-    document.getElementById('loginLogo').src = CENTER_LOGO_DATA_URL;
-    document.getElementById('loginTitle').textContent = DB.centerInfo.name || 'Centro Psicológico';
+    document.getElementById('loginLogo').src = logoDeEstePanel();
+    document.getElementById('loginTitle').textContent = nombreDeEstePanel();
     document.getElementById('loginScreen').style.display = 'flex';
   } else {
     bootApp();

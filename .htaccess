@@ -13,3 +13,31 @@
   </FilesMatch>
 </IfModule>
 FileETag None
+
+# =====================================================================
+#  Lo que NUNCA se sirve por HTTP
+#
+#  Encontrado funcionando: la clave de cifrado de los respaldos, los
+#  volcados completos de la base con todas las historias clínicas y el
+#  protocolo en Excel de un paciente se podían descargar escribiendo su
+#  dirección en el navegador.
+#
+#  Hoy eso solo alcanza a quien esté en esta computadora o en el WiFi del
+#  centro. El día que el panel salga a internet —que es el plan, para que
+#  los enlaces de pruebas y materiales le abran a las familias— sería
+#  público. Se tapa ahora, no ese día.
+#
+#  Las carpetas respaldo, config, db, src, storage y pruebas/contenido
+#  tienen además su propio .htaccess: si alguien copia este archivo sin
+#  ellas, la carpeta sigue protegida.
+# =====================================================================
+
+# Protocolos de pruebas en Excel (llevan nombre del paciente y sus
+# respuestas), volcados de la base, diagnósticos y anotaciones.
+<FilesMatch "\.(xls|xlsx|xlsm|sql|md|txt|log|ini|bak)$">
+  Require all denied
+</FilesMatch>
+
+# Una carpeta sin index deja ver todo lo que hay dentro, que es como se
+# encuentra lo que uno no sabía que existía.
+Options -Indexes

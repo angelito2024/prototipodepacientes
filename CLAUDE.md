@@ -51,6 +51,45 @@ Estas no se deducen del código; las definió Luis:
 - **El practicante llena su propia ficha.** Se le manda un enlace con clave y él pone su nombre, DNI, universidad, fechas y los días que viene. El enlace **vence**, sirve **una sola vez** —si no, el mismo enlace reenviado al grupo crearía una ficha por cada persona que lo toque— y queda anotado si lo abrió, que es lo que uno quiere saber cuando lo mandó hace tres días y no llega nada. Registrarse **no da acceso al sistema**: deja una ficha y nada más. La cuenta con usuario y clave es otra cosa y se da aparte.
 - **Materiales de trabajo.** Cada material lleva escrito qué se puede hacer con él: *del centro* y *de uso libre* se le pueden entregar a la familia; *solo en sesión* y *reservado* se usan en consulta y no salen de ahí. Los protocolos de pruebas (C.A.R.S y cualquier otro) van siempre como **reservado**: repartirlos infringe los derechos del autor y además arruina la prueba para quien la tenga que responder después. El sistema comprueba esto **en el servidor**, no solo escondiendo el botón. Material ajeno no se vende: lo que el centro cobra es su trabajo.
 
+## Dos paneles, un solo programa
+
+Las cuentas personales de Luis —gastos de casa, préstamos, juntas,
+recaudaciones— **ya no viven en el sistema del centro**. El día que entre
+una recepcionista o la psicóloga, eso no debe estar ahí ni detrás de una
+clave: debe no estar.
+
+| | dirección | base de datos | usuario de MySQL |
+|---|---|---|---|
+| El centro | `/prototipodepacientes/` | `centro_psicologico` | `app_centro` |
+| Lo suyo | `/misfinanzas/` | `finanzas_personales` | `app_finanzas` |
+
+**Usuarios de base distintos a propósito**: con el mismo usuario, separar
+las bases no separa gran cosa. Está comprobado que ninguno alcanza la base
+del otro.
+
+El programa es **el mismo archivo** para no mantener dos copias que se van
+separando con el tiempo: `SOLO_PERSONAL` en `index.html` mira la dirección
+desde la que se abrió, y de ahí sale qué pestañas se muestran
+(`tabsDeEstePanel()`) y qué colecciones se piden (`loadAll()`). Para
+propagar una mejora a `misfinanzas/` se vuelve a copiar `index.html`,
+`api/` y `src/` — nunca `config/`, que apunta a la otra base.
+
+`respaldar.ps1` copia **las dos** bases, cada una con su copia cifrada
+fuera de la computadora.
+
+## Cómo lo abre Luis
+
+Con el acceso directo **"Panel del Centro MAGUSA"** del escritorio, que corre
+`abrir-panel.ps1`. Hace falta porque en esta máquina **Apache y MySQL no son
+servicios de Windows**: los levanta Laragon, y con Laragon cerrado un atajo a
+la dirección solo muestra "no se puede acceder a este sitio". El script
+comprueba si el panel responde, si no levanta `mysqld` y `httpd` (buscados por
+patrón, para que sobrevivan a una actualización de Laragon), espera a que
+contesten mostrando una ventanita, y abre Chrome con `--app=` para que se vea
+como un programa y no como una pestaña. Si algo no arranca lo dice con
+palabras. `laragon.exe start` **no** sirve: abre la interfaz pero no enciende
+los servicios.
+
 ## Fechas
 
 Perú es UTC-5, así que `toISOString()` devuelve el día siguiente a partir de las 7 de la noche.
@@ -63,6 +102,7 @@ Este detalle ya causó un bug real: un adelanto de S/150 desaparecía del saldo.
 - **Nunca** commitear datos de pacientes: historias clínicas, DNI, teléfonos, pagos. El repo guarda el programa; los datos viven en la base de Luis. `config/config.php` y `storage/` están en `.gitignore`: son credenciales y adjuntos.
 - Antes de cada commit: revisar `git status` para que solo esté preparado el archivo previsto, y leer el diff buscando tokens, contraseñas o datos personales.
 - El localStorage tope medido es **4.9 MB**. Los adjuntos van en base64, así que un PDF de 2 MB ocupa 2.67 MB. Ese techo aplica a los modos `'claude'` y `'local'`; con base de datos los adjuntos van a disco y se sirven por `api/archivo.php`.
+- **El respaldo de los datos** lo hace `respaldo/respaldar.ps1`, que corre cada noche por la tarea de Windows *MAGUSA respaldo*: vuelca la base entera a `respaldo/copias/`, guarda 30 días, y sube una copia **cifrada** a `OneDrive\Respaldos MAGUSA` (14 copias). La clave vive en `respaldo/clave.txt` y nunca sube. Un respaldo que nadie mira no es un respaldo: el script deja su parte en `copias/estado.json` y el panel lo lee por `api/respaldo.php` para pintar el botón de la barra y avisar en Alertas cuando hace días que no sale una copia. Apache corre con otro usuario de Windows y **no alcanza la carpeta de OneDrive**, por eso el estado se lee de ese archivo y no listando la nube.
 - El JSON de "Descargar copia de seguridad" es texto plano y contiene historias clínicas: conviene guardar varias copias fechadas, no solo la última. Con base de datos la clave de cuentas personales ya **no** sale ahí (se guarda con hash y la comprueba el servidor); sin base de datos sigue en claro y no es cifrado real.
 
 ## Cómo verificar un cambio
