@@ -2530,8 +2530,7 @@ function paqueteDe(p){
    Un acompañante se rige por las fechas del titular: el paquete es uno. */
 function inicioDelPaqueteVigente(p){
   const dueno = esAcompanante(p) ? (titularDelPaquete(p) || p) : p;
-  const cerrados = (dueno.paquetesHistorial||[]).map(h=>h.cerradoEl).filter(Boolean).sort();
-  return cerrados.length ? cerrados[cerrados.length-1] : '';
+  return cortesDePaquete(dueno, 'vigente').desde;
 }
 
 /* Sesiones realmente atendidas: se cuentan las citas marcadas "Completada".
@@ -3365,6 +3364,9 @@ function pacienteCoincide(p, texto){
    sacaba el foco del campo y había que volver a hacer clic. */
 function filtrarLista(clave, valor, campoId){
   filtroDeLista[clave] = valor;
+  // Buscar a otro paciente no debe heredar el "ver también las de antes"
+  // del anterior: se vuelve a arrancar por el paquete en curso.
+  if(clave === 'citas') mostrarCitasDeAntes = false;
   renderPanel();
   const el = document.getElementById(campoId);
   if(el){
@@ -5552,9 +5554,7 @@ function paquetesDe(p){
    a tener el mismo papel por si alguien pregunta después.
 
    Cada paquete se separa por sus cierres: las sesiones de un paquete son
-   las que caen entre el cierre del anterior y el suyo. Se usa el mismo
-   criterio que el contador (`inicioDelPaqueteVigente`), para que el
-   detalle no contradiga al número que se muestra en pantalla.
+   las que caen entre el cierre del anterior y el suyo.
 
    El día del corte va al paquete NUEVO, no al que se cierra. La fecha que
    se guarda es la de **inicio del paquete nuevo**, así que una sesión ese
@@ -5562,32 +5562,117 @@ function paquetesDe(p){
    le cerró el paquete el 8 de octubre, su última sesión del anterior fue
    el 4 y el 8 arrancó el nuevo. Contando el 8 para el viejo salían once
    sesiones en un paquete de diez, y el nuevo mostraba dos cuando iban
-   tres. Si se cambia esto hay que cambiarlo en los seis sitios a la vez
-   —contador, cobertura de pagos, detalle, etiqueta de la fila, última
-   sesión y número de la próxima— o la pantalla se contradice sola.
+   tres.
+
+   Ese criterio estaba escrito tres veces con las mismas cuatro líneas, y
+   una de ellas al revés —`a.date < desde` en vez de `>= desde`—: fue la
+   que se escapó de la corrección y la que hacía que el contador dijera
+   "van 2" mientras el detalle listaba tres. Ahora vive en UN solo lugar,
+   `cortesDePaquete()`, y de ahí lo toman el contador, la cobertura de los
+   pagos, el detalle, el rótulo de cada fila de cita, la última sesión y
+   el número de la próxima.
 */
+/* De dónde a dónde va un paquete. Es UN solo lugar a propósito: el
+   contador, el detalle, el rótulo de cada cita y ahora los pagos salen de
+   acá, así que ya no hay manera de que una pantalla diga "van 2" mientras
+   la de al lado lista tres. El día del corte es del paquete NUEVO.
+
+   @return {{desde:string, hasta:string}|null} vacío = sin límite por ese lado. */
+function cortesDePaquete(p, paqueteId){
+  const cortes = ((p && p.paquetesHistorial) || [])
+    .map(h=>h.cerradoEl).filter(Boolean).sort();
+  if(paqueteId === 'vigente'){
+    return {desde: cortes.length ? cortes[cortes.length-1] : '', hasta: ''};
+  }
+  const h = ((p && p.paquetesHistorial) || []).find(x=>x.id===paqueteId);
+  if(!h) return null;
+  const hasta = h.cerradoEl || '';
+  const i = cortes.indexOf(hasta);
+  return {desde: i > 0 ? cortes[i-1] : '', hasta};
+}
+
 function sesionesDelPaquete(p, paqueteId){
   if(!p) return [];
-  const cortes = (p.paquetesHistorial||[])
-    .map(h=>h.cerradoEl).filter(Boolean).sort();
-
-  let desde = '', hasta = '';
-  if(paqueteId === 'vigente'){
-    desde = cortes.length ? cortes[cortes.length-1] : '';
-  } else {
-    const h = (p.paquetesHistorial||[]).find(x=>x.id===paqueteId);
-    if(!h) return [];
-    hasta = h.cerradoEl || '';
-    const i = cortes.indexOf(hasta);
-    desde = i > 0 ? cortes[i-1] : '';
-  }
-
+  const c = cortesDePaquete(p, paqueteId);
+  if(!c) return [];
   return DB.appointments
     .filter(a => a.status === 'Completada'
       && (a.patientId === p.id || participantesDeCita(a).includes(p.id))
-      && (!desde || a.date >= desde)
-      && (!hasta || a.date < hasta))
+      && (!c.desde || a.date >= c.desde)
+      && (!c.hasta || a.date < c.hasta))
     .sort((a,b) => (a.date+a.time).localeCompare(b.date+b.time));
+}
+
+/* Lo que se pagó de ESTE paquete, con el mismo corte que sus sesiones: un
+   pago de agosto abona al paquete de agosto, no al que se abrió en
+   octubre. El criterio ya existía para el paquete vigente (`patientBalance`
+   descarta los pagos anteriores a su fecha de inicio); acá se extiende a
+   los cerrados, que es lo que faltaba para poder decir, de un paquete que
+   terminó hace un mes, si quedó debiendo algo. */
+function pagosDelPaquete(p, paqueteId){
+  if(!p) return [];
+  const c = cortesDePaquete(p, paqueteId);
+  if(!c) return [];
+  // Si comparten paquete, el pago de cualquiera abona al mismo: pagó quien
+  // tuvo el efectivo a mano.
+  const quienes = [p.id, ...acompanantesDe(p.id).map(a=>a.id)];
+  return DB.payments
+    .filter(x => quienes.includes(x.patientId)
+      && (!c.desde || x.date >= c.desde)
+      && (!c.hasta || x.date < c.hasta))
+    .sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
+}
+
+/* Un paquete contado de verdad: sus sesiones, su plata y sus fechas.
+
+   Las fechas que valen son las de las sesiones, no la que se tecleó al
+   registrar el paquete. Son dos cosas distintas y se separaron a la
+   fuerza: hubo un paquete anotado el 12 de setiembre cuya primera sesión
+   había sido el 31 de agosto, y el encabezado decía "desde el 12" encima
+   de una lista que empezaba el 31. */
+function resumenDePaquete(p, q){
+  const sesiones  = sesionesDelPaquete(p, q.id);
+  const pagos     = pagosDelPaquete(p, q.id);
+  const pagado    = redondear(pagos.reduce((s,x)=>s+Number(x.amount||0),0));
+  const precio    = Number(q.precio||0);
+  const atendidas = sesiones.length;
+  const total     = Number(q.sesiones||0);
+  return {
+    sesiones, pagos, pagado, precio, atendidas, total,
+    saldo:     Math.max(0, redondear(precio - pagado)),
+    primera:   (sesiones[0]||{}).date || '',
+    ultima:    (sesiones[sesiones.length-1]||{}).date || '',
+    completo:  total > 0 && atendidas >= total,
+    restantes: Math.max(0, total - atendidas),
+    // El número guardado en el paquete puede no coincidir con las citas
+    // registradas: dice diez y hay nueve completadas. No se corrige solo
+    // —puede faltar registrar una cita, o haberse atendido sin cita—, se
+    // avisa y Luis decide.
+    guardadas: Number(q.usadas||0),
+    descuadre: Number(q.usadas||0) !== atendidas,
+  };
+}
+
+/* "8, 11 y 15 de oct." — las fechas de un paquete en una línea.
+   Repitiendo el mes en cada una no se lee de un vistazo, y lo que uno
+   quiere saber mirando esto es qué días vino. */
+function listaDeDiasCorta(fechas){
+  const MES = ['ene','feb','mar','abr','may','jun','jul','ago','set','oct','nov','dic'];
+  const grupos = [];
+  (fechas||[]).filter(Boolean).slice().sort().forEach(f=>{
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(f));
+    if(!m) return;
+    const clave = m[1] + '-' + m[2];
+    let g = grupos.find(x=>x.clave===clave);
+    if(!g) grupos.push(g = {clave, mes: MES[Number(m[2])-1] || '', dias: []});
+    g.dias.push(String(Number(m[3])));
+  });
+  return grupos.map(g=>{
+    const d = g.dias;
+    const texto = d.length===1 ? d[0]
+      : d.slice(0,-1).join(', ') + ' y ' + d[d.length-1];
+    return `${texto} de ${g.mes}.`;
+  }).join(' · ');
 }
 
 /* ¿De qué paquete salió ESTA sesión?
@@ -5607,17 +5692,12 @@ function paqueteDeLaSesion(p, fecha){
   if(!p || !fecha) return null;
   const lista = paquetesDe(p);
   if(!lista.length) return null;
-  const cortes = (p.paquetesHistorial||[])
-    .map(h=>h.cerradoEl).filter(Boolean).sort();
 
   for(let i = 0; i < lista.length; i++){
     const q = lista[i];
-    const hasta = q.vigente ? '' : (q.hasta || '');
-    const j = hasta ? cortes.indexOf(hasta) : -1;
-    const desde = q.vigente
-      ? (cortes.length ? cortes[cortes.length-1] : '')
-      : (j > 0 ? cortes[j-1] : '');
-    if((!desde || fecha >= desde) && (!hasta || fecha < hasta)){
+    const c = cortesDePaquete(p, q.id);
+    if(!c) continue;
+    if((!c.desde || fecha >= c.desde) && (!c.hasta || fecha < c.hasta)){
       return {...q, numero: i+1, cuantos: lista.length};
     }
   }
@@ -5700,9 +5780,14 @@ function enviarSesionesDelPaquete(patientId, paqueteId){
                     `Detalle de sesiones — ${p.name}`);
 }
 
-/* Qué le pasó a este paciente, paquete por paquete. Sin esto el historial
-   son números sin sentido: cinco sesiones, diez sesiones, ¿de qué? */
-function bloqueDePaquetes(p){
+/* Qué le pasó a este paciente, paquete por paquete.
+
+   Era una tabla de cinco columnas con las fechas en crudo (2026-09-12) y
+   un botón para mandar las sesiones por WhatsApp. Lo que faltaba es lo
+   que uno pregunta de verdad meses después: cuántas sesiones fueron, qué
+   días vino, cuánto pagó y si quedó debiendo. Y poder verlo en pantalla,
+   no solo mandárselo a alguien. */
+function bloqueDePaquetes(p, soloLectura){
   const lista = paquetesDe(p);
   if(esAcompanante(p)){
     const t = titularDelPaquete(p);
@@ -5712,29 +5797,27 @@ function bloqueDePaquetes(p){
         desde la ficha de ${esc((t||{}).name||'esa persona')}.</p></div>`;
   }
 
-  const filas = lista.map(q=>`<tr${q.vigente? '' : ' style="opacity:.72"'}>
-    <td><b>${esc(q.concepto || 'Sin concepto')}</b>
-      ${q.vigente? ' <span class="chip ok">En curso</span>' : ''}</td>
-    <td style="white-space:nowrap">${q.usadas} de ${q.sesiones}</td>
-    <td style="white-space:nowrap">${q.precio>0? fmtMoney(q.precio) : '—'}</td>
-    <td style="white-space:nowrap">${esc(q.desde||'—')}${
-      q.hasta? ` <span class="hint">a ${esc(q.hasta)}</span>` : ''}</td>
-    <td style="white-space:nowrap">
-      <button class="btn small" title="Mandar la lista de sesiones con su fecha y hora"
-              onclick="enviarSesionesDelPaquete('${p.id}','${q.id}')">📋 Enviar sesiones</button>
-      ${q.vigente
-      ? `<button class="btn small secondary" onclick="editPatient('${p.id}')">Editar</button>`
-      : `<button class="btn small secondary" onclick="editarPaqueteAnterior('${p.id}','${q.id}')">Editar</button>
-         <button class="btn small danger" onclick="borrarPaqueteAnterior('${p.id}','${q.id}')">Quitar</button>`}</td>
-  </tr>`).join('');
+  const cuantos    = lista.length;
+  const vigente    = (lista[cuantos-1] && lista[cuantos-1].vigente) ? lista[cuantos-1] : null;
+  const anteriores = lista.filter(q => !q.vigente);
+  const alcance    = soloLectura ? 'ro' : 'ed';
+
+  // Lo de ahora es lo único que se muestra de entrada. Un paciente con
+  // tres paquetes atrás llenaba la pantalla de cosas terminadas y había
+  // que buscar entre ellas cuál es el que está corriendo, que es el que
+  // uno viene a ver nueve de cada diez veces.
+  const ahora = vigente
+    ? bloqueDeUnPaquete(p, vigente, cuantos, cuantos, soloLectura)
+    : (cuantos
+        ? `<p class="hint">No tiene ningún paquete en curso. Lo último que
+             contrató está en su historial, abajo.</p>`
+        : `<p class="hint">Todavía no tiene ningún paquete registrado.</p>`);
 
   return `<div class="card">
-    <h3 style="margin-top:0">Paquetes de ${esc(p.name)}</h3>
-    ${lista.length? `<div class="tablewrap"><table>
-      <tr><th>De qué</th><th>Sesiones</th><th>Precio</th><th>Desde</th><th></th></tr>
-      ${filas}</table></div>`
-     : `<p class="hint">Todavía no tiene ningún paquete registrado.</p>`}
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+    <h3 style="margin-top:0">${vigente? 'Paquete de' : 'Paquetes de'} ${esc(p.name)}</h3>
+    ${ahora}
+    ${anteriores.length? botonDeHistorialDePaquetes(p, anteriores, alcance) : ''}
+    ${soloLectura? '' : `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
       <button class="btn secondary" onclick="abrirPaqueteAnterior('${p.id}')">
         + Registrar un paquete anterior</button>
       ${(p.billingType!=='Individual' && Number(p.packageTotal||0)>0)
@@ -5743,10 +5826,232 @@ function bloqueDePaquetes(p){
     </div>
     <p class="hint" style="margin-top:8px">Un paquete anterior sirve para dejar
       registrado lo que ya pasó —por ejemplo las 5 sesiones de evaluación de agosto—
-      sin tocar el que está en curso.</p>
+      sin tocar el que está en curso.</p>`}
   </div>`;
 }
 
+/* El botón que guarda lo que ya pasó.
+
+   Cerrado dice de una lo que uno quiere saber sin abrirlo —cuántos
+   paquetes tuvo y cuántas sesiones fueron—, porque si para contar los
+   paquetes de un paciente hay que desplegar la lista, el botón no sirve
+   de resumen y hay que abrirlo siempre. */
+function botonDeHistorialDePaquetes(p, anteriores, alcance){
+  const sesiones = anteriores
+    .reduce((s, q) => s + sesionesDelPaquete(p, q.id).length, 0);
+  const n = anteriores.length;
+  return `<div style="margin-top:12px;border-top:1px dashed #ddd;padding-top:10px">
+    <button class="btn small secondary" id="paqHist_${alcance}_${p.id}_btn"
+            onclick="verHistorialDePaquetes('${p.id}','${alcance}',this)">
+      📁 Historial: ${n} paquete${n>1?'s':''} anterior${n>1?'es':''} ·
+      ${sesiones===1? '1 sesión' : sesiones + ' sesiones'}</button>
+    <div id="paqHist_${alcance}_${p.id}" hidden style="margin-top:10px"></div>
+  </div>`;
+}
+
+/* Despliega los paquetes terminados, con el total de todo lo que recibió
+   este paciente desde que llegó al centro. */
+function verHistorialDePaquetes(pid, alcance, btn){
+  const caja = document.getElementById(`paqHist_${alcance}_${pid}`);
+  const p = DB.patients.find(x=>x.id===pid);
+  if(!caja || !p) return;
+
+  const lista      = paquetesDe(p);
+  const anteriores = lista.filter(q => !q.vigente);
+  const n          = anteriores.length;
+  const sesionesAnteriores = anteriores
+    .reduce((s, q) => s + sesionesDelPaquete(p, q.id).length, 0);
+
+  const cerrado = `📁 Historial: ${n} paquete${n>1?'s':''} anterior${n>1?'es':''} · `
+                + `${sesionesAnteriores===1? '1 sesión' : sesionesAnteriores + ' sesiones'}`;
+
+  if(caja.getAttribute('data-abierto') === '1'){
+    caja.innerHTML = '';
+    caja.hidden = true;
+    caja.setAttribute('data-abierto', '0');
+    if(btn) btn.textContent = cerrado;
+    return;
+  }
+
+  // El total de todo, incluido el que está en curso: es la respuesta a
+  // "¿cuánto tratamiento lleva este paciente con nosotros?".
+  const todo = lista.map(q => resumenDePaquete(p, q));
+  const sesionesTodo   = todo.reduce((s,r)=>s+r.atendidas, 0);
+  const contratadoTodo = redondear(todo.reduce((s,r)=>s+r.precio, 0));
+  const pagadoTodo     = redondear(todo.reduce((s,r)=>s+r.pagado, 0));
+  const soloLectura    = alcance === 'ro';
+
+  caja.innerHTML = `
+    <p class="hint" style="margin:0 0 10px">
+      Desde que llegó: <b>${lista.length} paquete${lista.length>1?'s':''}</b>,
+      <b>${sesionesTodo===1? '1 sesión' : sesionesTodo + ' sesiones'}</b> atendida${sesionesTodo===1?'':'s'}
+      ${contratadoTodo>0? ` · contratado <b>${fmtMoney(contratadoTodo)}</b>,
+        pagado <b>${fmtMoney(pagadoTodo)}</b>` : ''}.
+    </p>
+    ${anteriores
+      .map((q, i) => bloqueDeUnPaquete(p, q, i+1, lista.length, soloLectura))
+      .join('')}`;
+  caja.hidden = false;
+  caja.setAttribute('data-abierto', '1');
+  if(btn) btn.textContent = 'Ocultar el historial';
+}
+/* Un paquete, contado en cuatro renglones: qué fue, cuántas van, qué días
+   y cuánta plata. */
+function bloqueDeUnPaquete(p, q, numero, cuantos, soloLectura){
+  const r = resumenDePaquete(p, q);
+  const caja = `paqSes_${soloLectura? 'ro' : 'ed'}_${q.id}`;
+  const pct = r.total>0 ? Math.min(100, Math.round(r.atendidas*100/r.total)) : 0;
+
+  const estado = q.vigente
+    ? `<span class="chip ok">En curso</span>`
+    : `<span class="chip neutral">Terminado</span>`;
+
+  // El rango sale de las sesiones, no de la fecha en que se registró el
+  // paquete: es lo único que no puede contradecir a la lista de abajo.
+  const rango = r.primera
+    ? (r.primera === r.ultima
+        ? `Una sola sesión, el <b>${esc(fmtFechaCorta(r.primera))}</b>`
+        : `Del <b>${esc(fmtFechaCorta(r.primera))}</b> al <b>${esc(fmtFechaCorta(r.ultima))}</b>`)
+    : (q.desde ? `Contratado el <b>${esc(fmtFechaCorta(q.desde))}</b>, sin sesiones todavía`
+               : `Sin sesiones registradas`);
+
+  // La fecha con que quedó anotado el paquete puede no ser la de su primera
+  // sesión. No es un error que se pueda corregir solo —se pudo registrar
+  // después, a propósito— pero sí hay que decirlo, porque si no el
+  // historial da dos respuestas distintas a "¿cuándo empezó?".
+  const descuadreDeFecha = (r.primera && q.desde && q.desde !== r.primera)
+    ? `<p class="hint alert" style="margin:6px 0 0">
+         Quedó anotado como iniciado el <b>${esc(fmtFechaCorta(q.desde))}</b>,
+         pero su primera sesión fue el <b>${esc(fmtFechaCorta(r.primera))}</b>.
+         ${q.vigente
+           ? 'Esa fecha es la que separa los pagos de este paquete de los del anterior, así que conviene revisarla a mano.'
+           : (soloLectura ? '' : `<button class="btn small secondary" style="margin-left:6px"
+                onclick="ajustarInicioDePaquete('${p.id}','${q.id}','${esc(r.primera)}')"
+                >Usar el ${esc(fmtFechaCorta(r.primera))}</button>`)}
+       </p>` : '';
+
+  const descuadreDeSesiones = r.descuadre
+    ? `<p class="hint alert" style="margin:6px 0 0">
+         El paquete quedó guardado con <b>${r.guardadas}</b> sesión(es) usada(s),
+         pero las citas completadas de esa época son <b>${r.atendidas}</b>.
+         ${r.atendidas < r.guardadas
+           ? 'Puede faltar registrar una cita, o haberse atendido sin cita.'
+           : 'Hay más citas registradas que sesiones anotadas en el paquete.'}
+       </p>` : '';
+
+  const dias = r.sesiones.length
+    ? `<p class="hint" style="margin:4px 0 0">Vino el ${
+        listaDeDiasCorta(r.sesiones.map(a=>a.date))}</p>`
+    : '';
+
+  const plata = `<div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:8px">
+    <div><span class="sub">Precio</span><br><b>${r.precio>0? fmtMoney(r.precio) : '—'}</b></div>
+    <div><span class="sub">Pagado</span><br><b>${fmtMoney(r.pagado)}</b>
+      ${r.pagos.length? `<span class="hint"> (${r.pagos.length} pago${
+        r.pagos.length>1?'s':''})</span>`:''}</div>
+    <div><span class="sub">${r.saldo>0? 'Falta' : 'Saldo'}</span><br>
+      <b style="color:${r.saldo>0?'var(--alert)':'var(--ok)'}">${
+        r.precio<=0 ? '—' : (r.saldo>0? fmtMoney(r.saldo) : 'al día')}</b></div>
+  </div>`;
+
+  return `<div style="border-left:3px solid ${q.vigente? 'var(--ok)' : '#ddd'};
+                      padding:8px 0 10px 12px;margin:0 0 14px">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap">
+      <b>Paquete ${numero} de ${cuantos}${q.concepto? ' · '+esc(q.concepto) : ''}</b>
+      ${estado}
+    </div>
+    <div style="margin:6px 0 2px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap">
+      <span><b>${r.atendidas}</b> de ${r.total||'?'} sesiones</span>
+      <span class="hint">${r.completo? 'completo'
+        : (r.total? `faltan ${r.restantes} por usar` : '')}</span>
+    </div>
+    ${r.total? `<div class="barwrap"><div class="bar ${pct<100?'':'alertbar'}"
+         style="width:${pct}%"></div></div>` : ''}
+    <p style="margin:6px 0 0">${rango}</p>
+    ${dias}
+    ${descuadreDeFecha}
+    ${descuadreDeSesiones}
+    ${plata}
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+      <button class="btn small secondary" id="${caja}_btn"
+              onclick="verSesionesDelPaquete('${p.id}','${q.id}','${caja}',this)">
+        Ver las ${r.atendidas} sesiones</button>
+      <button class="btn small secondary" title="Mandar la lista de sesiones con su fecha y hora"
+              onclick="enviarSesionesDelPaquete('${p.id}','${q.id}')">📋 Enviar</button>
+      ${soloLectura ? '' : (q.vigente
+      ? `<button class="btn small secondary" onclick="editPatient('${p.id}')">Editar</button>`
+      : `<button class="btn small secondary" onclick="editarPaqueteAnterior('${p.id}','${q.id}')">Editar</button>
+         <button class="btn small danger" onclick="borrarPaqueteAnterior('${p.id}','${q.id}')">Quitar</button>`)}
+    </div>
+    <div id="${caja}" hidden style="margin-top:8px"></div>
+  </div>`;
+}
+
+/* Las sesiones de un paquete, en pantalla. Antes solo se podían mandar por
+   WhatsApp: para mirarlas había que armar el mensaje y leerlo en la caja de
+   envío, que es un camino raro para una pregunta tan simple como "¿qué días
+   vino?". */
+function verSesionesDelPaquete(pid, qid, cajaId, btn){
+  const caja = document.getElementById(cajaId);
+  if(!caja) return;
+  const p = DB.patients.find(x=>x.id===pid);
+  if(!p) return;
+  const sesiones = sesionesDelPaquete(p, qid);
+
+  if(caja.getAttribute('data-abierto') === '1'){
+    caja.innerHTML = '';
+    caja.hidden = true;
+    caja.setAttribute('data-abierto', '0');
+    if(btn) btn.textContent = `Ver las ${sesiones.length} sesiones`;
+    return;
+  }
+
+  const pagos = pagosDelPaquete(p, qid);
+  const filas = sesiones.map((a, i) => {
+    const pr = DB.professionals.find(x=>x.id===a.professionalId);
+    const otros = participantesDeCita(a).filter(x=>x!==p.id)
+      .map(x=>(DB.patients.find(y=>y.id===x)||{}).name).filter(Boolean);
+    return `<tr>
+      <td style="text-align:right">${i+1}</td>
+      <td style="white-space:nowrap">${esc(fmtFechaCorta(a.date))}</td>
+      <td style="white-space:nowrap">${esc(a.time||'')}</td>
+      <td>${esc(etiquetaDeSesion(tipoDeSesion(a)))}${
+        otros.length? `<br><span class="hint">con ${esc(otros.join(', '))}</span>`:''}</td>
+      <td>${esc((pr||{}).name||'')}</td>
+    </tr>`;
+  }).join('');
+
+  caja.innerHTML = sesiones.length
+    ? `<div class="tablewrap"><table>
+         <tr><th></th><th>Día</th><th>Hora</th><th>Qué fue</th><th>Quién atendió</th></tr>
+         ${filas}</table></div>
+       ${pagos.length? `<p class="hint" style="margin:8px 0 0">Pagos de este paquete: ${
+          pagos.map(x=>`${esc(fmtFechaCorta(x.date))} ${fmtMoney(Number(x.amount||0))}`).join(' · ')}</p>`
+        : `<p class="hint" style="margin:8px 0 0">Sin pagos registrados en este paquete.</p>`}`
+    : `<p class="hint">Este paquete no tiene sesiones completadas registradas.</p>`;
+  caja.hidden = false;
+  caja.setAttribute('data-abierto', '1');
+  if(btn) btn.textContent = 'Ocultar las sesiones';
+}
+
+/* Pone el inicio de un paquete YA CERRADO en la fecha de su primera
+   sesión. Solo para los cerrados: en el vigente esa fecha es la que
+   separa sus pagos de los del anterior, y moverla cambiaría el saldo. */
+async function ajustarInicioDePaquete(pid, hid, fecha){
+  const p = DB.patients.find(x=>x.id===pid);
+  if(!p || !fecha) return;
+  const h = (p.paquetesHistorial||[]).find(x=>x.id===hid);
+  if(!h) return;
+  if(!confirm(`Dejar anotado que ese paquete empezó el ${fmtFechaCorta(fecha)},`
+    + ` que es el día de su primera sesión (hoy dice ${fmtFechaCorta(h.iniciadoEl)}).\n\n`
+    + 'No cambia sesiones, ni pagos, ni el contador: solo la fecha que se muestra.')) return;
+  p.paquetesHistorial = (p.paquetesHistorial||[])
+    .map(x => x.id===hid ? {...x, iniciadoEl: fecha} : x);
+  DB.patients = DB.patients.map(x=>x.id===pid? p : x);
+  const ok = await setColl('patients', DB.patients);
+  showToast(ok? 'Fecha de inicio corregida.' : 'No se pudo guardar.', ok);
+  renderPanel();
+}
 /* ----- Un paquete que ya ocurrió -----------------------------------
    No reabre nada ni cambia el contador del vigente: entra derecho al
    historial, con sus propias fechas. Es memoria, no una operación. */
@@ -6047,15 +6352,70 @@ function grupoDeCita(a, ahora){
   return 2;                                       // todavía por venir
 }
 
+/* ¿Se están mostrando también las atenciones de los paquetes ya cerrados?
+   Arranca apagado: al buscar a un paciente, lo que uno viene a ver es el
+   paquete que está corriendo. Se apaga de nuevo al cambiar la búsqueda,
+   porque si no, el paciente siguiente aparecería desplegado sin que nadie
+   lo haya pedido. */
+let mostrarCitasDeAntes = false;
+
+/* Cuando la lista quedó en un solo paciente que ya cerró algún paquete,
+   separa las atenciones del paquete de ahora de las de antes.
+
+   Nace de una molestia concreta: un paciente con diez sesiones atrás y
+   tres nuevas mostraba trece filas, y había que leerle el rótulo a cada
+   una para saber cuál es cuál. El corte es el mismo de todo lo demás
+   (`inicioDelPaqueteVigente`), así que la lista no puede contradecir al
+   contador que está justo arriba. */
+function citasDelPaqueteDeAhora(citas){
+  const ids = [...new Set(citas.map(a => a.patientId))];
+  if(ids.length !== 1) return {mostradas: citas, deAntes: [], paciente: null};
+  const p = DB.patients.find(x => x.id === ids[0]);
+  if(!p) return {mostradas: citas, deAntes: [], paciente: null};
+
+  const desde = inicioDelPaqueteVigente(p);
+  const deAntes = desde ? citas.filter(a => a.date < desde) : [];
+  if(!deAntes.length) return {mostradas: citas, deAntes: [], paciente: p};
+
+  return {
+    paciente: p,
+    deAntes,
+    mostradas: mostrarCitasDeAntes ? citas : citas.filter(a => a.date >= desde),
+  };
+}
+
+/* El renglón que explica qué se está viendo y deja ver el resto. */
+function avisoDeCitasDeAntes(corte){
+  if(!corte.deAntes.length) return '';
+  const n = corte.deAntes.length;
+  const anteriores = paquetesDe(corte.paciente).filter(q => !q.vigente).length;
+  return `<p class="hint" style="margin:-4px 0 10px">
+    ${mostrarCitasDeAntes
+      ? `Se están mostrando también las <b>${n}</b> atenciones de
+         ${anteriores>1? 'sus paquetes anteriores' : 'su paquete anterior'}.`
+      : `Solo las atenciones del paquete que está en curso.`}
+    <button class="btn small secondary" style="margin-left:6px"
+            onclick="alternarCitasDeAntes()">${mostrarCitasDeAntes
+      ? 'Ocultar las de antes'
+      : `📁 Ver las ${n} de ${anteriores>1? 'antes' : 'su paquete anterior'}`}</button>
+  </p>`;
+}
+function alternarCitasDeAntes(){
+  mostrarCitasDeAntes = !mostrarCitasDeAntes;
+  renderPanel();
+}
+
 function viewCitas(){
   const ahora = new Date();
   const clave = a => (a.date||'') + (a.time||'');
   // Se busca por el paciente de la cita y también por quien la acompaña:
   // una sesión conjunta tiene que salir buscando a cualquiera de los dos.
   const q = filtroDeLista.citas || '';
-  const visibles = !q.trim() ? DB.appointments : DB.appointments.filter(a =>
+  const coincidentes = !q.trim() ? DB.appointments : DB.appointments.filter(a =>
     personasEnLaCita(a).some(id => pacienteCoincide(DB.patients.find(p=>p.id===id), q))
     || pacienteCoincide({name: findName(DB.professionals, a.professionalId)}, q));
+  const corte = citasDelPaqueteDeAhora(coincidentes);
+  const visibles = corte.mostradas;
   const sorted = [...visibles]
     .map(a=>({a, g: grupoDeCita(a, ahora)}))
     .sort((x,y)=>{
@@ -6081,7 +6441,7 @@ function viewCitas(){
     return cabecera + filaDeCita(a, g);
   }).join('');
 
-  return viewCitasHtml(rows, visibles);
+  return viewCitasHtml(rows, visibles, avisoDeCitasDeAntes(corte));
 }
 
 /* ===== Los mensajes de recordatorio de una cita =====
@@ -6687,8 +7047,12 @@ function avisoDeQuePaqueteEsCual(p){
     Empieza el nuevo el <b>${esc(fmtFechaCorta(corte))}</b>${
       primeraDeEste && primeraDeEste !== corte
         ? `, con su primera sesión el <b>${esc(fmtFechaCorta(primeraDeEste))}</b>` : ''}:
-    van <b>${deEste.length}</b> de ${vigente.sesiones}.
-    Abajo, cada sesión dice de qué paquete salió.</p>`;
+    van <b>${deEste.length}</b> de ${vigente.sesiones}${
+      deEste.length? ` — vino el ${esc(listaDeDiasCorta(deEste))}` : ''}
+    ${vigente.sesiones && deEste.length < vigente.sesiones
+      ? `Le quedan <b>${vigente.sesiones - deEste.length}</b> por usar.` : ''}
+    Abajo, cada sesión dice de qué paquete salió, y en su ficha está el
+    historial completo de los ${lista.length} paquetes.</p>`;
 }
 
 /* El estado del paquete, arriba de la lista, cuando se está mirando a una
@@ -6802,7 +7166,7 @@ function resumenDePacienteEnCitas(citas){
   </div>`;
 }
 
-function viewCitasHtml(rows, visibles){
+function viewCitasHtml(rows, visibles, avisoDeAntes){
   const total = DB.appointments.length;
   const lista = Array.isArray(visibles) ? visibles : DB.appointments;
   const n = lista.length;
@@ -6876,6 +7240,7 @@ function viewCitasHtml(rows, visibles){
     ${total? cajaDeBusqueda('citas', 'citasBuscar',
         '🔍 Buscar por paciente, DNI, teléfono, apoderado o profesional…') : ''}
     ${resumenDePacienteEnCitas(lista)}
+    ${avisoDeAntes || ''}
     <div class="tablewrap">
       ${rows? `<table><tr><th>Fecha/Hora</th><th>Paciente</th><th>Profesional</th><th>Modalidad</th><th>Estado</th><th>Cobro</th><th>Recordatorio</th><th></th></tr>${rows}</table>`
       : (total
@@ -19556,7 +19921,7 @@ function bloqueEquilibrio(mes, verPersonal){
          <div class="label">El consultorio se pagó solo este mes y le sobró</div></div>`
     : `<div class="kpi alert" style="grid-column:1/-1">
          <div class="num">Pérdida de ${fmtMoney(-e.resultado)}</div>
-         <div class="label">Te faltan <b>${e.faltan} sesión${un(e.faltan)}</b> este mes para no perder</div></div>`;
+         <div class="label">Te faltan <b>${e.faltan===1? '1 sesión' : e.faltan + ' sesiones'}</b> este mes para no perder</div></div>`;
 
   const fila = (que, sesiones, nota) => {
     const porDia = e.dias? sesiones/e.dias : 0;
@@ -20183,6 +20548,8 @@ function viewHistoria(){
         </div>
       ` : `<p class="hint" style="margin-top:10px">Aún no hay episodios anteriores cerrados.</p>`}
     </div>
+
+    ${bloqueDePaquetes(patient, true)}
 
     <h3 style="margin-top:20px">II. Motivo de consulta</h3>
     <div class="field"><textarea id="hc_motivoConsulta" rows="3" placeholder="Razón por la que acude, en sus propias palabras...">${h.motivoConsulta||''}</textarea></div>
@@ -21190,7 +21557,7 @@ async function confirmWipe(){
 document.getElementById('todayLabel').textContent = new Date().toLocaleDateString('es-PE',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
 /* Se sube a mano en cada cambio del panel. Si arriba no dice esta versión,
    estás viendo una copia vieja: recarga con Ctrl+Shift+R. */
-const PANEL_VERSION = 'v2026-10-15e · contador del paquete';
+const PANEL_VERSION = 'v2026-10-16c · las citas, solo las del paquete de ahora';
 document.getElementById('versionLabel').textContent = PANEL_VERSION;
 document.getElementById('storageModeNote').innerHTML =
   STORAGE_MODE==='api'
