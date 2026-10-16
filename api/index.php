@@ -58,6 +58,12 @@ try {
                     "SELECT COUNT(*) FROM information_schema.tables
                       WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE'"
                 ),
+                // Qué versión del programa hay en el disco. El panel la
+                // compara con la suya: una ventana abierta desde ayer
+                // sigue corriendo el archivo viejo, y el botón Actualizar
+                // trae los datos pero no el programa. Sin esto, la persona
+                // busca un botón nuevo que su pantalla todavía no tiene.
+                'panel'    => versionDelPanel(),
             ]);
             // no break: Http::ok() termina la ejecución
 
@@ -363,6 +369,36 @@ try {
  * Los intentos rechazados quedan anotados: si alguien anda probando lo que
  * no le toca, se ve en el registro de auditoría.
  */
+/**
+ * La versión del programa que hay en el disco.
+ *
+ * Se lee del propio `index.html`, de la constante `PANEL_VERSION`, para
+ * no tener que mantener el número en dos sitios —que es la forma segura
+ * de que se desincronicen—. Solo se mira el final del archivo, que es
+ * donde está, en vez de cargar más de un mega en memoria.
+ */
+function versionDelPanel(): array
+{
+    $ruta = __DIR__ . '/../index.html';
+    if (!is_file($ruta)) {
+        return ['version' => '', 'modificado' => null];
+    }
+    $version = '';
+    $f = fopen($ruta, 'rb');
+    if ($f !== false) {
+        fseek($f, max(0, filesize($ruta) - 65536));
+        $cola = (string) fread($f, 65536);
+        fclose($f);
+        if (preg_match("/PANEL_VERSION\s*=\s*'([^']*)'/", $cola, $m) === 1) {
+            $version = $m[1];
+        }
+    }
+    return [
+        'version'    => $version,
+        'modificado' => date('c', (int) filemtime($ruta)),
+    ];
+}
+
 function comprobarPermiso(string $clave, bool $escribe): void
 {
     // Las cuentas personales guardan a quién pertenece cada movimiento, así

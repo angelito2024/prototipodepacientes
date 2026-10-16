@@ -30,6 +30,13 @@ $ErrorActionPreference = 'Stop'
 
 $direccion    = "http://localhost/$Panel/"
 $comprobacion = $direccion + 'api/index.php?accion=salud'
+# Chrome se guarda la pantalla aunque el servidor diga que no la guarde, y
+# mas todavia si ya hay otra ventana suya abierta: se reusa el proceso y con
+# el su cache. Resultado: se cerraba y se volvia a abrir el panel y seguia
+# saliendo el archivo viejo, sin los botones nuevos. Con una direccion
+# distinta en cada arranque no tiene de donde sacar una copia guardada.
+# El panel no lee nada de la query, asi que esto no le molesta.
+$arranque     = "$direccion`?v=" + (Get-Date -Format 'yyyyMMddHHmmss')
 $laragon      = 'C:\laragon'
 $esperaMax    = 60          # segundos
 
@@ -67,12 +74,12 @@ function AbrirPanel {
             "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe",
             "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe")) {
             if (Test-Path $chrome) {
-                Start-Process -FilePath $chrome -ArgumentList "--app=$direccion"
+                Start-Process -FilePath $chrome -ArgumentList "--app=$arranque"
                 return
             }
         }
     }
-    Start-Process $direccion
+    Start-Process $arranque
 }
 
 # Mientras enciende, algo en pantalla. Sin esto son siete segundos de

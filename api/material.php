@@ -4,8 +4,10 @@ declare(strict_types=1);
 /**
  * Puerta de entrada de la familia al material que le dejó el profesional.
  *
- *   GET ?accion=abrir&t=<clave>           -> qué se le dejó y de parte de quién
- *   GET ?accion=bajar&t=<clave>&m=<id>    -> el archivo
+ *   GET  ?accion=abrir&t=<clave>          -> la portada: para quién es la tarea
+ *   POST ?accion=entrar&t=<clave>         <- {documento} o {confirmo:true}
+ *                                         -> recién acá sale qué se le dejó
+ *   GET  ?accion=bajar&t=<clave>&m=<id>   -> el archivo
  *
  * Igual que en las pruebas, es una de las pocas partes a las que se entra
  * sin sesión: los padres de un paciente no tienen cuenta en el sistema ni
@@ -22,7 +24,10 @@ require __DIR__ . '/../src/autoload.php';
 
 use Centro\Archivos;
 use Centro\Http;
+use Centro\Marca;
 use Centro\Repos\MaterialEntregas;
+
+const INTENTOS_DE_DOCUMENTO = 5;
 
 $accion = (string) ($_GET['accion'] ?? 'abrir');
 $token  = (string) ($_GET['t'] ?? '');
@@ -38,14 +43,67 @@ try {
     $id     = (int) $e['id'];
     $motivo = MaterialEntregas::motivoParaNoAbrir($e);
 
+    // Se pide el documento solo si el centro lo tiene prendido Y el
+    // paciente lo tiene cargado en su ficha: sin ficha completa, exigirlo
+    // dejaría a la familia sin poder abrir la tarea de su hijo.
+    $tieneDocumento = preg_replace('/\D+/', '', (string) ($e['documento'] ?? '')) !== '';
+    $pideDocumento  = Marca::pideDocumento() && $tieneDocumento;
+
     switch ($accion) {
         case 'abrir':
             MaterialEntregas::anotarAcceso($id, 'abrir');
-            if ($motivo !== null) {
-                Http::json(['ok' => false, 'cerrada' => true, 'error' => $motivo], 200);
-            }
             MaterialEntregas::anotarApertura($id);
+            $portada = Marca::portada((int) $e['n_aperturas'] + 1);
+            if ($motivo !== null) {
+                Http::json(['ok' => false, 'cerrada' => true, 'error' => $motivo,
+                            'marca' => $portada], 200);
+            }
             Http::ok([
+                'marca' => $portada,
+                // El nombre recortado: la familia reconoce a su hijo, y
+                // quien recibió el enlace por error no se entera de a
+                // quién se atiende en el centro.
+                'paciente'      => Marca::nombreCorto($e),
+                'profesional'   => $e['profesional'],
+                'titulo'        => $e['titulo'],
+                'expira'        => $e['expira_en'],
+                'cuantos'       => count(MaterialEntregas::contenido($id)),
+                'pideDocumento' => $pideDocumento,
+            ]);
+
+        case 'entrar':
+            if (Http::metodo() !== 'POST') {
+                Http::error('Método no permitido.', 405);
+            }
+            if ($motivo !== null) {
+                Http::error($motivo, 410);
+            }
+            $c = Http::cuerpo();
+
+            if ($pideDocumento) {
+                if (MaterialEntregas::intentosFallidos($id) >= INTENTOS_DE_DOCUMENTO) {
+                    Http::error('Se intentó varias veces con un documento que no coincide. '
+                        . 'Espera un cuarto de hora o escríbele al centro.', 429);
+                }
+                $esc = (string) ($c['documento'] ?? '');
+                if ($esc === '') {
+                    Http::error('Escribe el número de documento para continuar.', 422);
+                }
+                if (MaterialEntregas::documentoCoincide($e, $esc) !== true) {
+                    MaterialEntregas::anotarAcceso($id, 'documento_mal');
+                    $quedan = INTENTOS_DE_DOCUMENTO - MaterialEntregas::intentosFallidos($id);
+                    Http::error('Ese número no coincide con el del paciente. '
+                        . ($quedan > 0 ? "Te quedan $quedan intentos." : 'Escríbele al centro.'), 422);
+                }
+                MaterialEntregas::anotarAcceso($id, 'documento_ok');
+            } elseif (($c['confirmo'] ?? false) !== true) {
+                Http::error('Confirma para quién es esta tarea para continuar.', 422);
+            } else {
+                MaterialEntregas::anotarAcceso($id, 'confirmo_identidad');
+            }
+
+            Http::ok([
+                // Acá sí va el nombre completo: ya se confirmó quién es.
                 'paciente'    => $e['nombre_completo'],
                 'profesional' => $e['profesional'],
                 'titulo'      => $e['titulo'],

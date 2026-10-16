@@ -45,10 +45,13 @@ Estas no se deducen del código; las definió Luis:
 - **Paquetes compartidos y sesiones conjuntas.** Una pareja o una familia puede comprar **un** paquete y consumirlo entre varios: cada sesión que toma cualquiera descuenta de la misma bolsa, aunque se atiendan en días y horas distintas. El paquete tiene un **titular**: las sesiones se suman entre todos, pero **la deuda es suya y una sola vez** (si cada uno mostrara el total, el mismo saldo saldría dos veces en las alertas de cobro). Un pago de cualquiera abona al mismo paquete. Aparte están las **sesiones conjuntas**, donde vienen varios a la misma sesión. Ahí el descuento sigue **de dónde sale el dinero, no cuántas personas hubo en la sala**: si comparten paquete —una sola bolsa— la sesión descuenta **una**; si cada uno tiene su propio paquete o se atiende por sesión, a **cada uno se le descuenta la suya**, porque si no el que acompaña recibiría la atención gratis y su paquete nunca bajaría. En los dos casos la sesión se registra en la historia clínica de **cada uno** de los que estuvo. El caso más común no es la pareja sino **el apoderado que también se atiende**: se compra el paquete para el hijo y la madre empieza a tomar sesiones de la misma bolsa. Por eso se da de alta desde la tarjeta del apoderado, en la ficha del paciente ("+ También se atiende"), con los datos que ya están escritos: registrarla a mano desde cero invitaba a olvidar el titular, y sin titular sus sesiones no descontaban de ninguna parte — atención dada y no contada.
 - **Varios paquetes a lo largo del tiempo.** Un paciente no compra "un paquete" y ya: cinco sesiones de evaluación en agosto, diez de terapia en setiembre, ocho de lenguaje después. Son acuerdos distintos, con precios y propósitos distintos, y cada uno es una fila en `paciente_paquetes` — uno solo `Activo`, el resto `Cerrado`. Por eso el paquete lleva **concepto**: sin él el historial son números sin sentido. Un paquete que ya pasó se registra desde la ficha con **sus propias fechas**, sin tocar el que está en curso, y no puede terminar después de que empezó el vigente: dos paquetes vivos a la vez dejarían las sesiones sin saber a cuál ir.
 - **Qué fue cada sesión.** Una cita lleva su tipo: *Consulta* (la primera, donde se ve qué necesita), *Evaluacion*, *Terapia*, *Seguimiento*, *Devolucion* (entrega de resultados), *Taller*, *Otro*. Importa para leer la historia clínica, para el informe del colegio y para cobrar — una consulta y una sesión de terapia no valen lo mismo. Las claves del ENUM van **sin tildes a propósito**: al cargar un `.sql` sin `--default-character-set=utf8mb4` los acentos de un ENUM se corrompen y después no entra ninguna fila. Las tildes las pone la pantalla (`TIPOS_DE_SESION` en el panel, con `clave` y `etiqueta`). Al cargar migraciones, usar siempre ese parámetro.
+- **Dónde corta un paquete y empieza el siguiente.** La fecha que se guarda al renovar es la de **inicio del paquete nuevo**, y el día del corte va al **nuevo**, no al que se cierra. Una sesión ese mismo día es la primera del siguiente. Pasó con un paciente de verdad: su última sesión del paquete anterior fue un día 4 y el nuevo arrancó el 8 — contando el 8 para el viejo salían once sesiones en un paquete de diez y el nuevo mostraba dos cuando iban tres. El criterio está repetido en **seis** sitios (contador del paquete vigente, cobertura de los pagos, detalle que se manda por WhatsApp, etiqueta de cada fila de cita, última sesión del paciente y número de la próxima): si se toca uno hay que tocarlos todos, o la pantalla se contradice sola. Y como la lista de citas muestra todas las del paciente, cada fila lleva escrito de qué paquete salió; **no** se usa el `paquete_id` guardado en la cita, porque al renovar se reutiliza la fila del paquete y las sesiones viejas se quedan apuntando al nuevo.
 - **Pautas de observación.** Hay pruebas que responde el paciente y pautas que marca el profesional mirando al niño (la evaluación pedagógica por edades). En una pauta hay **tres** respuestas, no dos: *sí lo hace*, *aún no* y ***no evaluado***. La tercera no es un adorno: un niño que ese día no colaboró no "falla" el ítem, y el porcentaje de logro se calcula **solo sobre lo que se observó**. El sistema elige la hoja por la fecha de nacimiento, y si se usa otra lo dice por escrito — bajar de hoja es una decisión clínica normal, pero tiene que quedar anotada.
 - **Quién entra al sistema.** Los roles existen en la base desde el principio (admin, recepción, profesional, practicante) y `Colecciones::PERMISOS` es lo que les da efecto: cada sección exige un permiso para leer y otro para escribir. El acceso se da desde la **ficha de la persona** —el botón 🔑 en Profesionales y Practicantes—, y la cuenta queda pegada a esa ficha: una por persona. Nunca se borran, se desactivan —borrarlas dejaría la auditoría apuntando a alguien que ya no existe— y **siempre tiene que quedar un administrador activo**, así que nadie puede desactivarse ni bajarse el rol a sí mismo. La contraseña no sale de la base ni con hash: solo se restablece.
 - **La clave prestada dura una entrada.** La cuenta nace con el **DNI** como clave, porque es lo que Luis puede dictar en el momento sin inventar ni anotar nada. Pero el DNI no es un secreto: está en el carné, en la ficha y en la lista de asistencia. Por eso nace marcada (`debe_cambiar_clave`) y **mientras lo esté, la sesión no sirve para nada más**: `api/index.php` rechaza toda acción que no sea cambiarla. El bloqueo va en el servidor, no escondiendo pantallas — si estuviera en el navegador bastaría con no abrir el panel. Restablecer una clave vuelve a marcarla, así que la clave que Luis conoce solo sirve para recuperar la cuenta. En la lista de cuentas se ve quién ya puso la suya y quién no.
 - **El practicante llena su propia ficha.** Se le manda un enlace con clave y él pone su nombre, DNI, universidad, fechas y los días que viene. El enlace **vence**, sirve **una sola vez** —si no, el mismo enlace reenviado al grupo crearía una ficha por cada persona que lo toque— y queda anotado si lo abrió, que es lo que uno quiere saber cuando lo mandó hace tres días y no llega nada. Registrarse **no da acceso al sistema**: deja una ficha y nada más. La cuenta con usuario y clave es otra cosa y se da aparte.
+- **El enlace que recibe el paciente.** Las páginas donde entra sin cuenta —responder una prueba, recibir su tarea— llevan **el logo y el nombre del centro** antes que cualquier pregunta: un enlace que llega por WhatsApp sin decir de quién es, y que pide escribir cómo te sientes, se parece a una estafa, y o no lo abren o lo abren desconfiando, que para una prueba es peor. Debajo va el **mensaje del centro** (`centro_config.mensaje_pacientes`, editable desde Datos del centro: es la voz del centro y no puede depender de que alguien edite un archivo) y **una frase distinta en cada apertura**, que rota en orden —nunca dos veces la misma seguida, y se recorren todas antes de repetir—. Las frases hablan **del trabajo y de la constancia, nunca del ánimo**: un «tú puedes con todo» antes de un cuestionario de ansiedad empuja a contestar que uno está mejor de lo que está, y eso cambia el resultado. Por eso la frase de aliento va **al terminar**, cuando ya no hay respuesta que inclinar.
+- **De quién es este enlace.** Antes de mostrar una sola pregunta, la página dice para quién es, con el nombre **recortado** («Julio P. G.»): la familia lo reconoce al toque y quien lo recibió por error no se entera de a quién se atiende en el centro. El nombre completo aparece recién después de confirmar. Esto no es seguridad —el secreto es la clave de 64 caracteres del enlace— y el **DNI tampoco agrega secreto**: está en el carné, en la ficha y en la lista de asistencia. Resuelve otra cosa: un WhatsApp se reenvía, y si al abrirlo salen las preguntas de una, contesta quien lo abrió y esas respuestas entran a la historia clínica de otra persona. Un protocolo respondido por otro es idéntico a uno legítimo —mismos ítems, mismo tiempo, mismo perfil— y es el único error de este sistema que no deja rastro. El candado del DNI (`centro_config.pedir_documento`) se comprueba **en el servidor**, con cinco intentos por cuarto de hora, y solo aplica a quien tenga el documento en su ficha: exigirlo al resto los dejaría encerrados afuera de su propia prueba, así que a ellos se les pide confirmar sin número. Nace apagado a propósito —hoy 11 de los 12 pacientes no tienen DNI cargado— y el panel avisa, al generar cada enlace, si el candado va a aplicar o no.
 - **Materiales de trabajo.** Cada material lleva escrito qué se puede hacer con él: *del centro* y *de uso libre* se le pueden entregar a la familia; *solo en sesión* y *reservado* se usan en consulta y no salen de ahí. Los protocolos de pruebas (C.A.R.S y cualquier otro) van siempre como **reservado**: repartirlos infringe los derechos del autor y además arruina la prueba para quien la tenga que responder después. El sistema comprueba esto **en el servidor**, no solo escondiendo el botón. Material ajeno no se vende: lo que el centro cobra es su trabajo.
 
 ## Dos paneles, un solo programa
@@ -74,6 +77,15 @@ desde la que se abrió, y de ahí sale qué pestañas se muestran
 propagar una mejora a `misfinanzas/` se vuelve a copiar `index.html`,
 `api/` y `src/` — nunca `config/`, que apunta a la otra base.
 
+Y lo que se olvida siempre: una migración que toque una tabla que los dos
+paneles comparten —`centro_config` es la que muerde— hay que cargarla **en
+las dos bases**, cambiando el `USE`. Como el programa es el mismo,
+`CentroInfo::guardar()` escribe las mismas columnas en las dos; si faltan
+en una, guardar Datos del centro ahí revienta con «Unknown column», y no
+se nota hasta que alguien abre el panel personal. Pasó con la migración
+`25`: quedó solo en la base del centro y el panel personal se habría roto
+al copiarle `src/`.
+
 `respaldar.ps1` copia **las dos** bases, cada una con su copia cifrada
 fuera de la computadora.
 
@@ -90,11 +102,54 @@ como un programa y no como una pestaña. Si algo no arranca lo dice con
 palabras. `laragon.exe start` **no** sirve: abre la interfaz pero no enciende
 los servicios.
 
+Eso tiene una consecuencia que se paga en la pantalla: una ventana `--app`
+**no tiene barra de direcciones ni botón de recargar**. Si los datos
+cambian por fuera —otra sesión, una carga hecha aparte, un respaldo
+restaurado— la ventana abierta se queda con lo viejo y no hay cómo
+refrescarla. Por eso la barra de arriba lleva el botón **Actualizar**
+(`refrescarTodo()`), que vuelve a pedirle todo al servidor sin recargar la
+página y **respeta la pestaña** en la que está. No es un adorno: sin él la
+única salida es cerrar y volver a abrir el programa.
+
+Y una más, que costó tres vueltas: **Chrome se guarda la pantalla aunque
+Apache mande `no-store`**, sobre todo si ya hay otra ventana suya abierta
+—se reúsa el proceso y con él su caché—. Se cerraba el panel, se volvía a
+abrir desde el acceso directo y seguía saliendo el `index.html` viejo, sin
+los botones nuevos. Por eso `abrir-panel.ps1` abre con
+`?v=<fecha y hora>`: una dirección distinta en cada arranque, de la que
+no hay copia guardada. El panel no lee nada de la query, así que no
+molesta.
+
+Ojo con la diferencia que confundió de verdad: **Actualizar trae los
+datos, no el programa**. Una ventana abierta desde ayer sigue corriendo
+el `index.html` de ayer —con los botones de ayer— por mucho que se
+refresquen los datos, y uno busca en pantalla un botón que su copia
+todavía no tiene. Por eso `api/index.php?accion=salud` devuelve ahora
+`panel.version`, leída del propio `index.html`, y el panel la compara con
+su `PANEL_VERSION` después de cada Actualizar: si no coinciden, ofrece
+recargar. **Al tocar la pantalla hay que subir `PANEL_VERSION`**, o el
+aviso no salta y la persona se queda con la copia vieja sin enterarse.
+
+Lo mismo con la **sesión vencida**. Antes el panel seguía dibujando todo
+como si nada y cada cosa que se tocaba fallaba al guardar, con un aviso
+chico en la barra que nadie mira: la persona trabajaba media hora para
+nada. Ahora, en cuanto el servidor contesta «sesión no iniciada o
+expirada» —al guardar o al actualizar—, el panel **vuelve a la pantalla
+de entrar** diciendo que lo último no se guardó. Dejar seguir trabajando
+sobre una sesión muerta es peor que cortar.
+
 ## Fechas
 
 Perú es UTC-5, así que `toISOString()` devuelve el día siguiente a partir de las 7 de la noche.
 Para cualquier fecha del día usar `fechaLocalISO()` / `todayISO()`, nunca `toISOString()` directo.
 Este detalle ya causó un bug real: un adelanto de S/150 desaparecía del saldo.
+
+Y al revés, al **mostrar**: `new Date('2026-10-08')` se lee como medianoche
+UTC y al pintarla en hora de Perú sale **07 oct**. Una fecha sola
+(AAAA-MM-DD) hay que armarla con sus tres números —`new Date(a, m-1, d)`—
+en vez de dejar que el navegador la parsee. Estaba corriendo un día las
+fechas de los paquetes, los vencimientos de las pruebas y el último
+acceso de cada cuenta; lo arregla `fmtFechaCorta()`.
 
 ## Datos y secretos — límites firmes
 

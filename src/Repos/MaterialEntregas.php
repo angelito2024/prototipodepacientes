@@ -248,7 +248,9 @@ final class MaterialEntregas extends Repositorio
             return null;
         }
         return Database::uno(
-            'SELECT e.*, per.nombre_completo, pro.nombre_completo AS profesional
+            'SELECT e.*, per.nombre_completo, per.documento,
+                    per.nombres, per.apellido_paterno, per.apellido_materno,
+                    pro.nombre_completo AS profesional
                FROM material_entrega e
                JOIN personas per ON per.id = e.paciente_id
           LEFT JOIN personas pro ON pro.id = e.profesional_id
@@ -324,6 +326,34 @@ final class MaterialEntregas extends Repositorio
                 SET descargas = descargas + 1, ultima_descarga = NOW()
               WHERE entrega_id = ? AND material_id = ?',
             [$entregaId, $materialId]
+        );
+    }
+
+    /**
+     * ¿El documento que escribieron es el del paciente?
+     *
+     * Mismo criterio que en las pruebas: se comparan solo los dígitos,
+     * porque el DNI se dicta de memoria y la gente escribe puntos y
+     * guiones. Devuelve null si el paciente no tiene documento en su
+     * ficha: ahí no hay nada contra qué comparar.
+     */
+    public static function documentoCoincide(array $e, string $escrito): ?bool
+    {
+        $enFicha = preg_replace('/\D+/', '', (string) ($e['documento'] ?? ''));
+        if ($enFicha === '' || $enFicha === null) {
+            return null;
+        }
+        return $enFicha === preg_replace('/\D+/', '', $escrito);
+    }
+
+    /** Intentos fallidos de documento en los últimos minutos. */
+    public static function intentosFallidos(int $entregaId, int $minutos = 15): int
+    {
+        return (int) Database::valor(
+            "SELECT COUNT(*) FROM material_acceso
+              WHERE entrega_id = ? AND accion = 'documento_mal'
+                AND momento > DATE_SUB(NOW(), INTERVAL ? MINUTE)",
+            [$entregaId, $minutos]
         );
     }
 

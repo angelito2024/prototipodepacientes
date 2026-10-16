@@ -30,6 +30,13 @@ final class CentroInfo extends Repositorio
             'phone'               => (string) ($c['telefono'] ?? ''),
             'ruc'                 => (string) ($c['ruc'] ?? ''),
             'slogan'              => (string) ($c['lema'] ?? ''),
+            // El texto corto que ve el paciente en las páginas públicas:
+            // su prueba, su tarea para la casa. Va en la base y no en el
+            // programa porque es la voz del centro, y cambiarla no puede
+            // depender de que alguien edite un archivo.
+            'mensajePacientes'    => (string) ($c['mensaje_pacientes'] ?? ''),
+            // ¿Esos enlaces piden además el documento del paciente?
+            'pedirDocumento'      => (int) ($c['pedir_documento'] ?? 0) === 1,
             // Quién responde por el centro y por los datos de los pacientes.
             // Va en el consentimiento informado, que debe identificarlo con
             // nombre y documento (Ley 29733 y su Reglamento).
@@ -68,15 +75,18 @@ final class CentroInfo extends Repositorio
         Database::query(
             'INSERT INTO centro_config
                 (id, razon_social, direccion, telefono, ruc, lema, medios_pago,
+                 mensaje_pacientes, pedir_documento,
                  titular_nombre, titular_documento, titular_cargo, titular_colegiatura,
                  sala_zoom, sala_meet, url_publica,
                  minutos_recordatorio, minutos_sesion, horas_reprogramacion,
                  porcentaje_penalidad, incluir_politica)
-             VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+             VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
              ON DUPLICATE KEY UPDATE
                 razon_social=VALUES(razon_social), direccion=VALUES(direccion),
                 telefono=VALUES(telefono), ruc=VALUES(ruc), lema=VALUES(lema),
                 medios_pago=VALUES(medios_pago),
+                mensaje_pacientes=VALUES(mensaje_pacientes),
+                pedir_documento=VALUES(pedir_documento),
                 titular_nombre=VALUES(titular_nombre),
                 titular_documento=VALUES(titular_documento),
                 titular_cargo=VALUES(titular_cargo),
@@ -95,6 +105,8 @@ final class CentroInfo extends Repositorio
                 self::nz($valor['ruc'] ?? null),
                 self::nz($valor['slogan'] ?? null),
                 self::nz($valor['paymentMethods'] ?? null),
+                self::nz($valor['mensajePacientes'] ?? null),
+                self::bool($valor['pedirDocumento'] ?? false),
                 self::nz($valor['titular_nombre'] ?? null),
                 self::nz($valor['titular_documento'] ?? null),
                 self::nz($valor['titular_cargo'] ?? null),

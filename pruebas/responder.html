@@ -27,6 +27,37 @@
   .cuenta{font-size:12px;color:var(--suave);margin-top:6px;display:flex;
           justify-content:space-between;gap:10px}
 
+  /* La firma del centro. Va chica y arriba: el enlace llega por WhatsApp
+     y lo primero que hace quien lo abre es buscar de quién es. */
+  .marca{display:flex;align-items:center;gap:10px}
+  .marca img{width:34px;height:34px;object-fit:contain;flex:none}
+  .marca b{font-size:13.5px;font-weight:700;line-height:1.2}
+  .marca small{display:block;font-size:11.5px;color:var(--suave);font-weight:400}
+
+  /* La portada: de quién es el enlace, antes de cualquier pregunta. */
+  .portada{text-align:center;padding:26px 20px 10px}
+  .portada .sello{width:92px;height:92px;object-fit:contain;margin:0 auto 14px;display:block}
+  .portada h1{font-size:19px;margin:0 0 4px}
+  .portada .de{font-size:14px;color:var(--suave);margin:0 0 18px}
+  .paraquien{background:var(--acento2);border:1px solid #c6ded2;border-radius:12px;
+             padding:14px 16px;margin:0 0 16px;text-align:left}
+  .paraquien .et{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;
+                 color:#3f6b57;font-weight:700}
+  .paraquien .quien{font-size:19px;font-weight:700;margin-top:3px}
+  .paraquien .que{font-size:13.5px;color:#3f6b57;margin-top:5px}
+  .frase{font-size:14.5px;font-style:italic;color:#4a5365;margin:18px 0 0;
+         padding-top:16px;border-top:1px solid var(--linea);text-wrap:balance}
+  .campo{text-align:left;margin:4px 0 0}
+  .campo label{display:block;font-size:13.5px;font-weight:600;margin-bottom:6px}
+  .campo input{width:100%;font:inherit;font-size:19px;letter-spacing:.08em;
+               text-align:center;padding:13px 12px;border:1.5px solid var(--linea);
+               border-radius:10px;background:#fbfcfe;color:var(--tinta)}
+  .campo input:focus-visible{outline:3px solid #b9d9c8;outline-offset:1px;
+                             border-color:var(--acento)}
+  .campo .pista{font-size:12.5px;color:var(--suave);margin-top:7px}
+  .noyo{background:none;border:0;color:var(--suave);font-size:13px;
+        text-decoration:underline;padding:12px 4px;cursor:pointer;font-weight:400}
+
   .tarjeta{background:var(--papel);border:1px solid var(--linea);border-radius:12px;
            padding:18px;margin:16px 0}
   .tarjeta h2{font-size:16px;margin:0 0 8px}
@@ -69,10 +100,15 @@
 </head>
 <body>
 
-<header>
+<header id="cabeceraPrueba" hidden>
   <div class="cabecera">
-    <p class="titulo" id="tituloPrueba">Cargando…</p>
-    <p class="sub" id="subPrueba"></p>
+    <div class="marca">
+      <img id="marcaLogo" src="" alt="" hidden>
+      <span>
+        <b id="tituloPrueba">Cargando…</b>
+        <small id="subPrueba"></small>
+      </span>
+    </div>
     <div class="barra"><i id="barra"></i></div>
     <div class="cuenta">
       <span id="contador"></span>
@@ -96,6 +132,9 @@ const POR_PAGINA = 10;
 const token = new URLSearchParams(location.search).get('t') || '';
 let datos = null, respuestas = {}, pagina = 0, inicio = Date.now();
 let pendienteGuardar = false, guardando = false;
+// La portada: de quién es el enlace, el logo del centro y su mensaje.
+// Llega antes que las preguntas y se guarda para las pantallas de cierre.
+let marca = null, portada = null;
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -112,16 +151,28 @@ async function api(accion, cuerpo){
   return j;
 }
 
-function pantallaSimple(titulo, texto, icono){
+function pantallaSimple(titulo, texto, icono, frase){
+  $('cabeceraPrueba').hidden = true;
   $('contenido').innerHTML =
-    `<div class="fin"><div class="tic">${icono}</div>
-       <h2>${esc(titulo)}</h2><p style="color:#5b6577">${esc(texto)}</p></div>`;
+    `<div class="fin">
+       ${marca && marca.logo ? `<img class="sello" src="${esc(marca.logo)}" alt="">` : ''}
+       <div class="tic">${icono}</div>
+       <h2>${esc(titulo)}</h2><p style="color:#5b6577">${esc(texto)}</p>
+       ${marca && marca.centro ? `<p class="de" style="font-size:13px;color:#5b6577">${esc(marca.centro)}</p>` : ''}
+       ${frase ? `<p class="frase">${esc(frase)}</p>` : ''}
+     </div>`;
   $('pie').hidden = true;
   $('barra').style.width = '100%';
   $('contador').textContent = '';
   $('paginaTxt').textContent = '';
 }
 
+/* --- Paso 1: la portada -------------------------------------------
+   Antes esta pantalla no existía: se abría el enlace y salían las
+   preguntas. Un enlace reenviado al grupo de la familia lo contestaba
+   quien lo abriera, y esas respuestas entraban a la historia clínica de
+   otra persona sin que nada lo delatara. Acá se dice de quién es, antes
+   de mostrar una sola frase del cuestionario. */
 async function arrancar(){
   if(!token){ pantallaSimple('Enlace incompleto',
       'Abre el enlace completo que te envió el centro.', '🔗'); return; }
@@ -129,11 +180,98 @@ async function arrancar(){
   try { j = await api('abrir'); }
   catch(e){ pantallaSimple('Sin conexión', e.message, '📡'); return; }
 
+  // El logo vive en la raíz del sitio y esta página está una carpeta
+  // adentro, así que la dirección se completa acá.
+  marca = j.marca || null;
+  if(marca && marca.logo) marca.logo = '../' + marca.logo;
+
   if(j.cerrada){ pantallaSimple('Ya enviaste esta prueba', j.error, '✅'); return; }
   if(!j.ok){ pantallaSimple('No se puede abrir', j.error || 'Enlace no válido.', '⚠️'); return; }
 
+  portada = j;
+  document.title = marca && marca.centro ? marca.centro : 'Cuestionario';
+  dibujarPortada();
+}
+
+function dibujarPortada(){
+  const p = portada, m = marca || {};
+  const pr = p.prueba || {};
+  const cuanto = pr.minutos ? `unos ${pr.minutos} minutos` : 'un rato';
+
+  $('cabeceraPrueba').hidden = true;
+  $('pie').hidden = true;
+  $('contenido').innerHTML = `
+    <div class="portada">
+      ${m.logo ? `<img class="sello" src="${esc(m.logo)}" alt="">` : ''}
+      <h1>${esc(m.centro || 'Centro Psicológico')}</h1>
+      ${m.lema ? `<p class="de">${esc(m.lema)}</p>` : ''}
+    </div>
+    <div class="tarjeta">
+      <div class="paraquien">
+        <div class="et">Este cuestionario es para</div>
+        <div class="quien">${esc(p.paciente || '—')}</div>
+        <div class="que">${esc(pr.nombre || 'Cuestionario')}${
+          pr.nItems ? ` · ${pr.nItems} frases · ${esc(cuanto)}` : ''}</div>
+      </div>
+      <p>${esc(m.mensaje || '')}</p>
+      ${p.empezada ? `<p><b>Ya lo habías empezado.</b> Al continuar retomas donde te
+         quedaste; no se pierde nada de lo que ya contestaste.</p>` : ''}
+      ${p.pideDocumento
+        ? `<div class="campo">
+             <label for="doc">Para continuar, escribe el número de DNI de ${esc(p.paciente || 'la persona')}</label>
+             <input id="doc" inputmode="numeric" autocomplete="off" maxlength="12"
+                    placeholder="········">
+             <p class="pista">Lo pedimos para asegurarnos de que las respuestas entren
+                a la historia clínica correcta. Si el enlace no es para ti, no lo contestes.</p>
+           </div>`
+        : `<p class="pista" style="font-size:13px;color:#5b6577">Si esta persona no eres
+             tú ni alguien a tu cargo, cierra esta página y avísale al centro: las
+             respuestas entran a su historia clínica.</p>`}
+      <div id="avisoPortada"></div>
+    </div>
+    <div style="display:flex;flex-direction:column;align-items:center;gap:2px">
+      <button type="button" class="principal" style="width:100%;max-width:420px"
+              id="btnEntrar">${p.pideDocumento ? 'Continuar' : 'Sí, es para mí · Empezar'}</button>
+      <button type="button" class="noyo" id="btnNoSoy">No es para mí</button>
+    </div>
+    ${m.frase ? `<p class="frase" style="text-align:center">${esc(m.frase)}</p>` : ''}`;
+
+  $('btnEntrar').addEventListener('click', entrar);
+  $('btnNoSoy').addEventListener('click', () => pantallaSimple('No lo contestes',
+    'Avísale al centro que te llegó este enlace por error, para que lo anulen y '
+    + 'se lo manden a quien corresponde. Gracias por decirlo.', '🙏'));
+  const d = $('doc');
+  if(d){
+    d.addEventListener('keydown', e => { if(e.key === 'Enter') entrar(); });
+    d.focus();
+  }
+  window.scrollTo({top:0});
+}
+
+/* --- Paso 2: recién acá llegan las preguntas ---------------------- */
+async function entrar(){
+  const btn = $('btnEntrar'), d = $('doc');
+  const cuerpo = d ? {documento: d.value.trim()} : {confirmo: true};
+  btn.disabled = true; btn.textContent = 'Un momento…';
+  let j;
+  try { j = await api('entrar', cuerpo); }
+  catch(e){
+    btn.disabled = false; btn.textContent = 'Continuar';
+    $('avisoPortada').innerHTML = `<div class="aviso">${esc(e.message)}</div>`;
+    return;
+  }
+  if(!j.ok){
+    btn.disabled = false;
+    btn.textContent = portada.pideDocumento ? 'Continuar' : 'Sí, es para mí · Empezar';
+    $('avisoPortada').innerHTML = `<div class="aviso">${esc(j.error || 'No se pudo continuar.')}</div>`;
+    if(d){ d.select(); d.focus(); }
+    return;
+  }
+
   datos = j;
   respuestas = j.respuestas || {};
+  $('cabeceraPrueba').hidden = false;
+  if(marca && marca.logo){ $('marcaLogo').src = marca.logo; $('marcaLogo').hidden = false; }
   $('tituloPrueba').textContent = j.prueba.siglas || j.prueba.nombre;
   $('subPrueba').textContent = j.paciente || '';
   document.title = j.prueba.siglas || 'Cuestionario';
@@ -280,7 +418,7 @@ $('btnSiguiente').addEventListener('click', async () => {
     if(j.ok){
       pantallaSimple('¡Gracias!',
         'Tus respuestas llegaron al centro. Tu psicólogo las revisará y '
-        + 'conversarán los resultados en la consulta.', '✅');
+        + 'conversarán los resultados en la consulta.', '✅', j.frase);
       return;
     }
     alert(j.error || 'No se pudo enviar.');

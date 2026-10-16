@@ -611,6 +611,15 @@
   }
   .backupbtn .dot{width:7px;height:7px;border-radius:50%;background:currentColor;flex:none;}
   .backupbtn:hover{border-color:var(--primary-light);background:var(--primary-tint);}
+  .backupbtn:disabled{opacity:.6;cursor:progress;}
+  .refreshicon{font-size:14px;line-height:1;display:inline-block;}
+  /* Mientras pide los datos, la flecha gira: sin eso no se nota si el
+     botón hizo algo, y uno lo aprieta tres veces. */
+  #refreshBtn.girando .refreshicon{animation:girar .8s linear infinite;}
+  @keyframes girar{to{transform:rotate(360deg)}}
+  @media (prefers-reduced-motion: reduce){
+    #refreshBtn.girando .refreshicon{animation:none;opacity:.5;}
+  }
   .backupbtn.ok{background:var(--ok-soft);border-color:#C6DCCC;color:var(--ok);}
   .backupbtn.warn{background:var(--accent-soft);border-color:#E0CEA6;color:var(--accent);}
   .backupbtn.alert{background:var(--alert-soft);border-color:#E7C6C4;color:var(--alert);}
@@ -749,6 +758,15 @@
       </div>
       <div class="topbar-right">
         <span id="saveStatus" class="savestatus" role="status" aria-live="polite"></span>
+        <!-- Volver a pedirle los datos al servidor sin recargar la página.
+             Hace falta un botón porque el panel se abre con Chrome en modo
+             --app: esa ventana no tiene barra de direcciones ni botón de
+             recargar, así que si algo cambió por fuera no hay forma de
+             traerlo. Pasó de verdad. -->
+        <button class="backupbtn" id="refreshBtn" onclick="refrescarTodo(this)"
+                title="Volver a pedir los datos al servidor">
+          <span class="refreshicon" aria-hidden="true">⟳</span><span id="refreshBtnText">Actualizar</span>
+        </button>
         <button class="backupbtn" id="backupBtn" onclick="exportBackupJSON()" title="Descargar una copia de seguridad con todos tus datos">
           <span class="dot"></span><span id="backupBtnText">Respaldo</span>
         </button>
@@ -906,6 +924,34 @@
           <br>· Si responde <b>desde su casa</b>: hace falta que el sistema esté en internet,
           y aquí va su dirección (https://…). Sin eso, ningún enlace va a abrir fuera del local.
           <br>Sin barra al final.</p>
+      </div>
+      <div class="field" style="grid-column:1/-1">
+        <label>Mensaje del centro en los enlaces del paciente</label>
+        <textarea id="ci_mensajePacientes" rows="2" maxlength="400"
+          placeholder="Este enlace es tuyo y no lo ve nadie más. Lo que respondas llega directo a tu psicóloga."></textarea>
+        <p class="hint" style="margin-top:3px">
+          Es el texto corto que lee el paciente al abrir su <b>prueba</b> o su
+          <b>tarea para la casa</b>, debajo del logo del centro. Corto y claro:
+          dos líneas se leen, cinco no. Si lo dejas vacío sale uno por defecto.
+          <br>Debajo del mensaje sale una <b>frase distinta en cada apertura</b>, que
+          rota sola entre 18. Hablan del trabajo y de la constancia, nunca del
+          ánimo: un «tú puedes con todo» antes de un cuestionario de ansiedad
+          empuja a contestar que uno está mejor de lo que está, y eso cambia el
+          resultado. Por eso la frase de aliento sale <b>al terminar</b>, no antes.</p>
+      </div>
+      <div class="field" style="grid-column:1/-1">
+        <label>¿El enlace pide el DNI del paciente antes de abrirse?</label>
+        <select id="ci_pedirDocumento"><option value="false">No, solo confirmar de quién es</option><option value="true">Sí, pedir el número de DNI</option></select>
+        <p class="hint" style="margin-top:3px">
+          El enlace ya lleva su propia clave de 64 caracteres: el DNI <b>no agrega
+          secreto</b> —está en el carné y en la lista de asistencia—. Agrega otra
+          cosa: evita que el enlace reenviado al grupo de la familia lo conteste
+          la persona equivocada. Un protocolo respondido por otro es idéntico a
+          uno legítimo, y es el único error de este sistema que no deja rastro.
+          <br><b>Ojo antes de prenderlo:</b> solo funciona con los pacientes que
+          tienen el DNI cargado en su ficha. Al resto se les sigue pidiendo
+          confirmar de quién es el enlace, sin número. Cinco intentos cada
+          cuarto de hora.</p>
       </div>
       <div class="field">
         <label>Tu QR de Plin (para mostrar o descargar y enviar)</label>
@@ -1225,6 +1271,36 @@ const API_URL = 'api/index.php';
 // y recargamos en vez de pisar su trabajo.
 const collVersions = {};
 
+/* ¿El servidor está diciendo que la sesión se venció?
+   Importa distinguirlo de "no hay conexión": con la sesión vencida el
+   panel sigue dibujando todo como si nada, y cada cosa que la persona
+   toca falla al guardar sin que se note más que en un aviso chico de la
+   barra. Eso es peor que no dejarla trabajar. */
+function esSesionVencida(motivo){
+  return /sesi[oó]n no iniciada|sesi[oó]n.*expir|401|no autenticad/i.test(String(motivo||''));
+}
+
+/* Vuelve a la pantalla de entrar, diciendo por qué.
+   Se llama una sola vez aunque fallen diez secciones seguidas: si no,
+   salían diez avisos encima del otro. */
+let yaAvisadoSesion = false;
+function volverAEntrar(motivo){
+  if(yaAvisadoSesion) return;
+  yaAvisadoSesion = true;
+  const el = document.getElementById('saveStatus');
+  if(el) el.textContent = '';
+  document.getElementById('app').style.display = 'none';
+  const err = document.getElementById('loginError');
+  if(err){
+    err.textContent = motivo || 'Tu sesión se venció. Vuelve a entrar para seguir trabajando.';
+    err.style.display = 'block';
+  }
+  document.getElementById('login_pass').value = '';
+  document.getElementById('loginScreen').style.display = 'flex';
+  const u = document.getElementById('login_user');
+  if(u && !u.value) u.focus(); else document.getElementById('login_pass').focus();
+}
+
 /* Un aviso honesto cuando una sección no se pudo leer, en vez de dejar la
    pantalla como si no hubiera nada. Dice qué pasó y deja reintentar. */
 function avisoDeCarga(clave, queEs){
@@ -1244,6 +1320,88 @@ function avisoDeCarga(clave, queEs){
 
 /* Vuelve a pedirle al servidor una sección que falló, sin recargar todo
    el panel ni perder lo que esté escrito en otra pantalla. */
+/* Volver a pedirle TODO al servidor, sin recargar la página.
+   El panel se abre con Chrome en modo --app, una ventana sin barra de
+   direcciones ni botón de recargar: si los datos cambiaron por fuera —otra
+   sesión, una carga hecha aparte, el respaldo restaurado— no había manera
+   de traerlos sin cerrar y volver a abrir. Esto es ese botón. */
+let ultimaCarga = null;
+
+function marcarUltimaCarga(){
+  ultimaCarga = new Date();
+  const b = document.getElementById('refreshBtn');
+  if(b) b.title = 'Datos traídos a las ' + horaCorta(ultimaCarga)
+                + '. Tócalo para volver a pedirlos.';
+}
+function horaCorta(d){
+  return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+}
+
+async function refrescarTodo(btn){
+  const b = btn || document.getElementById('refreshBtn');
+  const txt = document.getElementById('refreshBtnText');
+  const antes = txt ? txt.textContent : '';
+  if(b){ b.disabled = true; b.classList.add('girando'); }
+  if(txt) txt.textContent = 'Actualizando…';
+  // La pestaña en la que está se respeta: refrescar no debe moverlo de
+  // sitio ni hacerle perder de vista lo que estaba mirando.
+  const pestana = currentTab;
+  try{
+    FALLOS_DE_CARGA.clear();
+    await loadAll();
+    if(tabsDeEstePanel().some(t => t.id === pestana)) currentTab = pestana;
+    renderTabs();
+    renderPanel();
+    marcarUltimaCarga();
+    const fallaron = [...FALLOS_DE_CARGA.keys()];
+    const vencida = [...FALLOS_DE_CARGA.values()].some(esSesionVencida);
+    if(vencida){
+      volverAEntrar('Tu sesión se venció. Vuelve a entrar para seguir trabajando.');
+    }else if(fallaron.length){
+      showToast('Se actualizó, pero ' + fallaron.length
+              + ' sección(es) no se pudieron leer. Revisa que Laragon esté encendido.');
+    }else{
+      showToast('Datos actualizados · ' + horaCorta(ultimaCarga));
+    }
+    // Los datos ya están al día; el programa puede no estarlo.
+    comprobarVersionDelPrograma();
+  }catch(e){
+    console.error('No se pudo actualizar', e);
+    showToast('No se pudo actualizar. Revisa que Laragon esté encendido.');
+  }finally{
+    if(b){ b.disabled = false; b.classList.remove('girando'); }
+    if(txt) txt.textContent = antes || 'Actualizar';
+  }
+}
+
+/* ¿La pantalla que estoy viendo es la última?
+   El botón Actualizar trae los DATOS, no el PROGRAMA: una ventana abierta
+   desde ayer sigue corriendo el index.html de ayer, con los botones de
+   ayer. Eso ya confundió de verdad — se buscaba un botón nuevo en una
+   pantalla que todavía no lo tenía. El servidor dice qué versión hay en
+   el disco y, si no es la misma, acá se ofrece recargar. */
+async function comprobarVersionDelPrograma(){
+  if(STORAGE_MODE!=='api') return;
+  try{
+    const r = await fetch(`${API_URL}?accion=salud`, {credentials:'same-origin'});
+    const d = await r.json();
+    const enDisco = d && d.panel ? String(d.panel.version||'') : '';
+    if(!enDisco || enDisco === PANEL_VERSION) return;
+    if(confirm('Hay una versión más nueva del panel.\n\n'
+      + 'Esta ventana: ' + PANEL_VERSION + '\n'
+      + 'En el servidor: ' + enDisco + '\n\n'
+      + 'El botón Actualizar trae los datos, pero los cambios de la pantalla '
+      + '(botones nuevos, arreglos) solo llegan recargando.\n\n'
+      + '¿Recargar ahora? No se pierde nada de lo guardado.')){
+      recargarPrograma();
+    }
+  }catch(e){ /* si no se puede preguntar, no se molesta a nadie */ }
+}
+
+/* Traer de nuevo el archivo de la pantalla. Va aparte para poder
+   comprobarlo sin recargar la sonda, que no se puede. */
+function recargarPrograma(){ location.reload(); }
+
 async function recargarSeccion(clave){
   const antes = FALLOS_DE_CARGA.get(clave);
   DB[clave] = await getColl(clave, Array.isArray(DB[clave]) ? [] : DB[clave]);
@@ -1377,6 +1535,13 @@ async function setColl(key, value){
         return false;
       }
       console.error('No se pudo guardar', key, e);
+      // Sesión vencida: no sirve de nada dejarlo seguir tocando, porque
+      // nada se va a guardar. Se lo manda a entrar de nuevo.
+      if(esSesionVencida(e.message)){
+        volverAEntrar('Tu sesión se venció y lo último no se guardó. '
+                    + 'Vuelve a entrar y repítelo.');
+        return false;
+      }
       if(el){
         el.textContent = '⚠ No se pudo guardar en la base de datos: ' + e.message;
         el.style.color = 'var(--alert)';
@@ -1615,7 +1780,7 @@ function ultimaSesionDe(p){
   const suyas = DB.appointments
     .filter(a => a.status === 'Completada'
       && (a.patientId === p.id || participantesDeCita(a).includes(p.id))
-      && (!desde || a.date > desde))
+      && (!desde || a.date >= desde))
     .map(a => a.date).sort();
   return suyas.length ? suyas[suyas.length - 1] : '';
 }
@@ -2013,7 +2178,7 @@ function defaultHistoria(patientId){
 /* Las cuentas de cobro (Yape, banco, CCI) NO van escritas aquí: este archivo
    está en GitHub y son datos bancarios. Se escriben una sola vez en
    "Datos del centro" y viven en la base, junto con el token de apiperu. */
-const DEFAULT_CENTER_INFO = {name:'Centro Psicológico MAGUSA ARCOIRIS DE ESPERANZA', address:'', phone:'', ruc:'', slogan:'', paymentMethods:'', zoomSala:'', meetSala:'', reminderMinutes:10, rescheduleHours:24, latePenaltyPercent:10, includePolicy:true, sessionMinutes:60, apiPeruToken:''};
+const DEFAULT_CENTER_INFO = {name:'Centro Psicológico MAGUSA ARCOIRIS DE ESPERANZA', address:'', phone:'', ruc:'', slogan:'', paymentMethods:'', zoomSala:'', meetSala:'', reminderMinutes:10, rescheduleHours:24, latePenaltyPercent:10, includePolicy:true, sessionMinutes:60, apiPeruToken:'', mensajePacientes:'', pedirDocumento:false};
 const DEFAULT_AUTH_CONFIG = {enabled:false, username:'', password:''};
 
 /* ===== Horario semanal de profesionales ===== */
@@ -2401,7 +2566,10 @@ function sesionesAtendidas(p){
   const desde = inicioDelPaqueteVigente(p);
   return DB.appointments.filter(a => {
     if(a.status !== 'Completada') return false;
-    if(desde && a.date <= desde) return false;
+    // El día del corte es del paquete NUEVO. Escrito al revés que en los
+    // otros seis sitios, así que se escapó de la primera corrección: el
+    // contador decía "van 2" mientras el detalle listaba tres.
+    if(desde && a.date < desde) return false;
     if(a.patientId === p.id) return true;
     if(!participantesDeCita(a).includes(p.id)) return false;
     // Acompañó a otro: solo cuenta si no salen de la misma bolsa.
@@ -2518,6 +2686,7 @@ const TABS = [
   {id:'profesionales', label:'Profesionales', group:'Equipo'},
   {id:'practicantes', label:'Practicantes', group:'Equipo'},
   {id:'asistencia', label:'Asistencia', group:'Equipo'},
+  {id:'accesos', label:'Accesos al sistema', group:'Equipo'},
   {id:'tarifas', label:'Tarifas', group:'Dinero'},
   {id:'pagos', label:'Pagos', group:'Dinero'},
   {id:'finanzas', label:'Finanzas', group:'Dinero'},
@@ -2629,6 +2798,7 @@ function renderPanel(){
     case 'profesionales': p.innerHTML = viewProfesionales(); break;
     case 'practicantes': p.innerHTML = viewPracticantes(); break;
     case 'asistencia': p.innerHTML = viewAsistencia(); if(typeof renderAsistPersonOptions==='function') renderAsistPersonOptions(); break;
+    case 'accesos': p.innerHTML = viewAccesos(); cargarRolesSiFaltan(); break;
     case 'tarifas': p.innerHTML = viewTarifas(); break;
     case 'pagos': p.innerHTML = viewPagos(); break;
     case 'pruebas': p.innerHTML = viewPruebas();
@@ -3664,7 +3834,7 @@ function sesionesDelPaqueteVigente(paciente){
   const desde = inicioDelPaqueteVigente(paciente);
   return DB.appointments
     .filter(a => miembros.includes(a.patientId) && a.status !== 'Cancelada'
-                 && (!desde || a.date > desde))
+                 && (!desde || a.date >= desde))
     .sort((a,b)=>((a.date||'')+(a.time||'')).localeCompare((b.date||'')+(b.time||'')));
 }
 /* Cuántas sesiones tiene ya cubiertas el paciente con lo que pagó de su
@@ -3686,7 +3856,7 @@ function sesionesCubiertasPorElPaquete(paciente){
   const miembros = (paq && paq.total > 0) ? paq.miembros.map(m=>m.id) : [paciente.id];
   return DB.payments
     .filter(pm => miembros.includes(pm.patientId) && !pm.anulado && !pm.citaId
-                  && (!desde || String(pm.date||'') > desde))
+                  && (!desde || String(pm.date||'') >= desde))
     .reduce((s,pm)=>s + sesionesQueCubreElPago(pm, dueno), 0);
 }
 
@@ -4662,7 +4832,13 @@ function renderGuardians(){
   `;}).join('');
 }
 
-async function apoderadoTambienSeAtiende(gid){
+/* Primero se piden los datos elementales.
+   Antes se creaba la ficha con lo que hubiera en la tarjeta del apoderado
+   —a veces solo el nombre y el teléfono— y quedaba una persona en
+   atención sin DNI, sin edad y sin sexo. Para una historia clínica eso
+   no alcanza: la edad y el sexo cambian cómo se lee casi todo. Se piden
+   acá, una vez, en lugar de descubrir que faltan al escribir el informe. */
+function apoderadoTambienSeAtiende(gid){
   const g = currentGuardians.find(x=>x.id===gid);
   const titular = titularGuardado();
   if(!g || !titular) return;
@@ -4674,20 +4850,81 @@ async function apoderadoTambienSeAtiende(gid){
   const paq = paqueteDe(titular);
   const restantes = paq ? paq.restantes : Number(titular.packageTotal||0);
 
-  if(!confirm(
-      `Registrar a ${g.name} como paciente dentro del paquete de ${titular.name}.\n\n`
-    + `· Sus sesiones van a descontar de las mismas ${titular.packageTotal} `
-    + `(quedan ${restantes} por usar).\n`
-    + `· La deuda sigue siendo de ${titular.name}, una sola vez: a ella no se le cobra aparte.\n`
-    + `· Cada una tendrá su propia historia clínica.\n\n`
-    + `¿La registro?`)) return;
+  const caja = document.getElementById('accesoContent');
+  document.getElementById('accesoModal').classList.add('open');
+  caja.innerHTML = `
+    <h2 style="margin-top:0">${esc(g.name)} también se atiende</h2>
+    <div class="card" style="background:var(--surface-alt);margin:0 0 14px">
+      <p style="margin:0 0 6px">Va a quedar como paciente, <b>dentro del paquete
+        de ${esc(titular.name)}</b>:</p>
+      <p class="hint" style="margin:0">
+        · Sus sesiones descuentan de las mismas <b>${titular.packageTotal}</b>
+          (quedan ${restantes} por usar).<br>
+        · <b>No se le abre paquete propio ni se le cobra aparte</b>: la deuda sigue
+          siendo de ${esc(titular.name)}, una sola vez.<br>
+        · Tendrá <b>su propia historia clínica</b>, separada de la de ${esc(titular.name)}.</p>
+    </div>
+    <p class="hint" style="margin:0 0 8px">Solo lo elemental para su historia clínica.
+      El resto se completa después, cuando haga falta.</p>
+    <div class="formgrid">
+      <div class="field" style="grid-column:1/-1"><label>Nombre completo</label>
+        <input id="ta_nombre" value="${esc(g.name)}"></div>
+      <div class="field"><label>DNI</label>
+        <input id="ta_dni" value="${esc(g.dni||'')}" inputmode="numeric" maxlength="8"
+               placeholder="8 números"></div>
+      <div class="field"><label>Fecha de nacimiento</label>
+        <input type="date" id="ta_nac">
+        <p class="hint" style="margin-top:3px">La edad cambia cómo se lee todo lo demás.</p></div>
+      <div class="field"><label>Sexo</label>
+        <select id="ta_sexo">
+          <option value="">— sin especificar —</option>
+          <option>Femenino</option><option>Masculino</option><option>Otro</option>
+        </select></div>
+      <div class="field"><label>Teléfono</label>
+        <input id="ta_tel" value="${esc(g.phone||'')}"></div>
+      <div class="field" style="grid-column:1/-1"><label>Correo <span class="hint">(opcional)</span></label>
+        <input type="email" id="ta_mail" value="${esc(g.email||'')}"></div>
+    </div>
+    <div id="ta_aviso"></div>
+    <button class="btn" style="margin-top:12px"
+            onclick="confirmarApoderadoSeAtiende('${gid}')">Registrarla en el paquete</button>`;
+
+  // El sexo se adivina por el parentesco, que ya está escrito: madre,
+  // abuela y tía son mujeres; padre, abuelo y tío, varones.
+  const rel = (g.relationship||'').toLowerCase();
+  const sel = document.getElementById('ta_sexo');
+  if(/madre|abuela|t[íi]a|hermana/.test(rel))      sel.value = 'Femenino';
+  else if(/padre|abuelo|t[íi]o|hermano/.test(rel)) sel.value = 'Masculino';
+}
+
+async function confirmarApoderadoSeAtiende(gid){
+  const g = currentGuardians.find(x=>x.id===gid);
+  const titular = titularGuardado();
+  if(!g || !titular) return;
+
+  const aviso = document.getElementById('ta_aviso');
+  const decir = t => { aviso.innerHTML = `<p class="hint alert">${esc(t)}</p>`; };
+  const v = id => (document.getElementById(id)||{}).value || '';
+
+  const nombre = v('ta_nombre').trim();
+  if(nombre.length < 3) return decir('Escribe su nombre completo.');
+  const dni = v('ta_dni').replace(/\D/g,'');
+  if(dni && dni.length !== 8) return decir('El DNI tiene ocho números. Revísalo o déjalo vacío.');
+  const nac = v('ta_nac');
+  if(nac && nac > todayISO()) return decir('La fecha de nacimiento no puede ser futura.');
+
+  // Que no entre dos veces la misma persona.
+  const yaEsta = DB.patients.find(p => p.id !== titular.id
+    && ((dni && String(p.dni||'').replace(/\D/g,'') === dni)
+      || sinTildes(String(p.name||'').trim()) === sinTildes(nombre)));
+  if(yaEsta) return decir(`${yaEsta.name} ya está registrado como paciente.`);
 
   const nueva = {
     id: uid(),
-    name: g.name.trim(),
-    dni: (g.dni||'').trim(),
-    phone: (g.phone||'').trim(),
-    email: (g.email||'').trim(),
+    name: nombre,
+    dni: dni,
+    phone: v('ta_tel').trim(),
+    email: v('ta_mail').trim(),
     type: titular.type || 'Particular',
     modality: titular.modality || 'Presencial',
     professionalId: titular.professionalId || '',
@@ -4699,8 +4936,12 @@ async function apoderadoTambienSeAtiende(gid){
     sessionsUsed: 0, serviceId: '',
     paymentStatus: 'Pendiente',
     reportStatus: 'No aplica', reportDueDate: '',
-    birthday: '', birthDate: '',
-    isMinor: false, sex: '',
+    // El cumpleaños se guarda en dos formas: la fecha completa para la
+    // historia, y el mes-día que usan las alertas de cumpleaños.
+    birthDate: nac,
+    birthday: nac ? nac.slice(5) : '',
+    isMinor: false,
+    sex: v('ta_sexo'),
     guardians: [], guardianName: '', guardianPhone: '', guardianEmail: '', guardianDni: '',
     defaultMeetingLink: titular.defaultMeetingLink || '',
     defaultAddress: titular.defaultAddress || '',
@@ -4717,9 +4958,10 @@ async function apoderadoTambienSeAtiende(gid){
   DB.patients.push(nueva);
   if(!await setColl('patients', DB.patients)){
     DB.patients = DB.patients.filter(p=>p.id!==nueva.id);
-    alert('No se pudo guardar. Revisa la conexión y vuelve a intentarlo.');
+    decir('No se pudo guardar. Revisa la conexión y vuelve a intentarlo.');
     return;
   }
+  document.getElementById('accesoModal').classList.remove('open');
   renderGuardians();
   showToast(`${nueva.name} ya descuenta del paquete de ${titular.name}.`);
 }
@@ -5313,6 +5555,16 @@ function paquetesDe(p){
    las que caen entre el cierre del anterior y el suyo. Se usa el mismo
    criterio que el contador (`inicioDelPaqueteVigente`), para que el
    detalle no contradiga al número que se muestra en pantalla.
+
+   El día del corte va al paquete NUEVO, no al que se cierra. La fecha que
+   se guarda es la de **inicio del paquete nuevo**, así que una sesión ese
+   mismo día es la primera del nuevo. Caso que lo dejó claro: a un paciente se
+   le cerró el paquete el 8 de octubre, su última sesión del anterior fue
+   el 4 y el 8 arrancó el nuevo. Contando el 8 para el viejo salían once
+   sesiones en un paquete de diez, y el nuevo mostraba dos cuando iban
+   tres. Si se cambia esto hay que cambiarlo en los seis sitios a la vez
+   —contador, cobertura de pagos, detalle, etiqueta de la fila, última
+   sesión y número de la próxima— o la pantalla se contradice sola.
 */
 function sesionesDelPaquete(p, paqueteId){
   if(!p) return [];
@@ -5333,9 +5585,55 @@ function sesionesDelPaquete(p, paqueteId){
   return DB.appointments
     .filter(a => a.status === 'Completada'
       && (a.patientId === p.id || participantesDeCita(a).includes(p.id))
-      && (!desde || a.date > desde)
-      && (!hasta || a.date <= hasta))
+      && (!desde || a.date >= desde)
+      && (!hasta || a.date < hasta))
     .sort((a,b) => (a.date+a.time).localeCompare(b.date+b.time));
+}
+
+/* ¿De qué paquete salió ESTA sesión?
+
+   Hace falta porque la lista de citas muestra todas las del paciente, y
+   cuando se le abre un paquete nuevo quedan mezcladas: once atendidas
+   arriba y un contador que dice "van 1 de 10". Las dos cosas son ciertas
+   —diez fueron del paquete anterior— pero mirando la pantalla no hay
+   manera de saber cuál es cuál.
+
+   Se reparte por fechas de cierre, exactamente igual que
+   `sesionesDelPaquete`, para que el rótulo de cada fila no pueda
+   contradecir al contador de arriba. Ojo: NO se usa el paquete que trae
+   la cita guardado, porque al renovar, las sesiones viejas se quedan
+   apuntando al paquete que se reutilizó, y ahí sí mentiría. */
+function paqueteDeLaSesion(p, fecha){
+  if(!p || !fecha) return null;
+  const lista = paquetesDe(p);
+  if(!lista.length) return null;
+  const cortes = (p.paquetesHistorial||[])
+    .map(h=>h.cerradoEl).filter(Boolean).sort();
+
+  for(let i = 0; i < lista.length; i++){
+    const q = lista[i];
+    const hasta = q.vigente ? '' : (q.hasta || '');
+    const j = hasta ? cortes.indexOf(hasta) : -1;
+    const desde = q.vigente
+      ? (cortes.length ? cortes[cortes.length-1] : '')
+      : (j > 0 ? cortes[j-1] : '');
+    if((!desde || fecha >= desde) && (!hasta || fecha < hasta)){
+      return {...q, numero: i+1, cuantos: lista.length};
+    }
+  }
+  return null;
+}
+
+/* El rótulo corto que va en la fila de la cita. */
+function chipDePaqueteDeSesion(a){
+  const p = DB.patients.find(x=>x.id===a.patientId);
+  if(!p || p.billingType === 'Individual') return '';
+  const q = paqueteDeLaSesion(p, a.date);
+  if(!q || q.cuantos < 2) return '';   // con un solo paquete no hay qué distinguir
+  return `<br><span class="chip ${q.vigente?'ok':'neutral'}"
+    title="${esc(q.concepto||'Paquete')} de ${q.sesiones} sesiones${
+      q.desde?` · desde ${q.desde}`:''}${q.hasta?` · cerrado el ${q.hasta}`:''}"
+    >Paquete ${q.numero} de ${q.cuantos}${q.vigente?' · el de ahora':''}</span>`;
 }
 
 /* El detalle para mandar: nombre, fechas y horas. Nada más.
@@ -5850,6 +6148,7 @@ function filaDeCita(a, grupo){
     <td>${statusChip(a.status)}</td>
     <td style="white-space:nowrap">
       <span class="chip ${cobro.chip}">${cobro.etiqueta}</span>
+      ${chipDePaqueteDeSesion(a)}
       ${cobro.saldo>0? `<br><button class="btn small" style="margin-top:4px" onclick="cobrarCita('${a.id}')">
           💰 ${cobro.pagado>0? 'Cobrar el saldo' : 'Registrar pago'}</button>`
         : (cobro.estado==='pagada'
@@ -6358,6 +6657,40 @@ function renderRecordatorioModal(){
     </div>`;
 }
 
+/* Cuando el paciente ya va por su segundo paquete, la lista de abajo
+   tiene sesiones de los dos y el contador habla solo del de ahora. Esta
+   línea dice desde cuándo cuenta el actual y cuántas van, para que los
+   dos números se puedan leer juntos sin parecer que uno está mal. */
+function avisoDeQuePaqueteEsCual(p){
+  const lista = paquetesDe(p);
+  if(lista.length < 2) return '';
+  const vigente  = lista[lista.length-1];
+  const anterior = lista[lista.length-2];
+  // El corte es la fecha en que EMPIEZA el paquete nuevo. Una sesión ese
+  // mismo día es la primera del nuevo, no la última del anterior.
+  const corte = vigente.desde || anterior.hasta || '';
+
+  const mias = a => a.status === 'Completada'
+    && (a.patientId === p.id || participantesDeCita(a).includes(p.id));
+  const deEste = DB.appointments.filter(a => mias(a) && (!corte || a.date >= corte))
+    .map(a=>a.date).sort();
+  const deAntes = DB.appointments.filter(a => mias(a) && corte && a.date < corte)
+    .map(a=>a.date).sort();
+
+  const ultimaAnterior = deAntes.length ? deAntes[deAntes.length-1] : '';
+  const primeraDeEste  = deEste.length ? deEste[0] : '';
+
+  return `<p class="hint" style="margin:8px 0 0">
+    Este es su <b>paquete ${lista.length}</b>.
+    ${ultimaAnterior ? `Última sesión del anterior: <b>${esc(fmtFechaCorta(ultimaAnterior))}</b>
+      (${deAntes.length} en total). ` : ''}
+    Empieza el nuevo el <b>${esc(fmtFechaCorta(corte))}</b>${
+      primeraDeEste && primeraDeEste !== corte
+        ? `, con su primera sesión el <b>${esc(fmtFechaCorta(primeraDeEste))}</b>` : ''}:
+    van <b>${deEste.length}</b> de ${vigente.sesiones}.
+    Abajo, cada sesión dice de qué paquete salió.</p>`;
+}
+
 /* El estado del paquete, arriba de la lista, cuando se está mirando a una
    sola persona.
 
@@ -6404,6 +6737,7 @@ function resumenDePacienteEnCitas(citas){
               style="width:${pct}%"></div></div>
          ${paq.compartido? `<span class="sub">Compartido: ${
             paq.detalle.map(d=>`${nombreDePila(d.paciente.name)} ${d.usadas}`).join(' · ')}</span>`:''}
+         ${avisoDeQuePaqueteEsCual(p)}
        </div>`
     : `<p style="margin:8px 0 4px">Lleva <b>${atendidas} sesión(es)</b> atendidas.</p>`;
 
@@ -7027,6 +7361,9 @@ async function changeStatus(id,status){
    Vive fuera del formulario porque el panel se redibuja y si no, se
    perdería lo marcado. */
 let citaJuntos = new Set();
+/* El paciente para el que se armó la lista de acompañantes. Si cambia,
+   la lista se vacía: lo de la cita anterior no vale para esta. */
+let ultimoPacienteEnCita = null;
 
 function marcarJuntoEnCita(id, on){
   if(on) citaJuntos.add(id); else citaJuntos.delete(id);
@@ -7057,21 +7394,33 @@ function pintarJuntosEnCita(){
     .filter((v,i,arr)=>arr.indexOf(v)===i);
 
   if(!sugeridos.length && !DB.patients.some(x=>x.id!==pid && x.active!==false)){
-    caja.innerHTML = ''; return;
+    // Aunque no haya a quién sumar, si tiene apoderado con paquete vale
+    // la pena explicar por qué no aparece.
+    caja.innerHTML = avisoDeApoderadoSinFicha(p); return;
   }
 
   // De cada acompañante hay que decir qué le va a pasar a SU cuenta: no es
   // lo mismo alguien de la misma bolsa que alguien con paquete propio.
+  /* Qué pasa SI LO MARCAS. Antes decía "mismo paquete · no descuenta
+     aparte", que al leerlo mientras uno decide si marcar o no, se
+     entiende como "no descuenta" — y la pregunta que queda es justo la
+     que no hay que dejar abierta: si marcar cambia el descuento.
+     No lo cambia. La sesión descuenta una igual; lo que cambia es en
+     qué historias clínicas queda escrita. */
   const efecto = (o)=>{
     if(mismoPaquete(o.id, pid)) return {
-      texto:'mismo paquete · no descuenta aparte', chip:'ok'};
+      texto:'Si lo marcas: la sesión queda también en SU historia clínica. '
+          + 'El paquete descuenta 1 igual, no 2 (es la misma bolsa).', chip:'ok'};
     if(o.billingType === 'Individual') return {
-      texto:'se atiende por sesión · se le cobra la suya', chip:'warn'};
+      texto:'Si lo marcas: se atiende por sesión, así que se le cobra la suya aparte.',
+      chip:'warn'};
     const suPaq = paqueteDe(o);
     if(suPaq && suPaq.total > 0) return {
-      texto:`paquete propio · le descuenta 1 (van ${suPaq.usadas} de ${suPaq.total})`,
+      texto:`Si lo marcas: se le descuenta 1 sesión de SU propio paquete `
+          + `(va ${suPaq.usadas} de ${suPaq.total}).`,
       chip:'warn'};
-    return {texto:'sin paquete ni tarifa puesta', chip:'alert'};
+    return {texto:'Si lo marcas: no tiene paquete ni tarifa puesta, así que no se le '
+          + 'podría cobrar. Revisa su ficha primero.', chip:'alert'};
   };
 
   const casillas = sugeridos.map(id=>{
@@ -7097,6 +7446,10 @@ function pintarJuntosEnCita(){
 
   caja.innerHTML = `
     <label style="font-size:12.5px;font-weight:700">¿Viene alguien más a esta misma sesión?</label>
+    <p class="hint" style="margin:2px 0 6px">Marca <b>solo a quien de verdad va a estar</b>
+      en la sesión, el mismo día y a la misma hora. Marcar o no marcar
+      <b>no cambia</b> que esta sesión le descuente una del paquete
+      a ${esc(nombreDePila(p.name))}: eso pasa igual.</p>
     <div style="margin-top:5px">${casillas || '<span class="hint">Nadie por ahora.</span>'}</div>
     ${resto.length? `<select style="margin-top:6px;max-width:300px"
         onchange="agregarJuntoEnCita(this.value); this.value=''">
@@ -7106,11 +7459,59 @@ function pintarJuntosEnCita(){
         ${ajenos.length? `<optgroup label="Otros pacientes — descuenta de su propia cuenta">${
           ajenos.map(o=>`<option value="${o.id}">${esc(o.name)}</option>`).join('')}</optgroup>`:''}
       </select>` : ''}
-    <p class="hint" style="margin-top:5px">Si <b>comparten paquete</b> (una pareja, una familia
-      con una sola bolsa), la sesión descuenta <b>una sola</b>. Si cada uno tiene <b>su propio
-      paquete</b> o se atiende por sesión, a cada uno se le descuenta la suya: si no, el que
-      acompaña recibiría la atención gratis.<br>
-      Lo que se trabaje queda en la historia clínica de todos los que estuvieron.</p>`;
+    <p class="hint" style="margin-top:5px">Esto es para cuando vienen <b>a la misma sesión</b>.
+      Si <b>comparten paquete</b> (una pareja, una familia con una sola bolsa), la sesión
+      descuenta <b>una sola</b>. Si cada uno tiene <b>su propio paquete</b> o se atiende por
+      sesión, a cada uno se le descuenta la suya: si no, el que acompaña recibiría la
+      atención gratis.<br>
+      Lo que se trabaje queda en la historia clínica de todos los que estuvieron.</p>
+    ${avisoDeApoderadoSinFicha(p)}`;
+}
+
+/* Por qué no sale la mamá en la lista de arriba.
+
+   Pasa seguido: el apoderado también se atiende, con el mismo paquete
+   pero en otro día y a otra hora. Luis lo busca acá —que es donde dice
+   "¿viene alguien más?"— y no lo encuentra, porque esta lista solo trae
+   PACIENTES y el apoderado todavía no lo es.
+
+   Son dos cosas distintas y conviene decirlo en el momento en que se
+   confunden: acá se suma a quien viene a ESTA sesión; para que alguien
+   consuma del paquete en sus propias sesiones hay que darle ficha. */
+function avisoDeApoderadoSinFicha(p){
+  if(!p || !Array.isArray(p.guardians) || !p.guardians.length) return '';
+  const paq = p.billingType === 'Individual' ? null : paqueteDe(p);
+  if(!paq || paq.total <= 0) return '';
+
+  const sinFicha = p.guardians.filter(g => !apoderadoYaEsPaciente(g, p.id));
+  if(!sinFicha.length) return '';
+
+  return `<div class="card" style="margin:8px 0 0;background:var(--surface-alt);padding:10px 12px">
+    <p style="margin:0 0 6px"><b>¿Buscabas a ${esc(sinFicha.map(g=>g.name).join(' o '))}?</b></p>
+    <p class="hint" style="margin:0 0 8px">
+      ${sinFicha.length===1 ? 'Está como apoderado' : 'Están como apoderados'} de
+      ${esc(p.name)}, pero todavía no ${sinFicha.length===1?'es paciente':'son pacientes'}:
+      por eso no ${sinFicha.length===1?'aparece':'aparecen'} en la lista de arriba.<br>
+      Si también se atiende con este mismo paquete —en sus propios días y horarios—
+      dale ficha y las sesiones de los dos descuentan de las mismas ${paq.total},
+      cada una en su propia historia clínica.</p>
+    <button type="button" class="btn small secondary"
+            onclick="irAFichaParaDarDeAlta('${p.id}')">Abrir la ficha de ${esc(nombreDePila(p.name))}</button>
+  </div>`;
+}
+
+/* Lleva a la ficha, abierta y con los apoderados a la vista: ahí está el
+   botón que le da de alta sin volver a escribir sus datos. */
+function irAFichaParaDarDeAlta(patientId){
+  goTab('pacientes');
+  setTimeout(()=>{
+    editPatient(patientId);
+    setTimeout(()=>{
+      const lista = document.getElementById('pf_guardiansList');
+      if(lista) lista.scrollIntoView({behavior:'smooth', block:'center'});
+      showToast('Busca "+ También se atiende" en la tarjeta del apoderado.');
+    }, 250);
+  }, 80);
 }
 
 /* Buscar al paciente al agendar, en vez de bajar por un desplegable largo.
@@ -7219,6 +7620,16 @@ function mostrarAvanceDelPaquete(){
   const p = DB.patients.find(x=>x.id===pid);
   if(!p){ el.innerHTML=''; return; }
 
+  /* Al cambiar de paciente se limpia quién lo acompaña.
+     Si no, al agendar a la mamá después de haber agendado al hijo, el
+     hijo quedaba marcado de la vez anterior y la sesión se guardaba como
+     conjunta sin que nadie lo hubiera pedido: dos historias clínicas con
+     una sesión que solo tuvo a una persona. */
+  if(!editingApptId && ultimoPacienteEnCita !== pid){
+    citaJuntos = new Set();
+    ultimoPacienteEnCita = pid;
+  }
+
   // Qué clase de sesión sería: la primera de alguien es su consulta. Solo
   // se propone al agendar una nueva; editando una vieja manda lo guardado.
   const selTipo = document.getElementById('af_tipoSesion');
@@ -7237,7 +7648,7 @@ function mostrarAvanceDelPaquete(){
   const agendadas  = DB.appointments.filter(a =>
       miembros.includes(a.patientId) && a.id!==editingApptId &&
       a.status!=='Cancelada' && a.status!=='Completada' &&
-      (!desde || a.date > desde)).length;
+      (!desde || a.date >= desde)).length;
   const numero = atendidas + agendadas + 1;
   const total  = paq ? paq.total : Number(p.packageTotal||0);
   const deQuien = paq && paq.compartido
@@ -8556,6 +8967,210 @@ function pintarQueEsLaSesion(){
   if(!sel || !hint) return;
   const t = TIPOS_DE_SESION.find(x=>x.clave===sel.value);
   hint.textContent = t ? t.explica : '';
+}
+
+/* ===================== ACCESOS AL SISTEMA ===========================
+
+   Todo esto existía, pero repartido: el botón 🔑 en Profesionales, otro
+   en Practicantes, y la lista de cuentas escondida dentro de "Datos del
+   centro". Para dar de alta a una persona había que acordarse de en cuál
+   de las tres pantallas estaba lo que hacía falta.
+
+   Acá está junto: quién puede entrar, quién no, quién todavía no cambió
+   la clave que se le dio, y los botones para crear, reenviar, cambiar el
+   rol y quitar el acceso.
+
+   De los pacientes: no se les crea cuenta, y no es un olvido. El panel
+   es el sistema de gestión del centro; un paciente que entrara vería la
+   agenda y los pacientes, o una pantalla vacía. Lo que a un paciente le
+   corresponde —sus pruebas, sus materiales— ya le llega por un enlace
+   propio que no necesita cuenta.
+*/
+
+function cargarRolesSiFaltan(){
+  if(rolesDelSistema.length || STORAGE_MODE !== 'api') return;
+  fetch(`${API_URL}?accion=roles`, {credentials:'same-origin'})
+    .then(r=>r.json())
+    .then(j=>{ if(j.ok){ rolesDelSistema = j.roles||[]; if(currentTab==='accesos') renderPanel(); } })
+    .catch(()=>{});
+}
+
+/* La gente del centro que puede llegar a tener cuenta. */
+function genteDelCentro(){
+  const out = [];
+  (DB.professionals||[]).filter(x=>x.active!==false).forEach(pr=>out.push({
+    id: pr.id, nombre: professionalDisplayName(pr), dni: pr.dni||'',
+    telefono: pr.phone||'', correo: pr.email||'',
+    papel: 'Profesional', rolSugerido: 'profesional', coleccion: 'professionals',
+  }));
+  (DB.practicantes||[]).filter(x=>x.active!==false).forEach(pt=>out.push({
+    id: pt.id, nombre: pt.name, dni: pt.dni||'',
+    telefono: pt.phone||'', correo: pt.email||'',
+    papel: 'Practicante', rolSugerido: 'practicante', coleccion: 'practicantes',
+  }));
+  return out.sort((a,b)=>a.papel.localeCompare(b.papel) || a.nombre.localeCompare(b.nombre));
+}
+
+function estadoDeCuenta(u){
+  if(!u)                 return {texto:'Sin cuenta',              clase:'neutral'};
+  if(!u.activo)          return {texto:'Acceso quitado',          clase:'neutral'};
+  if(u.bloqueadoHasta && new Date(u.bloqueadoHasta) > new Date())
+                         return {texto:'Bloqueada por intentos',  clase:'alert'};
+  if(u.debeCambiarClave) return {texto:'No cambió su clave',      clase:'warn'};
+  return {texto:'Puede entrar', clase:'ok'};
+}
+
+function viewAccesos(){
+  if(STORAGE_MODE !== 'api'){
+    return `<div class="sectiontitle"><h2>Accesos al sistema</h2></div>
+      <div class="card"><p>Las cuentas necesitan la base de datos.
+      Abre el panel desde Laragon.</p></div>`;
+  }
+
+  const gente = genteDelCentro();
+  const cuentas = DB.usuarios || [];
+  const conCuenta = gente.filter(g => accesoDe(g.id)).length;
+  const sinDni = gente.filter(g => String(g.dni||'').replace(/\D/g,'').length !== 8);
+
+  const filas = gente.map(g=>{
+    const u = accesoDe(g.id);
+    const e = estadoDeCuenta(u);
+    const dni = String(g.dni||'').replace(/\D/g,'');
+    const rolActual = u ? ((u.roles||[])[0]||'') : '';
+    return `<tr>
+      <td><span class="nom" title="${esc(g.nombre)}"><b>${esc(g.nombre)}</b></span>
+        <span class="sub">${esc(g.papel)}${dni? ' · DNI '+esc(dni) : ' · sin DNI'}</span></td>
+      <td>${u? `<b>${esc(u.usuario)}</b>${u.ultimoAcceso
+            ? `<span class="sub">entró el ${String(u.ultimoAcceso).slice(0,10)}</span>`
+            : '<span class="sub">todavía no entró</span>'}`
+          : '<span class="hint">—</span>'}</td>
+      <td><span class="chip ${e.clase}">${e.texto}</span></td>
+      <td>${u
+        ? `<span class="sub">${esc(ROL_EXPLICADO[rolActual]||rolActual||'—')}</span>`
+        : `<span class="hint">le tocaría: ${esc((rolesDelSistema.find(r=>r.clave===g.rolSugerido)||{}).nombre || g.rolSugerido)}</span>`}</td>
+      <td style="white-space:nowrap">
+        ${u
+          ? `<button class="btn small secondary" onclick="verAcceso('${g.id}','${g.coleccion}')">Administrar</button>
+             <button class="btn small" onclick="reenviarCredenciales('${g.id}','${g.coleccion}')"
+                     title="Vuelve a ponerle su DNI de clave y arma el mensaje">📨 Reenviar</button>`
+          : (dni.length === 8
+              ? `<button class="btn small" onclick="verAcceso('${g.id}','${g.coleccion}')">🔑 Darle acceso</button>`
+              : `<span class="hint">Falta su DNI</span>`)}
+      </td>
+    </tr>`;
+  }).join('');
+
+  // Cuentas que no pertenecen a nadie de las listas de arriba.
+  const sueltas = cuentas.filter(u => !u.personaId
+    || !gente.some(g => g.id === u.personaId));
+  const filasSueltas = sueltas.map(u=>{
+    const e = estadoDeCuenta(u);
+    return `<tr>
+      <td><b>${esc(u.usuario)}</b><span class="sub">${esc(u.nombre||'')}</span></td>
+      <td><span class="chip ${e.clase}">${e.texto}</span></td>
+      <td><span class="sub">${esc(ROL_EXPLICADO[(u.roles||[])[0]]||'')}</span></td>
+      <td>${u.soyYo? '<span class="chip ok">tu cuenta</span>' : ''}</td>
+    </tr>`;
+  }).join('');
+
+  return `
+    <div class="sectiontitle"><h2>Accesos al sistema</h2></div>
+
+    <div class="kpi-grid">
+      <div class="kpi ${conCuenta? 'ok':'warn'}"><div class="num">${conCuenta}</div>
+        <div class="label">Con cuenta, de ${gente.length} personas</div></div>
+      <div class="kpi ${sinDni.length? 'warn':'ok'}"><div class="num">${sinDni.length}</div>
+        <div class="label">Sin DNI: no se les puede dar acceso</div></div>
+      <div class="kpi"><div class="num">${cuentas.filter(u=>u.activo).length}</div>
+        <div class="label">Cuentas activas en total</div></div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0">La gente del centro</h3>
+      <p class="hint" style="margin-top:-4px">La cuenta se crea con <b>su DNI como
+        usuario y como clave</b>. Al entrar, el sistema le obliga a cambiarla por una
+        suya: la que tú le diste sirve para una sola entrada, porque un DNI lo sabe
+        cualquiera que tenga su ficha delante.</p>
+      ${gente.length
+        ? `<div class="tablewrap"><table>
+            <tr><th>Persona</th><th>Usuario</th><th>Estado</th><th>Qué puede hacer</th><th></th></tr>
+            ${filas}</table></div>`
+        : `<div class="empty">Todavía no hay profesionales ni practicantes registrados.</div>`}
+      ${sinDni.length
+        ? `<p class="hint alert" style="margin-top:10px">A ${sinDni.map(g=>esc(g.nombre)).join(', ')}
+            le falta el DNI en su ficha. Sin eso no hay con qué armarle la clave.</p>`
+        : ''}
+    </div>
+
+    ${filasSueltas? `<div class="card">
+      <h3 style="margin-top:0">Otras cuentas</h3>
+      <p class="hint" style="margin-top:-4px">No están ligadas a una ficha del centro.</p>
+      <div class="tablewrap"><table>
+        <tr><th>Usuario</th><th>Estado</th><th>Qué puede hacer</th><th></th></tr>
+        ${filasSueltas}</table></div>
+    </div>`:''}
+
+    <div class="card">
+      <h3 style="margin-top:0">Qué puede hacer cada rol</h3>
+      <div class="tablewrap"><table>
+        <tr><th>Rol</th><th>Alcance</th></tr>
+        ${rolesDelSistema.length
+          ? rolesDelSistema.map(r=>`<tr><td><b>${esc(r.nombre)}</b></td>
+              <td>${esc(ROL_EXPLICADO[r.clave]||r.descripcion||'')}</td></tr>`).join('')
+          : '<tr><td colspan="2"><span class="hint">Cargando…</span></td></tr>'}
+      </table></div>
+    </div>
+
+    <div class="card" style="background:var(--surface-alt)">
+      <h3 style="margin-top:0">¿Y los pacientes?</h3>
+      <p>A los pacientes <b>no se les crea cuenta</b>, y no es un olvido. Este panel es
+        el sistema de gestión del centro: un paciente que entrara vería la agenda y la
+        lista de pacientes, o una pantalla vacía.</p>
+      <p class="hint">Lo que a un paciente le corresponde ya le llega sin cuenta y sin
+        clave que recordar: sus <b>pruebas</b> y sus <b>materiales</b> van por un enlace
+        propio que vence, y los avisos de cita y de paquete por WhatsApp. El día que
+        quieras que además vea sus citas y pague en línea, eso es un portal del paciente
+        — una pantalla aparte, hecha para él.</p>
+    </div>`;
+}
+
+/* Volver a mandarle las credenciales.
+   La clave no se puede releer —está guardada con hash, que es lo
+   correcto—, así que "reenviar" es necesariamente "volver a ponerle su
+   DNI y avisarle". Se dice así, sin disfrazarlo. */
+async function reenviarCredenciales(personaId, coleccion){
+  const persona = (DB[coleccion]||[]).find(p=>p.id===personaId);
+  const u = accesoDe(personaId);
+  if(!persona || !u) return;
+  const dni = String(persona.dni||'').replace(/\D/g,'');
+  if(dni.length !== 8){
+    alert('No tiene DNI en su ficha: no hay con qué armarle la clave.');
+    return;
+  }
+  const nombre = persona.name || professionalDisplayName(persona);
+  if(!confirm(`Volver a mandarle las credenciales a ${nombre}.\n\n`
+    + `Su clave no se puede leer: está guardada cifrada. Lo que se hace es `
+    + `ponerle de nuevo su DNI (${dni}) como clave y armar el mensaje.\n\n`
+    + `La que tenga ahora deja de servir, y al entrar el sistema le va a pedir `
+    + `que ponga una nueva.\n\n¿Lo hago?`)) return;
+
+  try{
+    const r = await fetch(`${API_URL}?accion=restablecer_clave`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      credentials:'same-origin', body: JSON.stringify({id: u.id, clave: dni})
+    });
+    const j = await r.json();
+    if(!j.ok){ showToast(j.error||'No se pudo.', false); return; }
+    DB.usuarios = await getColl('usuarios', []);
+    renderPanel();
+    abrirEnvioDeTexto(`Credenciales de ${nombre}`,
+      mensajeDeCredenciales({usuario: u.usuario, clave: dni, nombre}, persona),
+      [{name: nombre, role: persona.name? 'Practicante' : 'Profesional',
+        phone: persona.phone||'', email: persona.email||''}],
+      'Tu acceso al sistema del centro');
+  }catch(e){
+    showToast('No se pudo conectar con el servidor.', false);
+  }
 }
 
 /* ===================== EL ACCESO DE CADA UNO ========================
@@ -10318,6 +10933,8 @@ function openCenterInfoModal(){
   document.getElementById('ci_zoomSala').value = DB.centerInfo.zoomSala||'';
   document.getElementById('ci_meetSala').value = DB.centerInfo.meetSala||'';
   document.getElementById('ci_publicUrl').value = DB.centerInfo.publicUrl||'';
+  document.getElementById('ci_mensajePacientes').value = DB.centerInfo.mensajePacientes||'';
+  document.getElementById('ci_pedirDocumento').value = String(!!DB.centerInfo.pedirDocumento);
   document.getElementById('ci_reminderMinutes').value = DB.centerInfo.reminderMinutes ?? 10;
   document.getElementById('ci_rescheduleHours').value = DB.centerInfo.rescheduleHours ?? 24;
   document.getElementById('ci_sessionMinutes').value = DB.centerInfo.sessionMinutes ?? 60;
@@ -10555,6 +11172,8 @@ async function saveCenterInfo(){
     zoomSala: normalizarSalaZoom(document.getElementById('ci_zoomSala').value),
     meetSala: normalizarSalaMeet(document.getElementById('ci_meetSala').value),
     publicUrl: (document.getElementById('ci_publicUrl').value||'').trim().replace(/\/+$/,''),
+    mensajePacientes: document.getElementById('ci_mensajePacientes').value.trim(),
+    pedirDocumento: document.getElementById('ci_pedirDocumento').value==='true',
     reminderMinutes: Number(document.getElementById('ci_reminderMinutes').value)||10,
     rescheduleHours: Number(document.getElementById('ci_rescheduleHours').value)||24,
     sessionMinutes: Number(document.getElementById('ci_sessionMinutes').value)||60,
@@ -11815,10 +12434,22 @@ function bloqueAplicaciones(titulo, lista, esPendiente){
       <tbody>${filas}</tbody></table></div></div>`;
 }
 
+/* Una fecha corta, sin correrla un día.
+
+   `new Date('2026-10-08')` se interpreta como medianoche UTC, y Perú está
+   cinco horas atrás: al mostrarla salía "07 oct". Se veía en las fechas
+   de los paquetes, en los vencimientos de las pruebas y en el último
+   acceso de cada cuenta — siempre un día antes. Por eso una fecha sola
+   (AAAA-MM-DD) se arma con sus tres números, que no pasa por UTC; las que
+   traen hora sí se parsean normal, porque ahí el huso ya está puesto. */
 function fmtFechaCorta(s){
   if(!s) return '—';
-  const d = new Date(String(s).replace(' ','T'));
-  if(isNaN(d)) return String(s).slice(0,10);
+  const txt = String(s).trim();
+  const soloFecha = /^(\d{4})-(\d{2})-(\d{2})$/.exec(txt);
+  const d = soloFecha
+    ? new Date(Number(soloFecha[1]), Number(soloFecha[2]) - 1, Number(soloFecha[3]))
+    : new Date(txt.replace(' ', 'T'));
+  if(isNaN(d)) return txt.slice(0,10);
   return d.toLocaleDateString('es-PE', {day:'2-digit', month:'short', year:'numeric'});
 }
 
@@ -12252,14 +12883,29 @@ async function continuarAqui(id){
   }catch(e){ ventana.close(); alert('No se pudo conectar con el servidor.'); }
 }
 
+/* ¿Al abrir el enlace le van a pedir el DNI?
+   Hacen falta las dos cosas: que el centro lo tenga prendido y que el
+   paciente tenga el documento en su ficha. Si falta lo segundo, el enlace
+   solo le pide confirmar de quién es, y conviene que Luis lo sepa antes
+   de mandarlo —si no, promete un candado que no está puesto. */
+function pediranDocumento(p){
+  if(!(DB.centerInfo||{}).pedirDocumento) return false;
+  return String((p||{}).dni||'').replace(/\D+/g,'') !== '';
+}
+
 function cajaDelEnlace(info, dias){
   const p = info.paciente;
   const tel = p.isMinor? p.guardianPhone : p.phone;
   const quien = p.isMinor? `${p.guardianName||'Estimado(a)'}` : p.name;
+  const pideDni = pediranDocumento(p);
   const texto = `Hola ${quien}, soy del Centro Psicológico MAGUSA.\n\n`
     + `Le comparto el cuestionario que conversamos. Puede responderlo desde el celular, `
     + `con calma; se guarda solo, así que puede cerrarlo y continuar después.\n\n`
     + `${info.url}\n\n`
+    + (pideDni
+        ? `Al abrirlo le va a pedir el DNI de ${p.name} para asegurar que las `
+          + `respuestas entren a su historia y no a la de otra persona.\n\n`
+        : '')
     + `El enlace es personal y vence ${dias === 1 ? 'mañana' : `en ${dias} días`}. `
     + `Cualquier duda, escríbame por aquí.`;
   const wa = waLink(tel, texto);
@@ -12271,6 +12917,12 @@ function cajaDelEnlace(info, dias){
       <b>localhost</b> y no le va a abrir al paciente en su celular. Arriba te digo
       con qué dirección reemplazarlo.</p>`}
     <p class="hint">Se muestra una sola vez. Si lo pierdes, genera otro desde la lista de abajo.</p>
+    ${!(DB.centerInfo||{}).pedirDocumento ? '' : (pideDni
+      ? `<p class="hint">Al abrirlo le pedirá el <b>DNI de ${esc(p.name)}</b> antes de
+           mostrar las preguntas. En el mensaje de WhatsApp ya se lo avisamos.</p>`
+      : `<p class="hint alert">${esc(p.name)} <b>no tiene DNI en su ficha</b>, así que a
+           este enlace no se le puede poner ese candado: solo le va a pedir confirmar
+           de quién es. Completa su DNI en la ficha para que valga.</p>`)}
     <div style="display:flex;gap:8px;align-items:center;margin:10px 0;flex-wrap:wrap">
       <input readonly value="${info.url}" id="pb_url"
              style="flex:1;min-width:240px;font-size:12px" onclick="this.select()">
@@ -14748,8 +15400,23 @@ function viewInformes(){
     <td>${p.type||'—'}</td>
     <td>${retrasoChip}</td>
     <td>${p.isMinor? p.guardianPhone : p.phone||'—'}</td>
-    <td><button class="btn small secondary" onclick="openInformeEditor('${p.id}')">📝 Redactar informe</button> <button class="btn small secondary" onclick="markReportDelivered('${p.id}')">Marcar entregado</button></td>
+    <td><button class="btn small secondary" onclick="openInformeEditor('${p.id}')">📝 Redactar informe</button> <button class="btn small secondary" onclick="markReportDelivered('${p.id}')">Marcar entregado</button> <button class="btn small danger" onclick="anularInforme('${p.id}')" title="Este paciente no lleva informe: sacarlo de la lista">Anular</button></td>
   </tr>`;}).join('');
+
+  /* Los entregados también se listan, y no por completismo: los dos
+     botones de arriba están pegados, y marcar "Entregado" por error hacía
+     desaparecer la fila sin manera de volver atrás desde esta pantalla.
+     Había que acordarse de ir a la ficha del paciente. */
+  const filasEntregadas = entregados.map(p=>`<tr>
+    <td><b>${p.name}</b></td>
+    <td>${findName(DB.professionals,p.professionalId)}</td>
+    <td>${p.type||'—'}</td>
+    <td><span class="chip ok">Entregado</span></td>
+    <td><button class="btn small secondary" onclick="volverInformeAPendiente('${p.id}')"
+          title="Si lo marcaste entregado por error">Volver a pendiente</button>
+        <button class="btn small danger" onclick="anularInforme('${p.id}')"
+          title="Este paciente no lleva informe">Anular</button></td>
+  </tr>`).join('');
   return `
     <div class="sectiontitle"><h2>Informes por presentar</h2>
       <button class="btn" onclick="centroDeDocumentos()"
@@ -14766,11 +15433,53 @@ function viewInformes(){
       ${pendientes.length? `<table><tr><th>Paciente</th><th>Profesional</th><th>Servicio</th><th>Estado</th><th>Contacto</th><th></th></tr>${rows}</table>`
       : `<div class="empty">No hay informes pendientes por presentar.</div>`}
     </div>
+    ${entregados.length? `
+      <h3 style="margin:26px 0 8px">Ya entregados · ${entregados.length}</h3>
+      <p class="hint" style="margin-top:0">Si marcaste uno por error, acá lo devuelves.</p>
+      <div class="tablewrap">
+        <table><tr><th>Paciente</th><th>Profesional</th><th>Servicio</th><th>Estado</th><th></th></tr>${filasEntregadas}</table>
+      </div>` : ''}
   `;
 }
 async function markReportDelivered(id){
   DB.patients = DB.patients.map(p=>p.id===id? {...p, reportStatus:'Entregado'} : p);
   await setColl('patients', DB.patients);
+  renderPanel();
+}
+
+/* Sacar a un paciente de "informes por presentar".
+   No borra nada: el informe no es un registro aparte, es un estado de la
+   ficha del paciente. Pasarlo a "No aplica" es decir que ese paciente no
+   lleva informe, que es justo lo que uno quiere cuando el pendiente se
+   creó por error —al cerrar un paquete el sistema pregunta si corresponde
+   informe, y ahí es fácil dar que sí sin querer—. Se puede volver atrás
+   desde la ficha. */
+async function anularInforme(id){
+  const p = DB.patients.find(x=>x.id===id);
+  if(!p) return;
+  if(!confirm(`¿Quitar a ${p.name} de los informes?\n\n`
+    + `Queda como "No aplica". No se borra nada del paciente ni de su historia `
+    + `clínica: solo deja de figurar como informe por presentar.\n\n`
+    + `Si después resulta que sí lo necesita, se vuelve a marcar desde su ficha, `
+    + `en el campo Informe.`)) return;
+  DB.patients = DB.patients.map(x=>x.id===id
+    ? {...x, reportStatus:'No aplica', reportDueDate:''} : x);
+  const ok = await setColl('patients', DB.patients);
+  showToast(ok? `${p.name} ya no figura en informes.`
+              : 'No se pudo guardar el cambio.', ok);
+  renderPanel();
+}
+
+/* Deshacer un "Marcar entregado" que se dio por error. */
+async function volverInformeAPendiente(id){
+  const p = DB.patients.find(x=>x.id===id);
+  if(!p) return;
+  if(!confirm(`¿Volver a dejar pendiente el informe de ${p.name}?\n\n`
+    + `Pasa de "Entregado" a "Pendiente" y vuelve a la lista de arriba.`)) return;
+  DB.patients = DB.patients.map(x=>x.id===id? {...x, reportStatus:'Pendiente'} : x);
+  const ok = await setColl('patients', DB.patients);
+  showToast(ok? `El informe de ${p.name} volvió a pendientes.`
+              : 'No se pudo guardar el cambio.', ok);
   renderPanel();
 }
 /* ===================== REDACCIÓN DE INFORMES ===================== */
@@ -20481,7 +21190,7 @@ async function confirmWipe(){
 document.getElementById('todayLabel').textContent = new Date().toLocaleDateString('es-PE',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
 /* Se sube a mano en cada cambio del panel. Si arriba no dice esta versión,
    estás viendo una copia vieja: recarga con Ctrl+Shift+R. */
-const PANEL_VERSION = 'v2026-09-09 · pagos parciales';
+const PANEL_VERSION = 'v2026-10-15e · contador del paquete';
 document.getElementById('versionLabel').textContent = PANEL_VERSION;
 document.getElementById('storageModeNote').innerHTML =
   STORAGE_MODE==='api'
@@ -20519,6 +21228,7 @@ async function bootApp(){
   document.getElementById('headerLogo').src = logoDeEstePanel();
   document.getElementById('headerTitle').textContent = nombreDeEstePanel();
   renderPanel();
+  marcarUltimaCarga();
   updateSaveStatusUI();
   cargarEstadoDeCopias();   // en segundo plano: no detiene la pantalla
   document.getElementById('logoutLinkWrap').style.display = (DB.authConfig && DB.authConfig.enabled) ? 'inline' : 'none';
@@ -20592,6 +21302,7 @@ async function attemptLogin(){
         return;
       }
       errEl.style.display = 'none';
+      yaAvisadoSesion = false;   // entró de nuevo: el aviso vuelve a servir
       // Si entró con la clave que le dio el centro, no pasa de acá: el
       // servidor le rechaza cualquier otra cosa hasta que ponga la suya,
       // así que mostrarle el panel sería mostrarle una pantalla rota.

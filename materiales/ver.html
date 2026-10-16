@@ -22,6 +22,37 @@
   .titulo{font-size:19px;font-weight:700;margin:0}
   .sub{font-size:13px;color:var(--suave);margin:4px 0 0}
 
+  /* La firma del centro. El enlace llega por WhatsApp y lo primero que
+     hace quien lo abre es buscar de quién es. */
+  .marca{display:flex;align-items:center;gap:12px}
+  .marca img{width:40px;height:40px;object-fit:contain;flex:none}
+  .marca .txt{min-width:0}
+
+  /* La portada: para quién es la tarea, antes de mostrar los archivos. */
+  .portada{text-align:center;padding:26px 20px 10px}
+  .portada .sello{width:92px;height:92px;object-fit:contain;margin:0 auto 14px;display:block}
+  .portada h1{font-size:19px;margin:0 0 4px}
+  .portada .de{font-size:14px;color:var(--suave);margin:0 0 18px}
+  .paraquien{background:var(--acento2);border:1px solid #c6ded2;border-radius:12px;
+             padding:14px 16px;margin:0 0 16px;text-align:left}
+  .paraquien .et{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;
+                 color:#3f6b57;font-weight:700}
+  .paraquien .quien{font-size:19px;font-weight:700;margin-top:3px}
+  .paraquien .que{font-size:13.5px;color:#3f6b57;margin-top:5px}
+  .frase{font-size:14.5px;font-style:italic;color:#4a5365;margin:18px 0 0;
+         padding-top:16px;border-top:1px solid var(--linea);text-wrap:balance;
+         text-align:center}
+  .campo{text-align:left;margin:4px 0 0}
+  .campo label{display:block;font-size:13.5px;font-weight:600;margin-bottom:6px}
+  .campo input{width:100%;font:inherit;font-size:19px;letter-spacing:.08em;
+               text-align:center;padding:13px 12px;border:1.5px solid var(--linea);
+               border-radius:10px;background:#fbfcfe;color:var(--tinta)}
+  .campo input:focus-visible{outline:3px solid #b9d9c8;outline-offset:1px;
+                             border-color:var(--acento)}
+  .campo .pista{font-size:12.5px;color:var(--suave);margin-top:7px}
+  .noyo{background:none;border:0;color:var(--suave);font-size:13px;
+        text-decoration:underline;padding:12px 4px;cursor:pointer;font-weight:400}
+
   .tarjeta{background:var(--papel);border:1px solid var(--linea);border-radius:12px;
            padding:16px 18px;margin:16px 0}
   .tarjeta h2{font-size:16px;margin:0 0 8px}
@@ -49,6 +80,8 @@
        border:1.5px solid var(--acento);background:var(--acento);color:#fff;
        padding:10px 16px;cursor:pointer;display:inline-block}
   a.btn.claro{background:var(--papel);color:var(--tinta);border-color:var(--linea)}
+  button.ancho{width:100%;max-width:420px;padding:13px 16px}
+  button:disabled{opacity:.45;cursor:not-allowed}
 
   .aviso{background:#fdf3ef;border:1px solid #e7c3b6;color:var(--alerta);
          border-radius:10px;padding:14px 16px;margin:16px 0;font-size:15px}
@@ -62,10 +95,15 @@
 </head>
 <body>
 
-<header>
+<header id="cabecera" hidden>
   <div class="cabecera">
-    <p class="titulo" id="titulo">Cargando…</p>
-    <p class="sub" id="sub"></p>
+    <div class="marca">
+      <img id="marcaLogo" src="" alt="" hidden>
+      <div class="txt">
+        <p class="titulo" id="titulo">Cargando…</p>
+        <p class="sub" id="sub"></p>
+      </div>
+    </div>
   </div>
 </header>
 
@@ -73,11 +111,14 @@
 
 <script>
 const token = new URLSearchParams(location.search).get('t') || '';
+let marca = null, portada = null;
 
 const ICONO = {
   pdf:'PDF', video:'VIDEO', imagen:'IMAGEN', presentacion:'PPT',
   hoja:'HOJA', audio:'AUDIO', enlace:'WEB', otro:'ARCH'
 };
+
+const $ = id => document.getElementById(id);
 
 function esc(s){
   return String(s==null?'':s).replace(/[&<>"']/g,
@@ -98,27 +139,126 @@ function fechaLarga(iso){
   return d.getDate()+' de '+meses[d.getMonth()]+' de '+d.getFullYear();
 }
 
-function pintarAviso(texto){
-  document.getElementById('titulo').textContent = 'Material de trabajo';
-  document.getElementById('sub').textContent = '';
-  document.getElementById('contenido').innerHTML =
-    `<div class="aviso">${esc(texto)}</div>`;
+async function api(accion, cuerpo){
+  const r = await fetch(`../api/material.php?accion=${accion}&t=${encodeURIComponent(token)}`, {
+    method: cuerpo ? 'POST' : 'GET',
+    headers: cuerpo ? {'Content-Type':'application/json'} : {},
+    body: cuerpo ? JSON.stringify(cuerpo) : undefined
+  });
+  let j = null;
+  try{ j = await r.json(); }catch(e){ /* respuesta no JSON */ }
+  if(!j) throw new Error('No se pudo conectar. Revisa tu internet y vuelve a intentar.');
+  return j;
 }
 
+/* Pantalla de un solo mensaje: enlace vencido, anulado o incompleto.
+   Lleva el logo igual, porque es cuando más falta hace saber de quién
+   venía el enlace para poder pedir otro. */
+function pantallaSimple(titulo, texto, frase){
+  $('cabecera').hidden = true;
+  $('contenido').innerHTML = `
+    <div class="portada">
+      ${marca && marca.logo ? `<img class="sello" src="${esc(marca.logo)}" alt="">` : ''}
+      ${marca && marca.centro ? `<h1>${esc(marca.centro)}</h1>` : ''}
+    </div>
+    <div class="tarjeta"><h2>${esc(titulo)}</h2><p>${esc(texto)}</p></div>
+    ${frase ? `<p class="frase">${esc(frase)}</p>` : ''}`;
+}
+
+/* --- Paso 1: la portada ------------------------------------------- */
 async function arrancar(){
-  if(!token){ pintarAviso('Este enlace está incompleto. Pídele al centro que te lo envíe de nuevo.'); return; }
+  if(!token){ pantallaSimple('Enlace incompleto',
+    'Pídele al centro que te lo envíe de nuevo.'); return; }
   let j;
-  try{
-    const r = await fetch(`../api/material.php?accion=abrir&t=${encodeURIComponent(token)}`);
-    j = await r.json();
-  }catch(e){
-    pintarAviso('No se pudo conectar. Revisa tu internet y vuelve a intentar.');
+  try{ j = await api('abrir'); }
+  catch(e){ pantallaSimple('Sin conexión', e.message); return; }
+
+  // El logo vive en la raíz del sitio y esta página está una carpeta
+  // adentro, así que la dirección se completa acá.
+  marca = j.marca || null;
+  if(marca && marca.logo) marca.logo = '../' + marca.logo;
+
+  if(j.cerrada){ pantallaSimple('Este enlace ya no sirve', j.error); return; }
+  if(!j.ok){ pantallaSimple('No se puede abrir', j.error || 'Este enlace no es válido.'); return; }
+
+  portada = j;
+  document.title = marca && marca.centro ? marca.centro : 'Material de trabajo';
+  dibujarPortada();
+}
+
+function dibujarPortada(){
+  const p = portada, m = marca || {};
+  const cuantos = p.cuantos === 1 ? '1 archivo' : `${p.cuantos || 0} archivos`;
+
+  $('cabecera').hidden = true;
+  $('contenido').innerHTML = `
+    <div class="portada">
+      ${m.logo ? `<img class="sello" src="${esc(m.logo)}" alt="">` : ''}
+      <h1>${esc(m.centro || 'Centro Psicológico')}</h1>
+      ${m.lema ? `<p class="de">${esc(m.lema)}</p>` : ''}
+    </div>
+    <div class="tarjeta">
+      <div class="paraquien">
+        <div class="et">Trabajo para la casa de</div>
+        <div class="quien">${esc(p.paciente || '—')}</div>
+        <div class="que">${esc(p.titulo || 'Material de trabajo')} · ${esc(cuantos)}</div>
+      </div>
+      <p>${esc(m.mensaje || '')}</p>
+      ${p.pideDocumento
+        ? `<div class="campo">
+             <label for="doc">Para continuar, escribe el número de DNI de ${esc(p.paciente || 'la persona')}</label>
+             <input id="doc" inputmode="numeric" autocomplete="off" maxlength="12"
+                    placeholder="········">
+             <p class="pista">Lo pedimos para que el material llegue solo a su familia.</p>
+           </div>`
+        : ''}
+      <div id="avisoPortada"></div>
+    </div>
+    <div style="display:flex;flex-direction:column;align-items:center;gap:2px">
+      <button type="button" class="ancho" id="btnEntrar">${
+        p.pideDocumento ? 'Continuar' : 'Ver el material'}</button>
+      <button type="button" class="noyo" id="btnNoSoy">No es para mí</button>
+    </div>
+    ${m.frase ? `<p class="frase">${esc(m.frase)}</p>` : ''}`;
+
+  $('btnEntrar').addEventListener('click', entrar);
+  $('btnNoSoy').addEventListener('click', () => pantallaSimple('Gracias por decirlo',
+    'Avísale al centro que te llegó este enlace por error, para que lo anulen y se '
+    + 'lo manden a quien corresponde.'));
+  const d = $('doc');
+  if(d){
+    d.addEventListener('keydown', e => { if(e.key === 'Enter') entrar(); });
+    d.focus();
+  }
+  window.scrollTo({top:0});
+}
+
+/* --- Paso 2: recién acá salen los archivos ------------------------ */
+async function entrar(){
+  const btn = $('btnEntrar'), d = $('doc');
+  const etiqueta = portada.pideDocumento ? 'Continuar' : 'Ver el material';
+  btn.disabled = true; btn.textContent = 'Un momento…';
+  let j;
+  try{ j = await api('entrar', d ? {documento: d.value.trim()} : {confirmo:true}); }
+  catch(e){
+    btn.disabled = false; btn.textContent = etiqueta;
+    $('avisoPortada').innerHTML = `<div class="aviso">${esc(e.message)}</div>`;
     return;
   }
-  if(!j || !j.ok){ pintarAviso((j && j.error) || 'Este enlace no es válido.'); return; }
+  if(!j.ok){
+    btn.disabled = false; btn.textContent = etiqueta;
+    $('avisoPortada').innerHTML = `<div class="aviso">${esc(j.error || 'No se pudo continuar.')}</div>`;
+    if(d){ d.select(); d.focus(); }
+    return;
+  }
+  pintarMaterial(j);
+}
 
-  document.getElementById('titulo').textContent = j.titulo || 'Material de trabajo';
-  document.getElementById('sub').textContent = j.paciente ? ('Para ' + j.paciente) : '';
+function pintarMaterial(j){
+  $('cabecera').hidden = false;
+  if(marca && marca.logo){ $('marcaLogo').src = marca.logo; $('marcaLogo').hidden = false; }
+  $('titulo').textContent = j.titulo || 'Material de trabajo';
+  $('sub').textContent = j.paciente ? ('Para ' + j.paciente) : '';
 
   const mats = j.materiales || [];
   let html = '';
@@ -152,8 +292,12 @@ async function arrancar(){
   }
   html += `<p class="pie">Este material es parte del trabajo de ${esc(j.paciente||'tu familiar')}.
            Te lo dejamos para que lo uses en casa; no es para compartir ni publicar.</p>`;
+  if(marca && marca.frase){
+    html += `<p class="frase">${esc(marca.frase)}</p>`;
+  }
 
-  document.getElementById('contenido').innerHTML = html;
+  $('contenido').innerHTML = html;
+  window.scrollTo({top:0});
 }
 
 arrancar();

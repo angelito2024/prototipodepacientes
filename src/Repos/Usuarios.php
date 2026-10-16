@@ -204,8 +204,17 @@ final class Usuarios extends Repositorio
             );
         }
 
+        // El usuario ES su DNI. Luis lo entrega hablando —"entras con tu
+        // DNI y tu DNI"— y eso se recuerda; un "rosa.diaz" hay que
+        // dictarlo letra por letra y alguien lo anota mal. Si el DNI ya
+        // estuviera tomado (no debería: es único por persona), se cae al
+        // nombre para no dejar a nadie sin cuenta.
+        $usuario = Database::valor('SELECT 1 FROM usuarios WHERE usuario = ?', [$dni]) === null
+            ? $dni
+            : self::usuarioLibre((string) $p['nombre_completo']);
+
         $id = self::crear([
-            'usuario'     => self::usuarioLibre((string) $p['nombre_completo']),
+            'usuario'     => $usuario,
             'nombre'      => (string) $p['nombre_completo'],
             'email'       => $p['email'],
             'rol'         => $rol,

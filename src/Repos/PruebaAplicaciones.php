@@ -220,7 +220,8 @@ final class PruebaAplicaciones extends Repositorio
         return Database::uno(
             'SELECT a.*, p.codigo AS prueba_codigo, p.nombre AS prueba_nombre,
                     p.siglas, p.n_items, p.minutos_aprox,
-                    per.nombre_completo
+                    per.nombre_completo, per.documento,
+                    per.nombres, per.apellido_paterno, per.apellido_materno
                FROM prueba_aplicacion a
                JOIN pruebas p    ON p.id = a.prueba_id
                JOIN personas per ON per.id = a.paciente_id
@@ -242,6 +243,54 @@ final class PruebaAplicaciones extends Repositorio
                 'Este enlace venció. Escríbele al centro para que te envíe uno nuevo.',
             default => null,
         };
+    }
+
+    /**
+     * Cuántas veces se abrió este enlace. Sirve para rotar la frase de la
+     * portada, que tiene que salir distinta en cada apertura.
+     */
+    public static function aperturas(int $aplicacionId): int
+    {
+        return (int) Database::valor(
+            "SELECT COUNT(*) FROM prueba_acceso WHERE aplicacion_id = ? AND accion = 'abrir'",
+            [$aplicacionId]
+        );
+    }
+
+    /**
+     * ¿El documento que escribieron es el del paciente?
+     *
+     * Se compara solo los dígitos: el DNI se dicta de memoria y la gente
+     * escribe puntos, guiones y espacios. Si el paciente no tiene
+     * documento cargado en su ficha, devuelve null —no «no coincide»—,
+     * porque ahí no hay nada contra qué comparar y la portada tiene que
+     * pedir otra cosa.
+     */
+    public static function documentoCoincide(array $a, string $escrito): ?bool
+    {
+        $enFicha = preg_replace('/\D+/', '', (string) ($a['documento'] ?? ''));
+        if ($enFicha === '' || $enFicha === null) {
+            return null;
+        }
+        return $enFicha === preg_replace('/\D+/', '', $escrito);
+    }
+
+    /**
+     * Intentos fallidos de documento en los últimos minutos.
+     *
+     * Sin esto, el campo del documento es un candado de ocho dígitos que
+     * se puede probar entero desde un script. Con esto hay cinco intentos
+     * por cuarto de hora, que para una familia que lo escribe mal un par
+     * de veces sobra, y para quien lo quiera adivinar no alcanza.
+     */
+    public static function intentosFallidos(int $aplicacionId, int $minutos = 15): int
+    {
+        return (int) Database::valor(
+            "SELECT COUNT(*) FROM prueba_acceso
+              WHERE aplicacion_id = ? AND accion = 'documento_mal'
+                AND momento > DATE_SUB(NOW(), INTERVAL ? MINUTE)",
+            [$aplicacionId, $minutos]
+        );
     }
 
     public static function anotarAcceso(int $aplicacionId, string $accion): void
