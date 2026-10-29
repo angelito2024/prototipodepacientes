@@ -840,11 +840,13 @@
     <div class="centerInfoInner" style="padding:28px 26px">
       <h2>Datos del centro</h2>
       <div class="sub">Se usan para encabezar los recibos de pago.</div>
-      <div class="field"><label>Nombre del centro</label><input id="ci_name"></div>
+      <div class="field"><label>Razón social (como figura en SUNAT)</label><input id="ci_name"><p class="hint" style="margin:3px 0 0">Con su <b>S.A.C.</b> Es la que va junto al RUC en informes, contratos y recibos.</p></div>
+      <div class="field"><label>Nombre comercial (el que ve el paciente)</label><input id="ci_nombreComercial" placeholder="Ej: MAGUSA Arcoíris de Esperanza"><p class="hint" style="margin:3px 0 0">Sin el S.A.C. Sale en la prueba y en la tarea que recibe el paciente. Si lo dejas vacío, ahí se usa la razón social.</p></div>
       <div class="field"><label>Dirección</label><input id="ci_address"></div>
       <div class="field"><label>Teléfono</label><input id="ci_phone"></div>
-      <div class="field"><label>RUC (opcional)</label><input id="ci_ruc"></div>
-      <div class="field"><label>Eslogan / frase (opcional)</label><input id="ci_slogan" placeholder="Ej: Tu bienestar es nuestra prioridad"></div>
+      <div class="field"><label>RUC (opcional)</label><input id="ci_ruc" inputmode="numeric" maxlength="11" placeholder="11 dígitos"><p class="hint" style="margin:3px 0 0">Once dígitos. Se comprueba el dígito verificador, así que una cifra cambiada de sitio no pasa.</p></div>
+      <div class="field"><label>Eslogan / frase (opcional)</label><input id="ci_slogan" placeholder="Ej: Atención previa cita: presencial, virtual y a domicilio"><p class="hint" style="margin:3px 0 0">Sale al pie de cada informe, junto a «Documento confidencial».</p></div>
+      <div class="field"><label>Lema del año (para los documentos oficiales)</label><input id="ci_lemaAnio" placeholder="Ej: Año de la Esperanza y el Fortalecimiento de la Democracia"><p class="hint" style="margin:3px 0 0">El nombre que el Gobierno le pone al año. Va arriba a la derecha de cada informe y cambia cada enero.</p></div>
       <div class="field"><label>Medios de pago (para incluir en recordatorios de pago)</label>
         <textarea id="ci_paymentMethods" rows="5" placeholder="Ej: Yape/Plin: 987654321 - Nombre&#10;Cuenta BCP: 1934-xxxxxxx"></textarea></div>
       <div class="field" style="grid-column:1/-1;border-top:1px solid var(--line);padding-top:12px;margin-top:6px">
@@ -2178,7 +2180,7 @@ function defaultHistoria(patientId){
 /* Las cuentas de cobro (Yape, banco, CCI) NO van escritas aquí: este archivo
    está en GitHub y son datos bancarios. Se escriben una sola vez en
    "Datos del centro" y viven en la base, junto con el token de apiperu. */
-const DEFAULT_CENTER_INFO = {name:'Centro Psicológico MAGUSA ARCOIRIS DE ESPERANZA', address:'', phone:'', ruc:'', slogan:'', paymentMethods:'', zoomSala:'', meetSala:'', reminderMinutes:10, rescheduleHours:24, latePenaltyPercent:10, includePolicy:true, sessionMinutes:60, apiPeruToken:'', mensajePacientes:'', pedirDocumento:false};
+const DEFAULT_CENTER_INFO = {name:'Centro Psicológico MAGUSA ARCOIRIS DE ESPERANZA', address:'', phone:'', ruc:'', slogan:'', paymentMethods:'', zoomSala:'', meetSala:'', reminderMinutes:10, rescheduleHours:24, latePenaltyPercent:10, includePolicy:true, sessionMinutes:60, apiPeruToken:'', mensajePacientes:'', pedirDocumento:false, lemaAnio:'', nombreComercial:''};
 const DEFAULT_AUTH_CONFIG = {enabled:false, username:'', password:''};
 
 /* ===== Horario semanal de profesionales ===== */
@@ -11289,7 +11291,9 @@ function openCenterInfoModal(){
   document.getElementById('ci_address').value = DB.centerInfo.address||'';
   document.getElementById('ci_phone').value = DB.centerInfo.phone||'';
   document.getElementById('ci_ruc').value = DB.centerInfo.ruc||'';
+  document.getElementById('ci_nombreComercial').value = DB.centerInfo.nombreComercial||'';
   document.getElementById('ci_slogan').value = DB.centerInfo.slogan||'';
+  document.getElementById('ci_lemaAnio').value = DB.centerInfo.lemaAnio||'';
   document.getElementById('ci_paymentMethods').value = DB.centerInfo.paymentMethods||'';
   document.getElementById('ci_titularNombre').value = DB.centerInfo.titular_nombre||'';
   document.getElementById('ci_titularDni').value = DB.centerInfo.titular_documento||'';
@@ -11522,13 +11526,56 @@ async function restablecerClaveUsuario(id, usuario){
   }catch(e){ alert('No se pudo conectar con el servidor.'); }
 }
 
+/* ¿Este RUC existe, o es un número de once cifras?
+
+   SUNAT saca el último dígito de los diez anteriores con módulo 11 y los
+   pesos 5,4,3,2,7,6,5,4,3,2. Por eso un dedo que baila o dos cifras
+   cambiadas de sitio se detectan solas, que es justo el error que uno
+   comete copiando un número largo a mano.
+
+   @return null si ni siquiera son once dígitos; si no, el dígito que
+           debería llevar al final. */
+function digitoDeRuc(ruc){
+  if(!/^\d{11}$/.test(String(ruc||''))) return null;
+  const pesos = [5,4,3,2,7,6,5,4,3,2];
+  let suma = 0;
+  for(let i = 0; i < 10; i++) suma += Number(ruc[i]) * pesos[i];
+  const d = 11 - (suma % 11);
+  return d === 10 ? 0 : (d === 11 ? 1 : d);
+}
+function rucEsValido(ruc){
+  const d = digitoDeRuc(ruc);
+  return d !== null && d === Number(String(ruc).slice(-1));
+}
+
 async function saveCenterInfo(){
+  // El RUC se comprueba antes de nada. Un dígito mal no se ve en la
+  // pantalla: se ve en el informe que ya se entregó, con el membrete y la
+  // firma de la psicóloga encima. Pasó de verdad: llegó uno de doce.
+  const rucEscrito = (document.getElementById('ci_ruc').value||'').trim();
+  if(rucEscrito && !rucEsValido(rucEscrito)){
+    const solo = rucEscrito.replace(/\D/g,'');
+    const esperado = digitoDeRuc(rucEscrito);
+    alert(solo.length !== 11
+      ? 'El RUC debe tener 11 dígitos y ese tiene ' + solo.length + '.\n\n'
+        + 'Sale impreso en cada informe, contrato y recibo, así que no se '
+        + 'guarda a medias. Revísalo o deja el campo vacío.'
+      : 'Ese RUC tiene 11 dígitos pero no es válido: por los diez primeros, '
+        + 'debería terminar en ' + esperado + ' y termina en '
+        + rucEscrito.slice(-1) + '.\n\n'
+        + 'Suele ser una cifra cambiada de sitio. Revísalo contra tu ficha '
+        + 'RUC, o deja el campo vacío.');
+    document.getElementById('ci_ruc').focus();
+    return;
+  }
   DB.centerInfo = {
     name: document.getElementById('ci_name').value.trim() || 'Centro Psicológico',
     address: document.getElementById('ci_address').value.trim(),
     phone: document.getElementById('ci_phone').value.trim(),
     ruc: document.getElementById('ci_ruc').value.trim(),
+    nombreComercial: document.getElementById('ci_nombreComercial').value.trim(),
     slogan: document.getElementById('ci_slogan').value.trim(),
+    lemaAnio: document.getElementById('ci_lemaAnio').value.trim(),
     paymentMethods: document.getElementById('ci_paymentMethods').value.trim(),
     titular_nombre: document.getElementById('ci_titularNombre').value.trim(),
     titular_documento: document.getElementById('ci_titularDni').value.trim(),
@@ -13850,27 +13897,155 @@ const DOCUMENTOS_OFICIALES = {
 };
 
 /* --- El membrete, igual en todos los documentos --------------------- */
+/* ===================== LA CARA DE LOS DOCUMENTOS =====================
+
+   Los informes salían correctos pero sin cara: letra Georgia, títulos en
+   negrita suelta y una raya verde. Un informe psicolaboral que se entrega
+   a una empresa, o uno educativo que va a un colegio, compite con los de
+   otros centros, y la primera página es la que decide si lo leen con
+   atención o lo archivan.
+
+   Los colores NO son una elección de gusto: salen del logo del centro
+   —los cinco personajes del círculo— medidos sobre el propio archivo.
+   Así la hoja y el logo son la misma marca y no dos cosas pegadas.
+
+   Todo se arma con tablas y estilos en línea a propósito: Word importa
+   HTML, y de todo lo que existe en CSS solo respeta con seguridad las
+   tablas, los fondos de celda y los estilos escritos en el atributo
+   style. Una hoja de estilos con clases se pierde al abrir el .doc.   */
+const MARCA_DOC = {
+  tinta:     '#1F3D4A',   // el texto
+  principal: '#24546C',   // el petróleo del logo: títulos y membrete
+  agua:      '#3C6C78',
+  oro:       '#D8A854',
+  magenta:   '#C078A8',
+  lila:      '#B490C0',
+  coral:     '#F06C60',
+  suave:     '#EFF4F6',   // fondo del título de sección
+  borde:     '#D7E2E7',
+  gris:      '#6B7B82',
+};
+/* El orden en que se van turnando los acentos, sección por sección.
+   Turnarlos no es adorno: con un solo color las diez secciones de un
+   informe se ven como un bloque y cuesta ubicar dónde empieza cada una. */
+MARCA_DOC.acentos = [MARCA_DOC.principal, MARCA_DOC.agua, MARCA_DOC.oro,
+                     MARCA_DOC.magenta, MARCA_DOC.lila, MARCA_DOC.coral];
+
+/* Cuántas secciones van dibujadas en el documento que se está armando.
+   Se pone a cero en `documentoHTML`, porque si no el segundo documento
+   de la sesión arrancaría con el color donde quedó el primero. */
+let docSeccionN = 0;
+
+/* La franja de seis colores. Es lo que se reconoce de lejos, y lo único
+   que hay que repetir en cada página para que la hoja se vea de una
+   sola pieza. */
+function reglaDeColoresDoc(alto){
+  const h = alto || 4;
+  const colores = [MARCA_DOC.principal, MARCA_DOC.agua, MARCA_DOC.oro,
+                   MARCA_DOC.magenta, MARCA_DOC.lila, MARCA_DOC.coral];
+  return `<table style="width:100%;border:none;border-collapse:collapse"><tr>${
+    colores.map(c=>`<td style="border:none;padding:0;height:${h}pt;line-height:${h}pt;
+      font-size:1pt;background:${c}">&nbsp;</td>`).join('')}</tr></table>`;
+}
+
 function membreteDoc(paraImpresion){
   const ci = DB.centerInfo || {};
-  const linea2 = [
+  const nombre = ci.name || 'Centro Psicológico MAGUSA ARCOIRIS DE ESPERANZA';
+  const lemaAnio = (ci.lemaAnio || '').trim();
+  const contacto = [
     ci.ruc ? `RUC ${ci.ruc}` : '',
     ci.phone ? `Tel. ${ci.phone}` : '',
   ].filter(Boolean).join(' · ');
+
   return `
-  <table style="width:100%;border:none;border-collapse:collapse;margin-bottom:6px">
+  <table style="width:100%;border:none;border-collapse:collapse;margin-bottom:5pt">
    <tr>
-    <td style="width:86px;border:none;vertical-align:middle;padding:0">
-      <img src="${CENTER_LOGO_DATA_URL}" alt="" style="width:80px;height:auto">
+    <td style="width:74pt;border:none;vertical-align:middle;padding:0">
+      <img src="${CENTER_LOGO_DATA_URL}" alt="" style="width:68pt;height:auto">
     </td>
-    <td style="border:none;vertical-align:middle;padding:0 0 0 10px">
-      <div style="font-size:13pt;font-weight:bold;line-height:1.15;color:#1f4d3d">
-        ${esc(ci.name || 'Centro Psicológico MAGUSA ARCOIRIS DE ESPERANZA')}</div>
-      ${linea2? `<div style="font-size:8.5pt;color:#555;margin-top:2px">${esc(linea2)}</div>`:''}
-      ${ci.address? `<div style="font-size:8.5pt;color:#555">${esc(ci.address)}</div>`:''}
+    <td style="border:none;vertical-align:middle;padding:0 0 0 9pt">
+      <div style="font-size:12.5pt;font-weight:bold;line-height:1.14;color:${MARCA_DOC.principal}">
+        ${esc(nombre)}</div>
+      ${contacto? `<div style="font-size:8pt;color:${MARCA_DOC.gris};margin-top:2pt">${esc(contacto)}</div>`:''}
+      ${ci.address? `<div style="font-size:8pt;color:${MARCA_DOC.gris}">${esc(ci.address)}</div>`:''}
     </td>
+    ${lemaAnio? `<td style="border:none;vertical-align:middle;padding:0 0 0 10pt;
+      width:150pt;text-align:right;font-size:8pt;font-style:italic;color:${MARCA_DOC.gris};line-height:1.25">
+      “${esc(lemaAnio)}”</td>` : ''}
    </tr>
   </table>
-  <div style="border-bottom:2px solid #2f6f4f;margin-bottom:${paraImpresion?'14':'12'}pt"></div>`;
+  ${reglaDeColoresDoc(4)}
+  <div style="height:${paraImpresion?'12':'10'}pt;font-size:1pt">&nbsp;</div>`;
+}
+
+/* El pie: quién emite, dónde, y el recordatorio de que esto es material
+   reservado. Va en cada página porque una hoja suelta de un informe de
+   cuatro tiene que seguir diciendo de dónde salió. */
+function pieDocHTML(paginaWord){
+  const ci = DB.centerInfo || {};
+  const lugar = ci.address || 'San Juan de Lurigancho, Lima – Perú';
+  const nota = ['Documento confidencial', (ci.slogan||'').trim()]
+    .filter(Boolean).join(' · ');
+  return `
+  ${reglaDeColoresDoc(2.5)}
+  <table style="width:100%;border:none;border-collapse:collapse;margin-top:3pt">
+   <tr>
+    <td style="border:none;padding:0;font-size:7.5pt;color:${MARCA_DOC.principal};font-weight:bold">
+      ${esc(ci.name || 'Centro Psicológico Magusa Arcoíris de Esperanza')}
+      <span style="font-weight:normal;color:${MARCA_DOC.gris}"> · ${esc(lugar)}</span></td>
+    <td style="border:none;padding:0;text-align:right;font-size:7.5pt;color:${MARCA_DOC.gris};white-space:nowrap">
+      ${paginaWord
+        ? `Página <span style="mso-field-code:PAGE"></span> de <span style="mso-field-code:NUMPAGES"></span>`
+        : ''}</td>
+   </tr>
+   <tr><td colspan="2" style="border:none;padding:0;font-size:7pt;color:${MARCA_DOC.gris}">
+     ${esc(nota)}</td></tr>
+  </table>`;
+}
+
+/* El título de una sección, con su barra de color.
+
+   Acepta el texto entero tal como se escribe en el documento
+   ("IV. INTERPRETACIÓN DE RESULTADOS", "PRIMERA — OBJETO"): si trae
+   numeral lo separa para pintarlo del color del acento, y si no, lo
+   deja como está. Así no hubo que renumerar dieciséis documentos. */
+function tituloDoc(texto){
+  const t = String(texto || '').trim();
+  const acento = MARCA_DOC.acentos[docSeccionN % MARCA_DOC.acentos.length];
+  docSeccionN++;
+  const m = /^([IVXLCDM]+\.|[a-zA-Z]\.|\d+\.)\s+(.*)$/.exec(t);
+  const numero = m ? m[1] : '';
+  const resto  = m ? m[2] : t;
+  return `
+  <table style="width:100%;border:none;border-collapse:collapse;margin:13pt 0 7pt;
+                page-break-after:avoid">
+   <tr>
+    <td style="width:5pt;border:none;padding:0;background:${acento};font-size:1pt">&nbsp;</td>
+    <td style="border:none;padding:4pt 9pt;background:${MARCA_DOC.suave};
+               font-size:10.5pt;font-weight:bold;color:${MARCA_DOC.tinta};
+               letter-spacing:.3pt">
+      ${numero? `<span style="color:${acento}">${esc(numero)}</span>&nbsp;` : ''}${esc(resto)}</td>
+   </tr>
+  </table>`;
+}
+
+/* El recuadro del veredicto: APTA, DERIVACIÓN, ALTA. Es lo que busca
+   quien recibe el informe, y en un párrafo más se pierde. */
+function cajaResultadoDoc(rotulo, texto){
+  if(!texto || !String(texto).trim()) return '';
+  return `
+  <table style="width:100%;border:none;border-collapse:collapse;margin:14pt 0 4pt;
+                page-break-inside:avoid">
+   <tr>
+    <td style="width:5pt;border:none;padding:0;background:${MARCA_DOC.principal};font-size:1pt">&nbsp;</td>
+    <td style="border:none;padding:8pt 12pt;background:${MARCA_DOC.suave}">
+      <div style="font-size:8pt;letter-spacing:1.2pt;color:${MARCA_DOC.gris};text-transform:uppercase">
+        ${esc(rotulo)}</div>
+      <div style="font-size:13pt;font-weight:bold;color:${MARCA_DOC.principal};margin-top:2pt">
+        ${esc(texto)}</div>
+    </td>
+   </tr>
+  </table>`;
 }
 
 /* --- El pie con el espacio de firma ---------------------------------
@@ -14143,9 +14318,15 @@ function cuerpoPlanificador(pac){
   </div>`;
 }
 
-function documentoHTML(tipo, paraImpresion){
+/* @param sinMembrete  el membrete lo pone quien exporta, porque en PDF,
+ *                     en Word y al imprimir tiene que repetirse en CADA
+ *                     hoja, y metido en el cuerpo solo sale en la primera. */
+function documentoHTML(tipo, paraImpresion, sinMembrete){
   const d = DOCUMENTOS_OFICIALES[tipo];
   if(!d) return '';
+  // Los acentos de las secciones vuelven a empezar: si no, el segundo
+  // documento de la sesión arrancaría con el color donde quedó el primero.
+  docSeccionN = 0;
   const pac = docDatos._paciente || {};
   const hoy = new Date();
   const fecha = `${hoy.getDate()} de ${MESES[hoy.getMonth()]} de ${hoy.getFullYear()}`;
@@ -14168,11 +14349,12 @@ function documentoHTML(tipo, paraImpresion){
     : tipo === 'propuesta_empresa'      ? cuerpoPropuestaEmpresa()
     : tipo === 'constancia_practicas'   ? cuerpoConstanciaPracticas()
     : tipo === 'entrega_documento'      ? cuerpoEntregaDocumento(pac)
+    : tipo === 'ficha_seguimiento'      ? cuerpoFichaSeguimiento(pac)
     : '';
 
   return `
   <div style="font-family:Georgia,'Times New Roman',serif;font-size:11pt;line-height:1.45;color:#111">
-    ${membreteDoc(paraImpresion)}
+    ${sinMembrete ? '' : membreteDoc(paraImpresion)}
     <div style="text-align:center;margin-bottom:14pt">
       <div style="font-size:13pt;font-weight:bold;letter-spacing:.5pt">${d.nombre}</div>
       ${(d.numerado && num)? `<div style="font-size:10pt;margin-top:2pt">N° ${esc(num)}</div>`:''}
@@ -14187,16 +14369,19 @@ function documentoHTML(tipo, paraImpresion){
 function filaDato(etiqueta, valor){
   if(!valor) return '';
   return `<tr>
-    <td style="border:none;padding:1pt 0;width:150pt;vertical-align:top">${esc(etiqueta)}</td>
-    <td style="border:none;padding:1pt 0;vertical-align:top">: ${esc(valor)}</td></tr>`;
+    <td style="border:1px solid ${MARCA_DOC.borde};background:${MARCA_DOC.suave};
+               padding:3pt 7pt;width:148pt;vertical-align:top;font-size:9.5pt;
+               font-weight:bold;color:${MARCA_DOC.principal}">${esc(etiqueta)}</td>
+    <td style="border:1px solid ${MARCA_DOC.borde};padding:3pt 7pt;
+               vertical-align:top">${esc(valor)}</td></tr>`;
 }
 
 function bloqueFiliacion(pac){
   const h = docDatos._historia || {};
   const prof = docDatos._profesional || {};
   return `
-  <div style="font-weight:bold;margin-bottom:5pt">I. DATOS DE FILIACIÓN</div>
-  <table style="width:100%;border:none;border-collapse:collapse;font-size:10.5pt;margin-bottom:12pt">
+  ${tituloDoc('I. DATOS DE FILIACIÓN')}
+  <table style="width:100%;border-collapse:collapse;font-size:10.5pt;margin-bottom:12pt">
     ${filaDato('Nombres y apellidos', pac.name)}
     ${filaDato('Documento de identidad', pac.document || pac.dni)}
     ${filaDato('Edad', pac.age? `${pac.age} años` : '')}
@@ -14221,11 +14406,11 @@ function lista(texto){
   const items = String(texto||'').split('\n').filter(l=>l.trim()!=='');
   if(!items.length) return '';
   return `<ul style="margin:0 0 10pt 0;padding-left:22pt">${
-    items.map(l=>`<li style="margin-bottom:3pt">${esc(l.replace(/^[-•·]\s*/,''))}</li>`).join('')}</ul>`;
+    items.map(l=>`<li style="margin-bottom:3pt;padding-left:2pt">${esc(l.replace(/^[-•·]\s*/,''))}</li>`).join('')}</ul>`;
 }
 function seccion(titulo, contenido){
   if(!contenido || !contenido.trim()) return '';
-  return `<div style="font-weight:bold;margin:12pt 0 5pt">${titulo}</div>${parrafos(contenido)}`;
+  return `${tituloDoc(titulo)}${parrafos(contenido)}`;
 }
 
 function cuerpoConstancia(pac, fecha){
@@ -14253,16 +14438,317 @@ function cuerpoInformeClinico(pac){
   return `
     ${bloqueFiliacion(pac)}
     ${seccion('II. MOTIVO DE CONSULTA', g.motivo)}
-    ${g.tecnicas? `<div style="font-weight:bold;margin:12pt 0 5pt">III. TÉCNICAS E INSTRUMENTOS APLICADOS</div>${lista(g.tecnicas)}`:''}
+    ${g.tecnicas? `${tituloDoc('III. TÉCNICAS E INSTRUMENTOS APLICADOS')}${lista(g.tecnicas)}`:''}
     ${seccion('IV. OBSERVACIÓN DE CONDUCTA', g.observacion)}
-    <div style="font-weight:bold;margin:12pt 0 5pt">V. RESULTADOS</div>
+    ${tituloDoc('V. RESULTADOS')}
     ${g.area_personalidad? `<p style="margin:0 0 6pt"><b>Área de personalidad.</b> ${esc(g.area_personalidad)}</p>`:''}
     ${g.area_cognitiva? `<p style="margin:0 0 6pt"><b>Área cognitiva.</b> ${esc(g.area_cognitiva)}</p>`:''}
     ${g.area_familiar? `<p style="margin:0 0 6pt"><b>Área familiar.</b> ${esc(g.area_familiar)}</p>`:''}
     ${g.area_socioemocional? `<p style="margin:0 0 6pt"><b>Área socioemocional.</b> ${esc(g.area_socioemocional)}</p>`:''}
     ${g.resultados_pruebas? parrafos(g.resultados_pruebas):''}
     ${seccion('VI. CONCLUSIONES', g.conclusiones)}
-    ${g.recomendaciones? `<div style="font-weight:bold;margin:12pt 0 5pt">VII. RECOMENDACIONES</div>${lista(g.recomendaciones)}`:''}`;
+    ${g.recomendaciones? `${tituloDoc('VII. RECOMENDACIONES')}${lista(g.recomendaciones)}`:''}`;
+}
+
+/* ===================== LA FICHA DE SEGUIMIENTO =====================
+
+   La hoja que se firma sesión por sesión y que el paciente se lleva. Luis
+   la tenía en papel, para llenar a mano: nombre, DNI, edad, apoderado,
+   profesional, y una tabla de diez filas donde se anota cada sesión.
+
+   Casi todo eso ya está en el sistema. Lo que se llenaba a mano no era
+   trabajo: era una oportunidad de equivocarse —el DNI copiado del caso
+   anterior, la sesión que nadie anotó, el contador que no cuadra con la
+   agenda—. Acá sale impresa con los datos puestos y las sesiones que de
+   verdad hubo, con su fecha, su hora, su modalidad y si asistió.
+
+   Lo que sigue en blanco es lo que tiene que estar en blanco: las dos
+   columnas de firma, que se firman a mano delante del paciente.
+
+   Y se adapta al paquete: si el paquete es de seis, la tabla trae seis
+   filas y el cierre dice "/ 6". La hoja de papel decía diez siempre,
+   porque un papel no sabe cuántas sesiones compró nadie.               */
+Object.assign(DOCUMENTOS_OFICIALES, {
+  ficha_seguimiento: {
+    titulo: 'Ficha de control y seguimiento terapéutico',
+    nombre: 'CONTROL Y SEGUIMIENTO TERAPÉUTICO',
+    para: 'La hoja que acompaña al paquete: se firma sesión por sesión y queda '
+        + 'como constancia de lo atendido. Sale con los datos del paciente y '
+        + 'las sesiones ya puestas.',
+    numerado: true,
+    firmaPropia: true,   // lleva sus propias tres firmas, al final
+    campos: [
+      {id:'fs_paquete', etiqueta:'¿De qué paquete?', tipo:'paquete',
+       ayuda:'Las sesiones, el total y las fechas salen del paquete que elijas.'},
+      {id:'fs_servicio', etiqueta:'Servicio', tipo:'select',
+       opciones:['Psicoterapia individual','Terapia de pareja','Terapia familiar',
+                 'Evaluación psicológica','Terapia de lenguaje','Aprendizaje',
+                 'Psicomotricidad','Otro']},
+      {id:'fs_servicio_otro', etiqueta:'Si es «Otro», ¿cuál?', tipo:'texto'},
+      {id:'fs_enfoque', etiqueta:'Enfoque / técnicas', tipo:'texto',
+       ayuda:'Por ejemplo: Terapia cognitivo-conductual.'},
+      {id:'fs_frecuencia', etiqueta:'Frecuencia', tipo:'texto', valor:'Semanal'},
+      {id:'fs_pago', etiqueta:'Pago del paquete', tipo:'select',
+       opciones:['Completo','Fraccionado','Por sesión'],
+       ayuda:'Viene marcado según lo que esté registrado en Pagos.'},
+      {id:'fs_boleta', etiqueta:'N.° de boleta o recibo', tipo:'texto'},
+      {id:'fs_objetivos', etiqueta:'Objetivos terapéuticos y avance', tipo:'objetivos'},
+      {id:'fs_estado', etiqueta:'Cierre del proceso', tipo:'select',
+       opciones:['Alta terapéutica','Renueva paquete','Abandono','Derivado']},
+      {id:'fs_derivado', etiqueta:'Si fue derivado, ¿a dónde?', tipo:'texto'},
+      {id:'fs_cierre', etiqueta:'Fecha de cierre', tipo:'date'},
+      {id:'fs_resumen', etiqueta:'Resumen de evolución y recomendaciones',
+       tipo:'textarea', filas:5},
+    ],
+  },
+});
+
+/* Las cuatro filas de objetivos, con su avance a mitad y al final del
+   paquete. Se escriben acá y no a mano en el papel para que la hoja de
+   la sesión 10 pueda compararse con la de la 5 sin descifrar letra. */
+const AVANCE_OBJETIVO = ['', 'L — logrado', 'P — en proceso', 'N — no logrado'];
+
+/* La modalidad y la asistencia, como las abrevia la ficha de papel. */
+function letraDeModalidad(m){
+  return m === 'Presencial' ? 'P'
+       : m === 'Virtual'    ? 'V'
+       : m === 'Domicilio'  ? 'D'
+       : m === 'Colegio'    ? 'C' : '—';
+}
+function letraDeAsistencia(a){
+  if(a.status === 'Completada')   return 'A';
+  if(a.status === 'No asistió')   return 'F';
+  if(a.status === 'Reprogramada' || reprogramacionesDe(a).length) return 'R';
+  if(a.status === 'Cancelada')    return 'F';
+  return '—';
+}
+
+/* De qué paquete sale la ficha: el vigente si no se eligió otro. */
+function paqueteDeLaFicha(pac){
+  const lista = paquetesDe(pac);
+  if(!lista.length) return null;
+  const pedido = docDatos.fs_paquete;
+  return lista.find(q => q.id === pedido) || lista[lista.length - 1];
+}
+
+/* Las sesiones que van en la tabla: las del paquete, más las filas en
+   blanco que falten hasta completarlo. El paciente tiene que poder ver
+   cuántas le quedan sin hacer la resta. */
+function filasDeLaFicha(pac, q){
+  const dadas = q ? sesionesDelPaquete(pac, q.id) : [];
+  const total = Math.max(Number((q||{}).sesiones || 0), dadas.length, 1);
+  const filas = [];
+  for(let i = 0; i < total; i++){
+    filas.push(dadas[i] || null);
+  }
+  return filas;
+}
+
+function cuerpoFichaSeguimiento(pac){
+  const g = docDatos;
+  const h = g._historia || {};
+  const prof = g._profesional || {};
+  const q = paqueteDeLaFicha(pac);
+  const filas = filasDeLaFicha(pac, q);
+  const dadas = q ? sesionesDelPaquete(pac, q.id) : [];
+  const r = q ? resumenDePaquete(pac, q) : null;
+
+  const apo = (pac.guardians || [])[0] || {};
+  const emerg = (pac.guardians || [])[1] || {};
+  const diag = (h.diagnosticos || []).length
+    ? h.diagnosticos.map(d => `${d.codigo} — ${d.descripcion}`).join(' · ')
+    : (h.motivoConsulta || '');
+
+  // Las faltas del periodo del paquete: no entran en la tabla de arriba
+  // —ahí van las sesiones— pero el cierre las tiene que decir.
+  const c = q ? cortesDePaquete(pac, q.id) : null;
+  const faltas = !c ? 0 : DB.appointments.filter(a =>
+    (a.patientId === pac.id || participantesDeCita(a).includes(pac.id))
+    && (a.status === 'No asistió' || a.status === 'Cancelada')
+    && (!c.desde || a.date >= c.desde) && (!c.hasta || a.date < c.hasta)).length;
+
+  const marca = (texto, activo) => `<span style="white-space:nowrap">${
+    activo ? '<b>☑</b>' : '☐'} ${esc(texto)}</span>`;
+
+  const SERVICIOS = ['Psicoterapia individual','Terapia de pareja','Terapia familiar',
+                     'Evaluación psicológica','Terapia de lenguaje','Aprendizaje',
+                     'Psicomotricidad'];
+
+  return `
+  ${tituloDoc('1 · DATOS DEL PACIENTE')}
+  <table style="width:100%;border-collapse:collapse;font-size:10pt;margin-bottom:4pt">
+    ${filaDato('Nombres y apellidos', pac.name)}
+    ${filaDato('DNI / C.E.', pac.dni || pac.document)}
+    ${filaDato('Fecha de nacimiento', pac.birthDate ? fmtFechaCorta(pac.birthDate) : '')}
+    ${filaDato('Sexo', pac.sex)}
+    ${filaDato('Dirección', pac.defaultAddress || pac.address)}
+    ${filaDato('Teléfono', pac.phone || pac.guardianPhone)}
+    ${filaDato('Motivo de consulta / Diagnóstico (CIE-10)', diag)}
+  </table>
+
+  ${tituloDoc('2 · DATOS DEL APODERADO / RESPONSABLE')}
+  <p style="margin:0 0 5pt;font-size:10pt">
+    ${marca('Paciente menor de edad', !!pac.isMinor)}&nbsp;&nbsp;&nbsp;
+    ${marca('Requiere acompañante', !!pac.isMinor)}</p>
+  <table style="width:100%;border-collapse:collapse;font-size:10pt;margin-bottom:4pt">
+    ${filaDato('Nombres y apellidos', apo.name || pac.guardianName)}
+    ${filaDato('DNI', apo.dni || pac.guardianDni)}
+    ${filaDato('Parentesco', apo.relationship)}
+    ${filaDato('Teléfono', apo.phone || pac.guardianPhone)}
+    ${filaDato('Correo', apo.email || pac.guardianEmail)}
+    ${emerg.name ? filaDato('Contacto de emergencia',
+        `${emerg.name}${emerg.phone ? ' · ' + emerg.phone : ''}`) : ''}
+  </table>
+
+  ${tituloDoc('3 · SERVICIO Y PROFESIONAL TRATANTE')}
+  <p style="margin:0 0 6pt;font-size:10pt;line-height:1.9">
+    ${SERVICIOS.map(s => marca(s, g.fs_servicio === s)).join('&nbsp;&nbsp; ')}
+    &nbsp;&nbsp; ${marca('Otro: ' + (g.fs_servicio_otro || '__________'),
+        g.fs_servicio === 'Otro')}</p>
+  <table style="width:100%;border-collapse:collapse;font-size:10pt;margin-bottom:4pt">
+    ${filaDato('Psicólogo(a) tratante', prof.name)}
+    ${filaDato('C.Ps.P. N.°', prof.license || prof.colegiatura)}
+    ${filaDato('Fecha de inicio', (dadas[0] || {}).date
+        ? fmtFechaCorta(dadas[0].date)
+        : (q && q.desde ? fmtFechaCorta(q.desde) : ''))}
+  </table>
+
+  ${tituloDoc(`4 · CONTROL DE SESIONES (${filas.length})`)}
+  <p style="margin:0 0 5pt;font-size:8.5pt;color:${MARCA_DOC.gris}">
+    <b>Mod.:</b> P presencial · V virtual · D domicilio &nbsp;·&nbsp;
+    <b>Asist.:</b> A asistió · F faltó · R reprogramó</p>
+  <table style="width:100%;border-collapse:collapse;font-size:9pt">
+    <tr>
+      ${['N.°','Fecha','Hora','Mod.','Asist.','Actividad / Observaciones',
+         'Firma y sello psicólogo(a)','Firma paciente / apoderado']
+        .map((t,i) => `<th style="border:1px solid ${MARCA_DOC.borde};padding:3pt 5pt;
+          background:${MARCA_DOC.principal};color:#fff;font-size:8.5pt;
+          ${i>=6 ? 'width:80pt' : ''}">${t}</th>`).join('')}
+    </tr>
+    ${filas.map((a, i) => `<tr>
+      <td style="border:1px solid ${MARCA_DOC.borde};padding:4pt 5pt;text-align:center;
+                 background:${MARCA_DOC.suave};font-weight:bold">${i+1}</td>
+      <td style="border:1px solid ${MARCA_DOC.borde};padding:4pt 5pt;white-space:nowrap">${
+        a ? esc(fmtFechaCorta(a.date)) : '___/___/___'}</td>
+      <td style="border:1px solid ${MARCA_DOC.borde};padding:4pt 5pt">${
+        a ? esc(a.time || '') : ''}</td>
+      <td style="border:1px solid ${MARCA_DOC.borde};padding:4pt 5pt;text-align:center">${
+        a ? letraDeModalidad(a.modality) : 'P · V · D'}</td>
+      <td style="border:1px solid ${MARCA_DOC.borde};padding:4pt 5pt;text-align:center">${
+        a ? letraDeAsistencia(a) : 'A · F · R'}</td>
+      <td style="border:1px solid ${MARCA_DOC.borde};padding:4pt 5pt">${
+        a ? esc(etiquetaDeSesion(tipoDeSesion(a))) : ''}</td>
+      <td style="border:1px solid ${MARCA_DOC.borde};padding:4pt 5pt">&nbsp;</td>
+      <td style="border:1px solid ${MARCA_DOC.borde};padding:4pt 5pt">&nbsp;</td>
+    </tr>`).join('')}
+  </table>
+
+  <div style="page-break-before:always"></div>
+
+  ${tituloDoc(`5 · PLAN DE INTERVENCIÓN (paquete de ${filas.length} sesiones)`)}
+  <table style="width:100%;border-collapse:collapse;font-size:10pt;margin-bottom:4pt">
+    ${filaDato('Enfoque / técnicas', g.fs_enfoque)}
+    ${filaDato('Frecuencia', g.fs_frecuencia)}
+    ${filaDato('Concepto del paquete', (q || {}).concepto)}
+    ${r ? filaDato('Precio del paquete', fmtMoney(r.precio)) : ''}
+    ${r ? filaDato('Pagado', `${fmtMoney(r.pagado)}${
+        r.saldo > 0 ? ` · falta ${fmtMoney(r.saldo)}` : ' · al día'}`) : ''}
+    ${filaDato('N.° de boleta o recibo', g.fs_boleta)}
+  </table>
+  <p style="margin:0 0 6pt;font-size:10pt">Pago del paquete:&nbsp;
+    ${['Completo','Fraccionado','Por sesión']
+      .map(o => marca(o, g.fs_pago === o)).join('&nbsp;&nbsp; ')}</p>
+
+  ${tituloDoc('6 · OBJETIVOS Y AVANCE')}
+  <p style="margin:0 0 5pt;font-size:8.5pt;color:${MARCA_DOC.gris}">
+    <b>L</b> logrado · <b>P</b> en proceso · <b>N</b> no logrado</p>
+  <table style="width:100%;border-collapse:collapse;font-size:9.5pt">
+    <tr>
+      <th style="border:1px solid ${MARCA_DOC.borde};padding:3pt 5pt;width:22pt;
+        background:${MARCA_DOC.principal};color:#fff">N.°</th>
+      <th style="border:1px solid ${MARCA_DOC.borde};padding:3pt 5pt;
+        background:${MARCA_DOC.principal};color:#fff">Objetivo terapéutico</th>
+      <th style="border:1px solid ${MARCA_DOC.borde};padding:3pt 5pt;width:92pt;
+        background:${MARCA_DOC.principal};color:#fff">Avance a la sesión ${
+          Math.max(1, Math.round(filas.length / 2))}</th>
+      <th style="border:1px solid ${MARCA_DOC.borde};padding:3pt 5pt;width:92pt;
+        background:${MARCA_DOC.principal};color:#fff">Avance a la sesión ${filas.length}</th>
+    </tr>
+    ${[1,2,3,4].map(n => `<tr>
+      <td style="border:1px solid ${MARCA_DOC.borde};padding:5pt;text-align:center;
+                 background:${MARCA_DOC.suave};font-weight:bold">${n}</td>
+      <td style="border:1px solid ${MARCA_DOC.borde};padding:5pt">${
+        esc(g['fs_obj' + n] || '')}</td>
+      <td style="border:1px solid ${MARCA_DOC.borde};padding:5pt;text-align:center">${
+        esc((g['fs_obj' + n + '_m'] || 'L · P · N').replace(/ —.*/, ''))}</td>
+      <td style="border:1px solid ${MARCA_DOC.borde};padding:5pt;text-align:center">${
+        esc((g['fs_obj' + n + '_f'] || 'L · P · N').replace(/ —.*/, ''))}</td>
+    </tr>`).join('')}
+  </table>
+
+  ${tituloDoc('7 · CIERRE DEL PROCESO Y EVOLUCIÓN')}
+  <p style="margin:0 0 6pt;font-size:10pt">Estado:&nbsp;
+    ${['Alta terapéutica','Renueva paquete','Abandono']
+      .map(o => marca(o, g.fs_estado === o)).join('&nbsp;&nbsp; ')}
+    &nbsp;&nbsp; ${marca('Derivado a: ' + (g.fs_derivado || '__________'),
+      g.fs_estado === 'Derivado')}</p>
+  <table style="width:100%;border-collapse:collapse;font-size:10pt;margin-bottom:4pt">
+    ${filaDato('Fecha de cierre', g.fs_cierre ? fmtFechaCorta(g.fs_cierre)
+        : ((q && q.hasta) ? fmtFechaCorta(q.hasta) : ''))}
+    ${filaDato('Sesiones realizadas', `${dadas.length} de ${filas.length}`)}
+    ${filaDato('Inasistencias', String(faltas))}
+  </table>
+  ${g.fs_resumen ? `<p style="margin:0 0 4pt;font-weight:bold;font-size:10pt">
+    Resumen de evolución y recomendaciones</p>${parrafos(g.fs_resumen)}`
+   : `<p style="margin:0 0 4pt;font-weight:bold;font-size:10pt">
+        Resumen de evolución y recomendaciones</p>
+      ${[1,2,3].map(()=>`<div style="border-bottom:1px solid ${MARCA_DOC.borde};
+        height:16pt"></div>`).join('')}`}
+
+  ${tituloDoc('8 · CONFORMIDAD Y FIRMAS')}
+  <p style="margin:0 0 10pt;text-align:justify;font-size:9.5pt">
+    Declaro haber sido informado(a) sobre los objetivos, la frecuencia y la
+    modalidad de la atención, así como sobre la confidencialidad de la
+    información, y doy mi conformidad con las sesiones registradas en esta ficha.</p>
+  ${tresFirmasDoc(pac, prof)}
+  <p style="margin:14pt 0 0;text-align:center;font-size:9pt;font-style:italic;
+            color:${MARCA_DOC.principal}">
+    Cada paso cuenta, cada color suma esperanza.</p>
+  <p style="margin:6pt 0 0;font-size:8pt;color:${MARCA_DOC.gris};text-align:center">
+    Documento confidencial · Ley N.° 29733 (Protección de Datos Personales) y
+    Ley N.° 30947 (Salud Mental)</p>`;
+}
+
+/* Las tres firmas del cierre: el paciente o su apoderado, la psicóloga
+   que atendió y la gerencia. Van en blanco a propósito: una firma
+   escaneada dentro de un archivo la puede extraer cualquiera que lo
+   reciba y firmar otra cosa con ella. */
+function tresFirmasDoc(pac, prof){
+  const ci = DB.centerInfo || {};
+  const col = prof.license || prof.colegiatura || '';
+  const celda = (titulo, l1, l2) => `
+    <td style="border:none;width:33.3%;text-align:center;vertical-align:bottom;padding:0 6pt">
+      <div style="height:44pt"></div>
+      <div style="border-top:1px solid ${MARCA_DOC.principal}"></div>
+      <div style="font-size:9.5pt;font-weight:bold;margin-top:3pt;
+                  color:${MARCA_DOC.principal}">${esc(titulo)}</div>
+      <div style="font-size:8.5pt;margin-top:1pt">${l1}</div>
+      <div style="font-size:8.5pt">${l2}</div>
+    </td>`;
+  return `
+  <table style="width:100%;border:none;border-collapse:collapse;page-break-inside:avoid">
+   <tr>
+    ${celda('Paciente / Apoderado',
+        'Nombre: ' + esc(pac.isMinor ? (pac.guardianName || '') : (pac.name || '')),
+        'DNI: ' + esc(pac.isMinor ? (pac.guardianDni || '') : (pac.dni || '')))}
+    ${celda('Psicólogo(a) tratante',
+        'Nombre: ' + esc(prof.name || ''),
+        'C.Ps.P. N.°: ' + esc(col))}
+    ${celda('Gerente General',
+        esc(ci.titular_nombre || ''),
+        'DNI: ' + esc(ci.titular_documento || ''))}
+   </tr>
+  </table>`;
 }
 
 /* Qué documentos se le pueden emitir a este paciente. */
@@ -14663,31 +15149,31 @@ function cuerpoInformeForense(pac){
     ${bloqueFiliacion(pac)}
     ${seccion('II. MOTIVACIÓN DE LA CONSULTA', g.motivo)}
     ${seccion('III. ANTECEDENTES DEL CASO', g.antecedentes)}
-    ${g.tecnicas? `<div style="font-weight:bold;margin:12pt 0 5pt">IV. TÉCNICAS E INSTRUMENTOS APLICADOS</div>${lista(g.tecnicas)}`:''}
+    ${g.tecnicas? `${tituloDoc('IV. TÉCNICAS E INSTRUMENTOS APLICADOS')}${lista(g.tecnicas)}`:''}
     ${seccion('V. OBSERVACIÓN DE CONDUCTA', g.observacion)}
-    <div style="font-weight:bold;margin:12pt 0 5pt">VI. RESULTADOS OBTENIDOS</div>
+    ${tituloDoc('VI. RESULTADOS OBTENIDOS')}
     ${g.area_personalidad? `<p style="margin:0 0 6pt;text-align:justify"><b>Área de personalidad.</b> ${esc(g.area_personalidad)}</p>`:''}
     ${g.area_cognitiva? `<p style="margin:0 0 6pt;text-align:justify"><b>Área cognitiva.</b> ${esc(g.area_cognitiva)}</p>`:''}
     ${g.area_familiar? `<p style="margin:0 0 6pt;text-align:justify"><b>Área familiar.</b> ${esc(g.area_familiar)}</p>`:''}
     ${g.area_socioemocional? `<p style="margin:0 0 6pt;text-align:justify"><b>Área socioemocional.</b> ${esc(g.area_socioemocional)}</p>`:''}
     ${g.resultados_pruebas? parrafos(g.resultados_pruebas):''}
     ${seccion('VII. CONCLUSIONES', g.conclusiones)}
-    ${g.recomendaciones? `<div style="font-weight:bold;margin:12pt 0 5pt">VIII. RECOMENDACIONES</div>${lista(g.recomendaciones)}`:''}`;
+    ${g.recomendaciones? `${tituloDoc('VIII. RECOMENDACIONES')}${lista(g.recomendaciones)}`:''}`;
 }
 
 function cuerpoInformeLaboral(){
   const g = docDatos;
   const zavic = EJES_ZAVIC
     .filter(([k]) => g['zavic_'+k] !== undefined && g['zavic_'+k] !== '')
-    .map(([k,n]) => `<tr><td style="border:1px solid #bbb;padding:3pt 6pt">${n}</td>
-      <td style="border:1px solid #bbb;padding:3pt 6pt;text-align:center">${esc(g['zavic_'+k])}</td></tr>`).join('');
+    .map(([k,n]) => `<tr><td style="border:1px solid ${MARCA_DOC.borde};padding:3pt 6pt">${n}</td>
+      <td style="border:1px solid ${MARCA_DOC.borde};padding:3pt 6pt;text-align:center">${esc(g['zavic_'+k])}</td></tr>`).join('');
   return `
-  <div style="font-weight:bold;margin-bottom:5pt">I. PRESENTACIÓN</div>
+  ${tituloDoc('I. PRESENTACIÓN')}
   ${parrafos(g.presentacion || `${(DB.centerInfo||{}).name||'El centro'} expone a continuación`
     + ` los alcances del proceso de evaluación psicolaboral solicitado por`
     + ` ${g.empresa||'la empresa'}.`)}
 
-  <div style="font-weight:bold;margin:12pt 0 5pt">II. PERSONA EVALUADA</div>
+  ${tituloDoc('II. PERSONA EVALUADA')}
   <table style="width:100%;border:none;border-collapse:collapse;font-size:10.5pt;margin-bottom:10pt">
     ${filaDato('Nombres y apellidos', g.ev_nombre)}
     ${filaDato('DNI', g.ev_dni)}
@@ -14700,7 +15186,7 @@ function cuerpoInformeLaboral(){
     ${filaDato('Tipo de evaluación', g.tipo_evaluacion)}
   </table>
 
-  <div style="font-weight:bold;margin:12pt 0 5pt">III. RESULTADOS DE LA EVALUACIÓN</div>
+  ${tituloDoc('III. RESULTADOS DE LA EVALUACIÓN')}
   ${(g.raven_nivel||g.raven_puntaje)? `
     <p style="margin:0 0 4pt"><b>Inteligencia general — Test de Matrices Progresivas de Raven.</b></p>
     <p style="margin:0 0 8pt">Nivel: ${esc(g.raven_nivel||'—')}${
@@ -14708,8 +15194,8 @@ function cuerpoInformeLaboral(){
   ${zavic? `
     <p style="margin:8pt 0 4pt"><b>Valores e intereses — Test de Zavic.</b></p>
     <table style="border-collapse:collapse;font-size:10pt;margin-bottom:8pt">
-      <tr><th style="border:1px solid #bbb;padding:3pt 6pt;background:#f0f0f0">Eje</th>
-          <th style="border:1px solid #bbb;padding:3pt 6pt;background:#f0f0f0">Puntaje</th></tr>
+      <tr><th style="border:1px solid ${MARCA_DOC.borde};padding:3pt 6pt;background:${MARCA_DOC.principal};color:#fff">Eje</th>
+          <th style="border:1px solid ${MARCA_DOC.borde};padding:3pt 6pt;background:${MARCA_DOC.principal};color:#fff">Puntaje</th></tr>
       ${zavic}</table>`:''}
   ${g.disc_patron? `
     <p style="margin:8pt 0 4pt"><b>Perfil laboral — Evaluación DISC: ${esc(g.disc_patron)}.</b></p>
@@ -14721,12 +15207,18 @@ function cuerpoInformeLaboral(){
   ${g.aporte? `<p style="margin:0 0 6pt;text-align:justify"><b>Aporte a la organización.</b> ${esc(g.aporte)}</p>`:''}
   ${g.aspectos? `<p style="margin:0 0 6pt;text-align:justify"><b>Aspectos a considerar.</b> ${esc(g.aspectos)}</p>`:''}
 
-  <div style="font-weight:bold;margin:12pt 0 5pt">V. CONCLUSIÓN</div>
+  ${tituloDoc('V. CONCLUSIÓN')}
   <p style="margin:0 0 6pt;text-align:justify">
     Considerando los resultados obtenidos en las evaluaciones aplicadas,
     ${esc(g.ev_nombre||'el evaluado')} presenta un
     <b>${esc(g.conclusion_ajuste||'—')}</b>${g.puesto? `, para el puesto de ${esc(g.puesto)}`:''}.</p>
   ${g.sustento_conclusion? parrafos(g.sustento_conclusion):''}
+  <!-- El veredicto, en su recuadro: es lo que busca quien recibe el
+       informe, y dentro de un párrafo se pierde. -->
+  ${cajaResultadoDoc('Resultado de la evaluación',
+    g.conclusion_ajuste
+      ? g.conclusion_ajuste + (g.puesto ? ' — ' + g.puesto : '')
+      : '')}
   <p style="margin:12pt 0 0;font-size:9pt;color:#555;text-align:justify">
     Este informe responde a la evaluación solicitada por la empresa y describe el
     ajuste del trabajador al puesto en el momento de la evaluación. No constituye
@@ -14739,27 +15231,27 @@ function cuerpoOrientacionVocacional(pac){
   const filas = AREAS_CASM83
     .filter(([k]) => g['casm_'+k] !== undefined && g['casm_'+k] !== '')
     .map(([k,n]) => `<tr>
-      <td style="border:1px solid #bbb;padding:3pt 6pt">${k} — ${n}</td>
-      <td style="border:1px solid #bbb;padding:3pt 6pt;text-align:center">${esc(g['casm_'+k])}</td>
-      <td style="border:1px solid #bbb;padding:3pt 6pt">${esc(g['nivel_'+k]||'')}</td></tr>`).join('');
+      <td style="border:1px solid ${MARCA_DOC.borde};padding:3pt 6pt">${k} — ${n}</td>
+      <td style="border:1px solid ${MARCA_DOC.borde};padding:3pt 6pt;text-align:center">${esc(g['casm_'+k])}</td>
+      <td style="border:1px solid ${MARCA_DOC.borde};padding:3pt 6pt">${esc(g['nivel_'+k]||'')}</td></tr>`).join('');
   return `
     ${bloqueFiliacion(pac)}
     ${seccion('II. MOTIVO DE CONSULTA', g.motivo)}
-    ${g.tecnicas? `<div style="font-weight:bold;margin:12pt 0 5pt">III. TÉCNICAS E INSTRUMENTOS APLICADOS</div>${lista(g.tecnicas)}`:''}
-    <div style="font-weight:bold;margin:12pt 0 5pt">IV. INTERPRETACIÓN DE RESULTADOS</div>
+    ${g.tecnicas? `${tituloDoc('III. TÉCNICAS E INSTRUMENTOS APLICADOS')}${lista(g.tecnicas)}`:''}
+    ${tituloDoc('IV. INTERPRETACIÓN DE RESULTADOS')}
     ${g.area_personalidad? `<p style="margin:0 0 4pt"><b>Área de personalidad.</b></p>${parrafos(g.area_personalidad)}`:''}
     ${g.area_emocional? `<p style="margin:6pt 0 4pt"><b>Área emocional.</b></p>${parrafos(g.area_emocional)}`:''}
     ${filas? `<p style="margin:6pt 0 4pt"><b>Área vocacional — Inventario CASM-83.</b></p>
       <table style="border-collapse:collapse;font-size:10pt;margin-bottom:8pt;width:100%">
-        <tr><th style="border:1px solid #bbb;padding:3pt 6pt;background:#f0f0f0;text-align:left">Área</th>
-            <th style="border:1px solid #bbb;padding:3pt 6pt;background:#f0f0f0">Puntaje</th>
-            <th style="border:1px solid #bbb;padding:3pt 6pt;background:#f0f0f0;text-align:left">Nivel</th></tr>
+        <tr><th style="border:1px solid ${MARCA_DOC.borde};padding:3pt 6pt;background:${MARCA_DOC.principal};color:#fff;text-align:left">Área</th>
+            <th style="border:1px solid ${MARCA_DOC.borde};padding:3pt 6pt;background:${MARCA_DOC.principal};color:#fff">Puntaje</th>
+            <th style="border:1px solid ${MARCA_DOC.borde};padding:3pt 6pt;background:${MARCA_DOC.principal};color:#fff;text-align:left">Nivel</th></tr>
         ${filas}</table>`:''}
     ${g.area_vocacional? parrafos(g.area_vocacional):''}
     ${seccion('V. INTEGRACIÓN DE RESULTADOS', g.integracion)}
     ${seccion('VI. CONCLUSIONES', g.conclusiones)}
-    ${g.carreras? `<div style="font-weight:bold;margin:12pt 0 5pt">VII. CARRERAS U OCUPACIONES SUGERIDAS</div>${lista(g.carreras)}`:''}
-    ${g.recomendaciones? `<div style="font-weight:bold;margin:12pt 0 5pt">VIII. RECOMENDACIONES</div>${lista(g.recomendaciones)}`:''}`;
+    ${g.carreras? `${tituloDoc('VII. CARRERAS U OCUPACIONES SUGERIDAS')}${lista(g.carreras)}`:''}
+    ${g.recomendaciones? `${tituloDoc('VIII. RECOMENDACIONES')}${lista(g.recomendaciones)}`:''}`;
 }
 
 /* --- Las competencias que califica la universidad -------------------
@@ -14789,17 +15281,17 @@ function cuerpoFichaPracticante(){
   let total = 0, maximo = 0;
   const filas = COMPETENCIAS_PRACTICANTE.map(c=>{
     if(c.grupo){
-      return `<tr><td colspan="3" style="border:1px solid #bbb;padding:4pt 6pt;
+      return `<tr><td colspan="3" style="border:1px solid ${MARCA_DOC.borde};padding:4pt 6pt;
         background:#eef2ef;font-weight:bold">${c.grupo}</td></tr>`;
     }
     const nota = Number(g['nota_'+c.id]);
     maximo += c.max;
     if(isFinite(nota)) total += nota;
     return `<tr>
-      <td style="border:1px solid #bbb;padding:3pt 6pt">${esc(c.texto)}</td>
-      <td style="border:1px solid #bbb;padding:3pt 6pt;text-align:center;white-space:nowrap">${
+      <td style="border:1px solid ${MARCA_DOC.borde};padding:3pt 6pt">${esc(c.texto)}</td>
+      <td style="border:1px solid ${MARCA_DOC.borde};padding:3pt 6pt;text-align:center;white-space:nowrap">${
         isFinite(nota)? nota.toFixed(2).replace(/\.00$/,'') : '—'} / ${c.max}</td>
-      <td style="border:1px solid #bbb;padding:3pt 6pt">${esc(g['niv_'+c.id]||'')}</td></tr>`;
+      <td style="border:1px solid ${MARCA_DOC.borde};padding:3pt 6pt">${esc(g['niv_'+c.id]||'')}</td></tr>`;
   }).join('');
 
   return `
@@ -14823,16 +15315,16 @@ function cuerpoFichaPracticante(){
   </table>
 
   <table style="width:100%;border-collapse:collapse;font-size:10pt">
-    <tr><th style="border:1px solid #bbb;padding:4pt 6pt;background:#f0f0f0;text-align:left">Criterio</th>
-        <th style="border:1px solid #bbb;padding:4pt 6pt;background:#f0f0f0">Puntaje</th>
-        <th style="border:1px solid #bbb;padding:4pt 6pt;background:#f0f0f0;text-align:left">Nivel</th></tr>
+    <tr><th style="border:1px solid ${MARCA_DOC.borde};padding:4pt 6pt;background:${MARCA_DOC.principal};color:#fff;text-align:left">Criterio</th>
+        <th style="border:1px solid ${MARCA_DOC.borde};padding:4pt 6pt;background:${MARCA_DOC.principal};color:#fff">Puntaje</th>
+        <th style="border:1px solid ${MARCA_DOC.borde};padding:4pt 6pt;background:${MARCA_DOC.principal};color:#fff;text-align:left">Nivel</th></tr>
     ${filas}
-    <tr><td style="border:1px solid #bbb;padding:5pt 6pt;font-weight:bold;text-align:right">NOTA FINAL</td>
-        <td style="border:1px solid #bbb;padding:5pt 6pt;text-align:center;font-weight:bold">${
+    <tr><td style="border:1px solid ${MARCA_DOC.borde};padding:5pt 6pt;font-weight:bold;text-align:right">NOTA FINAL</td>
+        <td style="border:1px solid ${MARCA_DOC.borde};padding:5pt 6pt;text-align:center;font-weight:bold">${
           total.toFixed(2).replace(/\.00$/,'')} / ${maximo}</td>
-        <td style="border:1px solid #bbb;padding:5pt 6pt"></td></tr>
+        <td style="border:1px solid ${MARCA_DOC.borde};padding:5pt 6pt"></td></tr>
   </table>
-  ${g.observaciones? `<div style="font-weight:bold;margin:12pt 0 5pt">OBSERVACIONES</div>
+  ${g.observaciones? `${tituloDoc('OBSERVACIONES')}
     ${parrafos(g.observaciones)}`:''}`;
 }
 
@@ -14990,14 +15482,14 @@ function cuerpoInformeEducativo(pac){
   return `
     ${datosEscolares(pac)}
     ${seccion('I. MOTIVO DE LA DERIVACIÓN', g.motivo)}
-    ${g.tecnicas? `<div style="font-weight:bold;margin:12pt 0 5pt">II. TÉCNICAS E INSTRUMENTOS APLICADOS</div>${lista(g.tecnicas)}`:''}
-    <div style="font-weight:bold;margin:12pt 0 5pt">III. RESULTADOS</div>
+    ${g.tecnicas? `${tituloDoc('II. TÉCNICAS E INSTRUMENTOS APLICADOS')}${lista(g.tecnicas)}`:''}
+    ${tituloDoc('III. RESULTADOS')}
     ${g.area_cognitiva? `<p style="margin:0 0 6pt;text-align:justify"><b>Área cognitiva y de aprendizaje.</b> ${esc(g.area_cognitiva)}</p>`:''}
     ${g.area_conductual? `<p style="margin:0 0 6pt;text-align:justify"><b>Conducta en el aula.</b> ${esc(g.area_conductual)}</p>`:''}
     ${g.area_socioemocional? `<p style="margin:0 0 6pt;text-align:justify"><b>Área socioemocional.</b> ${esc(g.area_socioemocional)}</p>`:''}
-    ${g.fortalezas? `<div style="font-weight:bold;margin:12pt 0 5pt">IV. FORTALEZAS DEL ESTUDIANTE</div>${parrafos(g.fortalezas)}`:''}
+    ${g.fortalezas? `${tituloDoc('IV. FORTALEZAS DEL ESTUDIANTE')}${parrafos(g.fortalezas)}`:''}
     ${seccion('V. CONCLUSIONES', g.conclusiones)}
-    ${g.adaptaciones? `<div style="font-weight:bold;margin:12pt 0 5pt">VI. ADAPTACIONES Y APOYOS SUGERIDOS</div>${lista(g.adaptaciones)}`:''}
+    ${g.adaptaciones? `${tituloDoc('VI. ADAPTACIONES Y APOYOS SUGERIDOS')}${lista(g.adaptaciones)}`:''}
     ${seccion('VII. SEGUIMIENTO', g.seguimiento)}
     <p style="margin:14pt 0 0;font-size:9pt;color:#555;text-align:justify">
       Documento de carácter reservado, emitido para orientar el apoyo pedagógico del
@@ -15020,8 +15512,8 @@ function cuerpoOrientacionPadres(pac){
   </table>
   ${seccion('QUÉ SE EVALUÓ', g.que_evaluamos)}
   ${seccion('QUÉ ENCONTRAMOS', g.que_encontramos)}
-  ${g.fortalezas? `<div style="font-weight:bold;margin:12pt 0 5pt">LO QUE SU HIJO(A) TIENE A FAVOR</div>${parrafos(g.fortalezas)}`:''}
-  ${g.en_casa? `<div style="font-weight:bold;margin:12pt 0 5pt">QUÉ PUEDEN HACER EN CASA</div>${lista(g.en_casa)}`:''}
+  ${g.fortalezas? `${tituloDoc('LO QUE SU HIJO(A) TIENE A FAVOR')}${parrafos(g.fortalezas)}`:''}
+  ${g.en_casa? `${tituloDoc('QUÉ PUEDEN HACER EN CASA')}${lista(g.en_casa)}`:''}
   ${seccion('QUÉ ESPERAR DEL PROCESO', g.que_esperar)}
   ${g.alerta? `
     <div style="border:1px solid #c98b73;background:#fdf4f0;padding:9pt 12pt;margin:12pt 0">
@@ -15050,9 +15542,9 @@ function cuerpoPautasDocente(pac){
     apoyar su desempeño en el aula. No incluyen información clínica: para eso
     puede comunicarse directamente con el centro.</p>
   ${seccion('QUÉ PUEDE ESTAR VIENDO EN CLASE', g.que_observar)}
-  ${g.fortalezas? `<div style="font-weight:bold;margin:12pt 0 5pt">LO QUE FUNCIONA CON ESTE ESTUDIANTE</div>${parrafos(g.fortalezas)}`:''}
-  ${g.estrategias? `<div style="font-weight:bold;margin:12pt 0 5pt">ESTRATEGIAS PARA EL AULA</div>${lista(g.estrategias)}`:''}
-  ${g.evitar? `<div style="font-weight:bold;margin:12pt 0 5pt">QUÉ CONVIENE EVITAR</div>${lista(g.evitar)}`:''}
+  ${g.fortalezas? `${tituloDoc('LO QUE FUNCIONA CON ESTE ESTUDIANTE')}${parrafos(g.fortalezas)}`:''}
+  ${g.estrategias? `${tituloDoc('ESTRATEGIAS PARA EL AULA')}${lista(g.estrategias)}`:''}
+  ${g.evitar? `${tituloDoc('QUÉ CONVIENE EVITAR')}${lista(g.evitar)}`:''}
   ${seccion('SUGERENCIAS PARA LA EVALUACIÓN', g.evaluacion)}
   ${g.contacto? `
     <div style="border:1px solid #bcd0c4;background:#f3f8f5;padding:9pt 12pt;margin:12pt 0">
@@ -15231,29 +15723,29 @@ function cuerpoContratoServicios(pac){
       ? `, identificado(a) con DNI N° ${esc(g.doc_contratante)}` : ''},
     a quien se le denominará <b>EL CONTRATANTE</b>, en los términos siguientes:</p>
 
-  <div style="font-weight:bold;margin:12pt 0 5pt">PRIMERA — OBJETO</div>
+  ${tituloDoc('PRIMERA — OBJETO')}
   <p style="text-align:justify;margin:0 0 8pt">
     EL CENTRO se obliga a prestar el servicio de <b>${esc(g.servicio||'—')}</b>
     ${pac.isMinor && pac.name ? `a favor de ${esc(pac.name)}, menor de edad bajo
       responsabilidad de EL CONTRATANTE,` : ''}
     en la modalidad ${esc(g.modalidad||'presencial')}.</p>
 
-  <div style="font-weight:bold;margin:12pt 0 5pt">SEGUNDA — SESIONES Y DURACIÓN</div>
+  ${tituloDoc('SEGUNDA — SESIONES Y DURACIÓN')}
   <table style="width:100%;border:none;border-collapse:collapse;font-size:10.5pt;margin-bottom:8pt">
     ${filaDato('Número de sesiones', g.n_sesiones)}
     ${filaDato('Duración de cada sesión', g.duracion)}
     ${filaDato('Vigencia', g.vigencia)}
   </table>
 
-  <div style="font-weight:bold;margin:12pt 0 5pt">TERCERA — CONTRAPRESTACIÓN</div>
+  ${tituloDoc('TERCERA — CONTRAPRESTACIÓN')}
   <p style="text-align:justify;margin:0 0 8pt">
     EL CONTRATANTE abonará la suma de <b>S/ ${esc(g.tarifa||'—')}</b> por sesión.</p>
   ${g.forma_pago? parrafos(g.forma_pago):''}
 
-  <div style="font-weight:bold;margin:12pt 0 5pt">CUARTA — INASISTENCIAS Y REPROGRAMACIONES</div>
+  ${tituloDoc('CUARTA — INASISTENCIAS Y REPROGRAMACIONES')}
   ${parrafos(g.politica_inasistencia)}
 
-  <div style="font-weight:bold;margin:12pt 0 5pt">QUINTA — CONFIDENCIALIDAD</div>
+  ${tituloDoc('QUINTA — CONFIDENCIALIDAD')}
   <p style="text-align:justify;margin:0 0 8pt">
     EL CENTRO guarda reserva de toda la información conocida con ocasión del
     servicio, conforme al secreto profesional y a la Ley 29733 de Protección de
@@ -15261,7 +15753,7 @@ function cuerpoContratoServicios(pac){
     él autorice por escrito, salvo los casos en que la ley obliga a informar,
     como el riesgo inminente para la vida o la integridad de una persona.</p>
 
-  ${g.observaciones? `<div style="font-weight:bold;margin:12pt 0 5pt">SEXTA — ACUERDOS ADICIONALES</div>
+  ${g.observaciones? `${tituloDoc('SEXTA — ACUERDOS ADICIONALES')}
     ${parrafos(g.observaciones)}`:''}
 
   <p style="text-align:justify;margin:12pt 0 0">
@@ -15288,21 +15780,21 @@ function cuerpoConvenioColegio(){
     en su calidad de ${esc(g.cargo_representante||'representante legal')},
     a quien se denominará <b>LA INSTITUCIÓN</b>, en los términos siguientes:</p>
 
-  <div style="font-weight:bold;margin:12pt 0 5pt">PRIMERA — OBJETO</div>
+  ${tituloDoc('PRIMERA — OBJETO')}
   ${parrafos(g.objeto)}
 
-  ${g.servicios? `<div style="font-weight:bold;margin:12pt 0 5pt">SEGUNDA — SERVICIOS</div>
+  ${g.servicios? `${tituloDoc('SEGUNDA — SERVICIOS')}
     ${lista(g.servicios)}`:''}
-  ${g.beneficiarios? `<div style="font-weight:bold;margin:12pt 0 5pt">TERCERA — BENEFICIARIOS</div>
+  ${g.beneficiarios? `${tituloDoc('TERCERA — BENEFICIARIOS')}
     ${parrafos(g.beneficiarios)}`:''}
-  ${g.obligaciones_centro? `<div style="font-weight:bold;margin:12pt 0 5pt">CUARTA — OBLIGACIONES DE EL CENTRO</div>
+  ${g.obligaciones_centro? `${tituloDoc('CUARTA — OBLIGACIONES DE EL CENTRO')}
     ${lista(g.obligaciones_centro)}`:''}
-  ${g.obligaciones_institucion? `<div style="font-weight:bold;margin:12pt 0 5pt">QUINTA — OBLIGACIONES DE LA INSTITUCIÓN</div>
+  ${g.obligaciones_institucion? `${tituloDoc('QUINTA — OBLIGACIONES DE LA INSTITUCIÓN')}
     ${lista(g.obligaciones_institucion)}`:''}
-  ${g.costos? `<div style="font-weight:bold;margin:12pt 0 5pt">SEXTA — CONDICIONES ECONÓMICAS</div>
+  ${g.costos? `${tituloDoc('SEXTA — CONDICIONES ECONÓMICAS')}
     ${parrafos(g.costos)}`:''}
 
-  <div style="font-weight:bold;margin:12pt 0 5pt">SÉPTIMA — CONFIDENCIALIDAD Y DATOS DE MENORES</div>
+  ${tituloDoc('SÉPTIMA — CONFIDENCIALIDAD Y DATOS DE MENORES')}
   ${g.confidencialidad? parrafos(g.confidencialidad) : `
     <p style="text-align:justify;margin:0 0 8pt">
       La información de los estudiantes atendidos es reservada y está protegida por
@@ -15312,7 +15804,7 @@ function cuerpoConvenioColegio(){
       corresponda según su destinatario y no se incorporan a documentos de acceso
       general de LA INSTITUCIÓN.</p>`}
 
-  ${g.vigencia? `<div style="font-weight:bold;margin:12pt 0 5pt">OCTAVA — VIGENCIA</div>
+  ${g.vigencia? `${tituloDoc('OCTAVA — VIGENCIA')}
     <p style="margin:0 0 8pt">${esc(g.vigencia)}</p>`:''}
 
   <p style="text-align:justify;margin:12pt 0 0">
@@ -15334,13 +15826,13 @@ function cuerpoPropuestaEmpresa(){
     Por medio de la presente, <b>${esc(ci.name||'')}</b> pone a su consideración la
     siguiente propuesta de servicios psicológicos.</p>
   ${seccion('NECESIDAD IDENTIFICADA', g.necesidad)}
-  ${g.alcance? `<div style="font-weight:bold;margin:12pt 0 5pt">ALCANCE DEL SERVICIO</div>
+  ${g.alcance? `${tituloDoc('ALCANCE DEL SERVICIO')}
     ${lista(g.alcance)}`:''}
-  ${g.no_incluye? `<div style="font-weight:bold;margin:12pt 0 5pt">NO INCLUYE</div>
+  ${g.no_incluye? `${tituloDoc('NO INCLUYE')}
     ${lista(g.no_incluye)}`:''}
   ${seccion('METODOLOGÍA', g.metodologia)}
   ${g.plazo? `<p style="margin:10pt 0 4pt"><b>Plazo de ejecución:</b> ${esc(g.plazo)}</p>`:''}
-  ${g.inversion? `<div style="font-weight:bold;margin:12pt 0 5pt">INVERSIÓN</div>
+  ${g.inversion? `${tituloDoc('INVERSIÓN')}
     ${parrafos(g.inversion)}`:''}
   ${g.validez? `<p style="margin:10pt 0 0;font-size:10pt;color:#555">
     Propuesta válida por ${esc(g.validez)} desde su emisión.</p>`:''}
@@ -15360,7 +15852,7 @@ function cuerpoConstanciaPracticas(){
     prácticas preprofesionales en el área ${esc(g.area||'clínica')} de esta
     institución ${esc(periodo)}${g.horas? `, acumulando un total de
     <b>${esc(g.horas)} horas</b>` : ''}.</p>
-  ${g.actividades? `<div style="font-weight:bold;margin:12pt 0 5pt">ACTIVIDADES REALIZADAS</div>
+  ${g.actividades? `${tituloDoc('ACTIVIDADES REALIZADAS')}
     ${lista(g.actividades)}`:''}
   ${g.desempeno? `<p style="text-align:justify;margin:10pt 0">
     Durante su permanencia, su desempeño fue calificado como
@@ -15437,6 +15929,24 @@ function abrirDocumento(tipo, patientId){
     docDatos.ciclo       = practicante.cycle || practicante.ciclo || '';
     docDatos.area        = 'Clínica';
     docDatos.nivel_pp    = practicante.cycle || '';
+  }
+  // La ficha de seguimiento arranca con el paquete en curso y con el
+  // pago marcado según lo que haya registrado: si ya está cubierto, es
+  // «Completo»; si hay algo pagado pero falta, «Fraccionado».
+  if(tipo === 'ficha_seguimiento'){
+    const lista = paquetesDe(pac);
+    const q = lista[lista.length - 1];
+    if(q){
+      docDatos.fs_paquete = q.id;
+      const r = resumenDePaquete(pac, q);
+      docDatos.fs_pago = r.precio <= 0 ? ''
+        : (r.saldo <= 0 ? 'Completo' : (r.pagado > 0 ? 'Fraccionado' : ''));
+    }
+    docDatos.fs_frecuencia = 'Semanal';
+    docDatos.fs_servicio = pac.type === 'Pareja' ? 'Terapia de pareja'
+      : pac.type === 'Familia' ? 'Terapia familiar'
+      : pac.type === 'Evaluación' ? 'Evaluación psicológica'
+      : 'Psicoterapia individual';
   }
   if(tipo === 'orientacion_vocacional'){
     docDatos.motivo = 'Acude a consulta para realizar una evaluación de '
@@ -15609,6 +16119,41 @@ function controlDeCampo(c){
       }).join('')}
     </table></div>`;
 
+  }else if(c.tipo === 'paquete'){
+    // De qué paquete sale la ficha. Sin esto habría que imprimirla
+    // siempre del que está en curso, y la del paquete que terminó
+    // —la que el paciente se lleva al cerrar— no se podría volver a sacar.
+    const lista = paquetesDe(docDatos._paciente || {});
+    control = lista.length
+      ? `<select id="doc_${c.id}" onchange="docCambio('${c.id}', this.value)">
+          ${lista.map((q, i) => {
+            const sel = (docDatos[c.id] || (lista[lista.length-1]||{}).id) === q.id;
+            return `<option value="${q.id}"${sel ? ' selected' : ''}>`
+              + `Paquete ${i+1} de ${lista.length}`
+              + (q.concepto ? ' · ' + esc(q.concepto) : '')
+              + ` · ${q.sesiones} sesiones`
+              + (q.vigente ? ' · en curso' : ' · terminado')
+              + `</option>`;
+          }).join('')}
+        </select>`
+      : `<p class="hint">Este paciente todavía no tiene ningún paquete registrado.</p>`;
+
+  }else if(c.tipo === 'objetivos'){
+    const avance = id => `<select onchange="docCampoExtra('${id}', this.value)">`
+      + AVANCE_OBJETIVO.map(o => `<option${o === (docDatos[id]||'') ? ' selected' : ''}`
+          + `>${o}</option>`).join('') + `</select>`;
+    control = `<div class="tablewrap"><table>
+      <tr><th style="width:26px">N.°</th><th>Objetivo terapéutico</th>
+          <th>A mitad del paquete</th><th>Al terminar</th></tr>
+      ${[1,2,3,4].map(n => `<tr>
+        <td>${n}</td>
+        <td><input style="width:100%" value="${esc(docDatos['fs_obj'+n]||'')}"
+             oninput="docCampoExtra('fs_obj${n}', this.value)"></td>
+        <td>${avance('fs_obj'+n+'_m')}</td>
+        <td>${avance('fs_obj'+n+'_f')}</td>
+      </tr>`).join('')}
+    </table></div>`;
+
   }else{
     const tipoHtml = c.tipo==='date' ? 'date' : c.tipo==='number' ? 'number' : 'text';
     control = `<input id="doc_${c.id}" type="${tipoHtml}" value="${esc(v)}"
@@ -15664,24 +16209,42 @@ function nombreArchivoDoc(ext){
 }
 
 /* --- Word ------------------------------------------------------------
-   Word abre un HTML con extensión .doc y lo deja editable, con el
-   membrete y el logo incluidos. No hace falta armar un .docx de verdad:
-   lo que el profesional necesita es poder retocar el texto antes de
-   firmar, y esto se lo da. */
+   Word abre un HTML con extensión .doc y lo deja editable. Lo que no se
+   consigue con HTML suelto es que el membrete y el pie se repitan en
+   cada página: para eso hace falta declarar una *sección* de Word
+   (`@page Section1`) y colgarle dos bloques marcados como encabezado y
+   pie (`mso-element:header` / `footer`). Es la única manera, y de paso
+   es la que hace que el número de página sea un campo de Word de
+   verdad —PAGE de NUMPAGES—, que se recalcula solo al editar el texto.
+
+   El fondo con el logo en marca de agua NO se pone acá: en Word una
+   marca de agua no es HTML, es un objeto del encabezado, y lo que se
+   consigue imitándola es un dibujo que se arrastra al escribir. En el
+   PDF sí va. */
 function descargarDocWord(){
-  const cuerpo = documentoHTML(docTipoActual, true);
+  const d = DOCUMENTOS_OFICIALES[docTipoActual] || {};
+  const cuerpo = documentoHTML(docTipoActual, true, true);
+  const pagina = d.apaisado
+    ? 'size:29.7cm 21cm; mso-page-orientation:landscape; margin:1.6cm 1.4cm 1.8cm 1.4cm;'
+    : 'size:21cm 29.7cm; margin:2.6cm 2cm 2.4cm 2.2cm;';
   const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office"
  xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
 <head><meta charset="utf-8">
-<title>${esc((DOCUMENTOS_OFICIALES[docTipoActual]||{}).titulo||'Documento')}</title>
+<title>${esc(d.titulo||'Documento')}</title>
 <!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View>
 <w:Zoom>100</w:Zoom></w:WordDocument></xml><![endif]-->
 <style>
- @page { size: A4; margin: 2.2cm 2.2cm 2cm 2.5cm; }
- body { font-family: Georgia,'Times New Roman',serif; font-size:11pt; }
+ @page Section1 { ${pagina} mso-header-margin:1.1cm; mso-footer-margin:1.1cm;
+   mso-header:url("#h1") h1; mso-footer:url("#f1") f1; }
+ div.Section1 { page:Section1; }
+ body { font-family: Georgia,'Times New Roman',serif; font-size:11pt; color:${MARCA_DOC.tinta}; }
  p { margin:0 0 6pt; }
+ table { border-collapse:collapse; }
 </style></head>
-<body>${cuerpo}<\/body><\/html>`;
+<body><div class="Section1">${cuerpo}
+<div style="mso-element:header" id="h1">${membreteDoc(true)}</div>
+<div style="mso-element:footer" id="f1">${pieDocHTML(true)}</div>
+</div><\/body><\/html>`;
   const blob = new Blob(['﻿', html], {type:'application/msword'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -15693,9 +16256,148 @@ function descargarDocWord(){
 }
 
 /* --- PDF -------------------------------------------------------------
-   Se pasa por una copia del ancho de una A4 real. Capturar el recuadro
-   de la pantalla recortaba el documento: es lo que pasaba con el recibo
-   del profesional. */
+
+   Antes el PDF era una foto: se capturaba el documento entero en una
+   imagen larguísima y se cortaba cada 842 puntos. Eso traía dos cosas
+   que se notan al imprimirlo: el membrete salía solo en la primera
+   página, y los cortes caían donde caían —a media línea, a mitad de una
+   fila de tabla—, sin margen arriba ni abajo.
+
+   Ahora la hoja se arma de verdad: el membrete, la franja de colores,
+   la marca de agua y el pie con su número de página los dibuja jsPDF en
+   cada hoja, y del documento solo se captura el cuerpo, que se reparte
+   en el hueco que queda entre uno y otro. El cuerpo va en PNG con el
+   fondo transparente para que la marca de agua se vea por debajo; en
+   JPEG el fondo blanco la taparía.                                    */
+const HOJA_DOC = {
+  izq: 46, der: 46,
+  cabecera: 30,       // dónde empieza el membrete
+  altoCabecera: 56,   // lo que ocupa membrete + franja
+  altoPie: 42,        // lo que se le reserva al pie
+};
+
+function medidasDeHoja(apaisado){
+  const ancho = apaisado ? 841.89 : 595.28;
+  const alto  = apaisado ? 595.28 : 841.89;
+  const arriba = HOJA_DOC.cabecera + HOJA_DOC.altoCabecera + 8;
+  return {
+    ancho, alto, arriba,
+    anchoUtil: ancho - HOJA_DOC.izq - HOJA_DOC.der,
+    altoUtil:  alto - arriba - HOJA_DOC.altoPie,
+  };
+}
+
+function hexARgb(h){
+  const t = String(h).replace('#','');
+  return [parseInt(t.slice(0,2),16), parseInt(t.slice(2,4),16), parseInt(t.slice(4,6),16)];
+}
+
+/* El membrete de cada hoja, dibujado y no fotografiado: así el texto
+   del nombre del centro se puede seleccionar y buscar en el PDF. */
+function cabeceraPDF(pdf, m){
+  const ci = DB.centerInfo || {};
+  const x = HOJA_DOC.izq;
+  let y = HOJA_DOC.cabecera;
+
+  try { pdf.addImage(CENTER_LOGO_DATA_URL, 'PNG', x, y - 4, 46, 46); } catch(e){}
+
+  const tx = x + 56;
+  pdf.setTextColor(...hexARgb(MARCA_DOC.principal));
+  pdf.setFont('helvetica', 'bold'); pdf.setFontSize(11.5);
+  const nombre = ci.name || 'Centro Psicológico MAGUSA ARCOIRIS DE ESPERANZA';
+  const lineas = pdf.splitTextToSize(nombre, m.anchoUtil - 56 - 160);
+  pdf.text(lineas.slice(0,2), tx, y + 8);
+
+  pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7);
+  pdf.setTextColor(...hexARgb(MARCA_DOC.gris));
+  const contacto = [ci.ruc? `RUC ${ci.ruc}`:'', ci.phone? `Tel. ${ci.phone}`:'']
+    .filter(Boolean).join('  ·  ');
+  let yc = y + 8 + lineas.slice(0,2).length * 12;
+  if(contacto){ pdf.text(contacto, tx, yc); yc += 9; }
+  if(ci.address) pdf.text(String(ci.address).slice(0,90), tx, yc);
+
+  const lema = (ci.lemaAnio || '').trim();
+  if(lema){
+    pdf.setFont('helvetica', 'italic'); pdf.setFontSize(7.5);
+    pdf.text(pdf.splitTextToSize('“' + lema + '”', 150),
+             m.ancho - HOJA_DOC.der, y + 10, {align:'right'});
+  }
+
+  // La franja de seis colores, debajo de todo el membrete.
+  const colores = [MARCA_DOC.principal, MARCA_DOC.agua, MARCA_DOC.oro,
+                   MARCA_DOC.magenta, MARCA_DOC.lila, MARCA_DOC.coral];
+  const ancho = m.anchoUtil / colores.length;
+  const yFranja = HOJA_DOC.cabecera + HOJA_DOC.altoCabecera - 6;
+  colores.forEach((c, i) => {
+    pdf.setFillColor(...hexARgb(c));
+    pdf.rect(x + i*ancho, yFranja, ancho + 0.4, 3.2, 'F');
+  });
+}
+
+function piePDF(pdf, m, pagina, total){
+  const ci = DB.centerInfo || {};
+  const x = HOJA_DOC.izq;
+  const y = m.alto - HOJA_DOC.altoPie + 10;
+
+  const colores = [MARCA_DOC.principal, MARCA_DOC.agua, MARCA_DOC.oro,
+                   MARCA_DOC.magenta, MARCA_DOC.lila, MARCA_DOC.coral];
+  const ancho = m.anchoUtil / colores.length;
+  colores.forEach((c, i) => {
+    pdf.setFillColor(...hexARgb(c));
+    pdf.rect(x + i*ancho, y, ancho + 0.4, 2.2, 'F');
+  });
+
+  pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7);
+  pdf.setTextColor(...hexARgb(MARCA_DOC.principal));
+  const nombre = String(ci.name || 'Centro Psicológico Magusa Arcoíris de Esperanza').slice(0, 62);
+  pdf.text(nombre, x, y + 11);
+  // Se mide con la negrita puesta, que es con la que se dibujó: con la
+  // redonda el lugar se montaba un poco sobre el nombre.
+  const anchoNombre = pdf.getTextWidth(nombre);
+
+  pdf.setFont('helvetica', 'normal');
+  pdf.setTextColor(...hexARgb(MARCA_DOC.gris));
+  const lugar = ci.address || 'San Juan de Lurigancho, Lima – Perú';
+  pdf.text('  ·  ' + String(lugar).slice(0, 60), x + anchoNombre + 1, y + 11);
+
+  pdf.text(`Página ${pagina} de ${total}`, m.ancho - HOJA_DOC.der, y + 11, {align:'right'});
+
+  const nota = ['Documento confidencial', (ci.slogan||'').trim()].filter(Boolean).join(' · ');
+  pdf.setFontSize(6.5);
+  pdf.text(nota, x, y + 19);
+}
+
+/* El logo grande y muy pálido detrás del texto. Lo justo para que una
+   hoja fotocopiada se siga reconociendo, sin estorbar la lectura.
+
+   Se pinta sobre el propio lienzo de la hoja y no sobre el PDF a
+   propósito: para poner algo DEBAJO del cuerpo en el PDF, el cuerpo
+   tendría que ir en PNG con transparencia, y jsPDF separa el canal alfa
+   a mano — en una imagen de 1340 × 5000 eso tardaba casi un minuto por
+   documento. Pintada acá, en modo multiplicar y al 5 %, se ve igual y
+   el cuerpo sigue saliendo en JPEG. */
+function pintarMarcaDeAgua(ctx, ancho, alto, logo){
+  if(!logo || !logo.width) return;
+  const lado = Math.min(ancho, alto) * 0.62;
+  ctx.save();
+  ctx.globalAlpha = 0.05;
+  ctx.globalCompositeOperation = 'multiply';
+  ctx.drawImage(logo, (ancho - lado)/2, (alto - lado)/2, lado, lado);
+  ctx.restore();
+}
+
+/* El logo como imagen ya cargada, para poder dibujarlo en el lienzo.
+   Si por lo que sea no carga, el documento sale sin marca de agua y
+   nada más: no es motivo para quedarse sin PDF. */
+function cargarLogoDoc(){
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = CENTER_LOGO_DATA_URL;
+  });
+}
+
 async function descargarDocPDF(btn){
   const original = btn ? btn.textContent : '';
   if(btn){ btn.disabled = true; btn.textContent = 'Generando…'; }
@@ -15704,24 +16406,60 @@ async function descargarDocPDF(btn){
       throw new Error('No se pudieron cargar las herramientas de PDF. Revisa tu internet.');
     }
     const { jsPDF } = window.jspdf;
-    // 720 px ≈ el ancho útil de una A4 con márgenes de 2 cm
-    const caja = document.createElement('div');
-    caja.style.cssText = 'position:fixed;left:-10000px;top:0;width:720px;'
-                       + 'background:#fff;padding:30px 34px';
-    caja.innerHTML = documentoHTML(docTipoActual, true);
-    document.body.appendChild(caja);
-    const lienzo = await html2canvas(caja, {scale:2, backgroundColor:'#ffffff', useCORS:true});
-    document.body.removeChild(caja);
+    const d = DOCUMENTOS_OFICIALES[docTipoActual] || {};
+    const m = medidasDeHoja(!!d.apaisado);
 
-    const pdf = new jsPDF({unit:'pt', format:'a4'});
-    const anchoPag = pdf.internal.pageSize.getWidth();
-    const altoPag  = pdf.internal.pageSize.getHeight();
-    const alto = lienzo.height * anchoPag / lienzo.width;
-    let restante = alto, y = 0;
-    while(restante > 0){
-      pdf.addImage(lienzo, 'JPEG', 0, y, anchoPag, alto, undefined, 'FAST');
-      restante -= altoPag;
-      if(restante > 0){ pdf.addPage(); y -= altoPag; }
+    // El ancho de la caja tiene que ser el ancho útil de la hoja
+    // convertido a píxeles de pantalla: el documento está escrito en
+    // puntos (11pt el texto), y un punto son 96/72 píxeles. Si se
+    // captura en una caja más ancha, el mismo texto de 11pt ocupa una
+    // fracción menor de la hoja y el PDF sale con la letra diminuta.
+    const anchoCss = Math.round(m.anchoUtil * 96 / 72);
+    const caja = document.createElement('div');
+    caja.style.cssText = `position:fixed;left:-10000px;top:0;width:${anchoCss}px;`
+                       + 'background:transparent';
+    caja.innerHTML = documentoHTML(docTipoActual, true, true);
+    document.body.appendChild(caja);
+    // scale 2 = unos 192 puntos por pulgada: nítido al imprimir.
+    // Se le dicen las medidas exactas: sin ellas html2canvas clona la
+    // página entera —el panel con sus dieciocho pestañas— y la vuelve a
+    // maquetar para recortar un trozo, que es de donde salía la espera.
+    const altoCss = caja.scrollHeight;
+    const lienzo = await html2canvas(caja, {
+      scale: 2, backgroundColor: '#ffffff', useCORS: true, logging: false,
+      width: anchoCss, height: altoCss,
+      windowWidth: anchoCss, windowHeight: altoCss,
+    });
+    document.body.removeChild(caja);
+    const logo = await cargarLogoDoc();
+
+    const pdf = new jsPDF({unit:'pt', format:'a4',
+                           orientation: d.apaisado ? 'landscape' : 'portrait'});
+    const puntosPorPx = m.anchoUtil / lienzo.width;
+    const altoPaginaPx = Math.max(1, Math.floor(m.altoUtil / puntosPorPx));
+    const paginas = Math.max(1, Math.ceil(lienzo.height / altoPaginaPx));
+
+    for(let i = 0; i < paginas; i++){
+      if(i) pdf.addPage();
+      cabeceraPDF(pdf, m);
+
+      // La última hoja se recorta a lo que queda, pero se dibuja en un
+      // lienzo del alto de una hoja entera: así la marca de agua queda
+      // centrada igual que en las demás y no subida.
+      const altoTrozo = Math.min(altoPaginaPx, lienzo.height - i*altoPaginaPx);
+      const trozo = document.createElement('canvas');
+      trozo.width = lienzo.width; trozo.height = altoTrozo;
+      const ctx = trozo.getContext('2d');
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, trozo.width, trozo.height);
+      ctx.drawImage(lienzo, 0, i*altoPaginaPx, lienzo.width, altoTrozo,
+                            0, 0, lienzo.width, altoTrozo);
+      pintarMarcaDeAgua(ctx, trozo.width, trozo.height, logo);
+
+      pdf.addImage(trozo.toDataURL('image/jpeg', 0.92), 'JPEG',
+                   HOJA_DOC.izq, m.arriba, m.anchoUtil, altoTrozo * puntosPorPx,
+                   undefined, 'FAST');
+      piePDF(pdf, m, i+1, paginas);
     }
     pdf.save(nombreArchivoDoc('pdf'));
     showToast('PDF listo. El espacio de firma va en blanco, para firmarlo a mano.');
@@ -15732,20 +16470,35 @@ async function descargarDocPDF(btn){
   }
 }
 
+/* --- Imprimir --------------------------------------------------------
+   Chrome repite en cada hoja lo que esté en `position:fixed`, así que el
+   membrete y el pie se cuelgan ahí y el cuerpo se separa con el relleno
+   justo para no pisarlos. El número de página lo pone el propio Chrome
+   en el cuadro de impresión, así que acá no se escribe.               */
 function imprimirDoc(){
   const w = window.open('', '_blank');
   if(!w){ alert('El navegador bloqueó la ventana de impresión.'); return; }
-  // El planificador es una cuadrícula de siete columnas: en vertical no
-  // entra y las celdas quedan ilegibles.
   const d = DOCUMENTOS_OFICIALES[docTipoActual] || {};
   const pagina = d.apaisado
-    ? '@page{size:A4 landscape;margin:1.2cm}'
-    : '@page{size:A4;margin:2.2cm 2.2cm 2cm 2.5cm}';
+    ? '@page{size:A4 landscape;margin:1.3cm}'
+    : '@page{size:A4;margin:1.5cm 1.6cm}';
   w.document.write(`<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">
 <title>${esc(d.titulo||'')}<\/title>
 <style>${pagina}
-body{margin:0;font-family:Georgia,'Times New Roman',serif}<\/style>
-</head><body>${documentoHTML(docTipoActual, true)}<\/body><\/html>`);
+ body{margin:0;font-family:Georgia,'Times New Roman',serif;color:${MARCA_DOC.tinta}}
+ #cabDoc{position:fixed;top:0;left:0;right:0}
+ #pieDoc{position:fixed;bottom:0;left:0;right:0}
+ #cuerpoDoc{padding-top:76px;padding-bottom:52px}
+ #aguaDoc{position:fixed;top:50%;left:50%;width:62%;
+   transform:translate(-50%,-50%);opacity:.05;z-index:-1}
+ table{border-collapse:collapse}
+<\/style>
+</head><body>
+<img id="aguaDoc" src="${CENTER_LOGO_DATA_URL}" alt="">
+<div id="cabDoc">${membreteDoc(true)}<\/div>
+<div id="pieDoc">${pieDocHTML(false)}<\/div>
+<div id="cuerpoDoc">${documentoHTML(docTipoActual, true, true)}<\/div>
+<\/body><\/html>`);
   w.document.close();
   setTimeout(()=>{ w.focus(); w.print(); }, 350);
 }
@@ -21557,7 +22310,7 @@ async function confirmWipe(){
 document.getElementById('todayLabel').textContent = new Date().toLocaleDateString('es-PE',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
 /* Se sube a mano en cada cambio del panel. Si arriba no dice esta versión,
    estás viendo una copia vieja: recarga con Ctrl+Shift+R. */
-const PANEL_VERSION = 'v2026-10-16c · las citas, solo las del paquete de ahora';
+const PANEL_VERSION = 'v2026-10-24a · la ficha de seguimiento, llena sola';
 document.getElementById('versionLabel').textContent = PANEL_VERSION;
 document.getElementById('storageModeNote').innerHTML =
   STORAGE_MODE==='api'

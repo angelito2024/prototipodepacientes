@@ -33,3 +33,11 @@ respaldo/copias/
 # informes reales, con nombres de pacientes y contenido clínico. Sirven
 # de referencia para construir las plantillas; no se versionan.
 /documentos para mejora de la pagina/
+
+# Videos y capturas de pantalla del panel: muestran nombres de pacientes.
+# Nunca al repositorio, que es público.
+*.mp4
+*.mov
+*.mkv
+*.webm
+*.avi

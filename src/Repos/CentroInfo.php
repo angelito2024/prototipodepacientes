@@ -25,11 +25,22 @@ final class CentroInfo extends Repositorio
     {
         $c = Database::uno('SELECT * FROM centro_config WHERE id = 1') ?? [];
         return [
+            // La razón social, con su S.A.C.: es la que acompaña al RUC
+            // en informes, contratos y recibos.
             'name'                => (string) ($c['razon_social'] ?? 'Centro Psicológico'),
+            // Con el que lo conoce la gente. Va en las páginas donde entra
+            // el paciente: un niño que abre su prueba no tiene por qué
+            // leer «S.A.C.».
+            'nombreComercial'     => (string) ($c['nombre_comercial'] ?? ''),
             'address'             => (string) ($c['direccion'] ?? ''),
             'phone'               => (string) ($c['telefono'] ?? ''),
             'ruc'                 => (string) ($c['ruc'] ?? ''),
             'slogan'              => (string) ($c['lema'] ?? ''),
+            // El nombre que el Gobierno le pone al año. Va arriba de
+            // cada documento oficial y cambia cada enero por decreto,
+            // así que se edita desde Datos del centro y no se escribe
+            // dentro del programa.
+            'lemaAnio'            => (string) ($c['lema_anio'] ?? ''),
             // El texto corto que ve el paciente en las páginas públicas:
             // su prueba, su tarea para la casa. Va en la base y no en el
             // programa porque es la voz del centro, y cambiarla no puede
@@ -74,16 +85,19 @@ final class CentroInfo extends Repositorio
 
         Database::query(
             'INSERT INTO centro_config
-                (id, razon_social, direccion, telefono, ruc, lema, medios_pago,
+                (id, razon_social, nombre_comercial, direccion, telefono, ruc, lema, lema_anio, medios_pago,
                  mensaje_pacientes, pedir_documento,
                  titular_nombre, titular_documento, titular_cargo, titular_colegiatura,
                  sala_zoom, sala_meet, url_publica,
                  minutos_recordatorio, minutos_sesion, horas_reprogramacion,
                  porcentaje_penalidad, incluir_politica)
-             VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+             VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
              ON DUPLICATE KEY UPDATE
-                razon_social=VALUES(razon_social), direccion=VALUES(direccion),
+                razon_social=VALUES(razon_social),
+                nombre_comercial=VALUES(nombre_comercial),
+                direccion=VALUES(direccion),
                 telefono=VALUES(telefono), ruc=VALUES(ruc), lema=VALUES(lema),
+                lema_anio=VALUES(lema_anio),
                 medios_pago=VALUES(medios_pago),
                 mensaje_pacientes=VALUES(mensaje_pacientes),
                 pedir_documento=VALUES(pedir_documento),
@@ -100,10 +114,12 @@ final class CentroInfo extends Repositorio
                 incluir_politica=VALUES(incluir_politica)',
             [
                 self::txt($valor['name'] ?? '') ?: 'Centro Psicológico',
+                self::nz($valor['nombreComercial'] ?? null),
                 self::nz($valor['address'] ?? null),
                 self::nz($valor['phone'] ?? null),
                 self::nz($valor['ruc'] ?? null),
                 self::nz($valor['slogan'] ?? null),
+                self::nz($valor['lemaAnio'] ?? null),
                 self::nz($valor['paymentMethods'] ?? null),
                 self::nz($valor['mensajePacientes'] ?? null),
                 self::bool($valor['pedirDocumento'] ?? false),
