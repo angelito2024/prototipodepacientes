@@ -148,6 +148,10 @@ final class Personas
     public static function bajaFaltantes(string $subtipo, array $uidsVigentes): void
     {
         $todas = R::mapaPersonas($subtipo);
+        // Mismo freno que en citas: una lista vacía es casi siempre una
+        // lectura fallida, y dar de baja a todos los pacientes por eso
+        // sería convertir un error de pantalla en pérdida de datos.
+        R::noVaciarTodo($subtipo, $uidsVigentes, count($todas));
         $sobran = array_diff_key($todas, array_flip($uidsVigentes));
         foreach ($sobran as $id) {
             // Nunca DELETE: la historia clínica, los pagos y las citas de esa

@@ -74,13 +74,126 @@ final class Usuarios extends Repositorio
     }
 
     /** Los roles disponibles, para armar el desplegable. */
+    /** Los permisos que no se le pueden quitar al administrador.
+     *  Sin ellos, el sistema se queda sin quien dé de alta a nadie. */
+    public const DEL_ADMIN = ['usuarios.editar', 'config.editar'];
+
     public static function roles(): array
     {
-        return array_map(static fn(array $r): array => [
-            'clave'  => $r['clave'],
-            'nombre' => $r['nombre'],
-            'descripcion' => $r['descripcion'],
-        ], Database::todos('SELECT clave, nombre, descripcion FROM roles ORDER BY id'));
+        $permisos = [];
+        foreach (Database::todos(
+            'SELECT r.clave AS rol, p.clave AS permiso
+               FROM rol_permisos rp
+               JOIN roles r    ON r.id = rp.rol_id
+               JOIN permisos p ON p.id = rp.permiso_id'
+        ) as $x) {
+            $permisos[$x['rol']][] = $x['permiso'];
+        }
+        $usuarios = [];
+        foreach (Database::todos(
+            'SELECT r.clave AS rol, COUNT(ur.usuario_id) AS n
+               FROM roles r
+          LEFT JOIN usuario_roles ur ON ur.rol_id = r.id
+           GROUP BY r.clave'
+        ) as $x) {
+            $usuarios[$x['rol']] = (int) $x['n'];
+        }
+
+        return array_map(static function (array $r) use ($permisos, $usuarios): array {
+            return [
+                'clave'       => $r['clave'],
+                'nombre'      => $r['nombre'],
+                'descripcion' => $r['descripcion'],
+                'permisos'    => $permisos[$r['clave']] ?? [],
+                'usuarios'    => $usuarios[$r['clave']] ?? 0,
+                // El administrador se puede renombrar, pero no quedarse sin
+                // sus permisos ni desaparecer.
+                'protegido'   => $r['clave'] === 'admin',
+            ];
+        }, Database::todos('SELECT clave, nombre, descripcion FROM roles ORDER BY id'));
+    }
+
+    /** El catálogo entero, agrupado por módulo, para pintar las casillas. */
+    public static function permisos(): array
+    {
+        return Database::todos(
+            'SELECT clave, modulo FROM permisos ORDER BY modulo, clave'
+        );
+    }
+
+    /**
+     * Crea o actualiza un perfil con sus permisos.
+     *
+     * @param string $clave     el identificador; si existe, se actualiza
+     * @param list<string> $permisos  las claves de permiso que tendrá
+     */
+    public static function guardarPerfil(
+        string $clave, string $nombre, string $descripcion, array $permisos
+    ): void {
+        $clave = strtolower(trim($clave));
+        if ($clave === '' || !preg_match('/^[a-z][a-z0-9_]{1,39}$/', $clave)) {
+            throw new \RuntimeException(
+                'El identificador del perfil solo admite letras, números y guion bajo, '
+              . 'y empieza con letra. Por ejemplo: caja, seguimiento, recepcion_tarde.'
+            );
+        }
+        if (trim($nombre) === '') {
+            throw new \RuntimeException('Ponle un nombre al perfil.');
+        }
+
+        // Al administrador no se le pueden quitar las llaves de la casa.
+        if ($clave === 'admin') {
+            $permisos = array_values(array_unique(
+                array_merge($permisos, self::DEL_ADMIN)
+            ));
+        }
+
+        Database::query(
+            'INSERT INTO roles (clave, nombre, descripcion) VALUES (?,?,?)
+             ON DUPLICATE KEY UPDATE nombre = VALUES(nombre),
+                                     descripcion = VALUES(descripcion)',
+            [$clave, trim($nombre), trim($descripcion) ?: null]
+        );
+        $rolId = (int) Database::valor('SELECT id FROM roles WHERE clave = ?', [$clave]);
+
+        // Se reemplaza el juego entero: así quitar un permiso es tan simple
+        // como desmarcar la casilla y guardar.
+        Database::query('DELETE FROM rol_permisos WHERE rol_id = ?', [$rolId]);
+        foreach (array_unique($permisos) as $p) {
+            $pid = Database::valor('SELECT id FROM permisos WHERE clave = ?', [$p]);
+            if ($pid !== null) {
+                Database::query(
+                    'INSERT IGNORE INTO rol_permisos (rol_id, permiso_id) VALUES (?,?)',
+                    [$rolId, (int) $pid]
+                );
+            }
+        }
+    }
+
+    public static function borrarPerfil(string $clave): void
+    {
+        $clave = strtolower(trim($clave));
+        if ($clave === 'admin') {
+            throw new \RuntimeException(
+                'El perfil de administrador no se puede borrar: es el único que '
+              . 'puede dar de alta a los demás.'
+            );
+        }
+        $rolId = Database::valor('SELECT id FROM roles WHERE clave = ?', [$clave]);
+        if ($rolId === null) {
+            throw new \RuntimeException('Ese perfil ya no existe.');
+        }
+        $cuantos = (int) Database::valor(
+            'SELECT COUNT(*) FROM usuario_roles WHERE rol_id = ?', [(int) $rolId]
+        );
+        if ($cuantos > 0) {
+            throw new \RuntimeException(
+                "No se puede borrar: hay $cuantos persona(s) con este perfil. "
+              . 'Cámbiales el perfil primero, o quedarían sin poder entrar a nada.'
+            );
+        }
+        Database::query('DELETE FROM rol_permisos WHERE rol_id = ?', [(int) $rolId]);
+        Database::query('DELETE FROM roles WHERE id = ?', [(int) $rolId]);
     }
 
     /** Desde el panel solo se cambia el estado y el rol, nunca la clave. */

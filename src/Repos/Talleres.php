@@ -195,6 +195,9 @@ final class Talleres extends Repositorio
 
         // Borrado lógico: detrás de un taller dictado hay dinero cobrado y
         // diplomas entregados. Sus fechas e inscritos se conservan.
+        self::noVaciarTodo('talleres', $uids,
+            (int) Database::valor('SELECT COUNT(*) FROM talleres WHERE eliminado_en IS NULL'));
+
         $sql = 'UPDATE talleres SET eliminado_en = NOW() WHERE eliminado_en IS NULL';
         $par = [];
         if ($uids !== []) {

@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 namespace Centro\Repos;
 
+
+use Centro\Auth;
 use Centro\Database;
 use Centro\Repositorio;
 
@@ -54,7 +56,15 @@ final class Pacientes extends Repositorio
                             JOIN historias_clinicas h ON h.id = e.historia_id
                            GROUP BY h.paciente_id) ev ON ev.paciente_id = pa.persona_id
               WHERE p.eliminado_en IS NULL
-              ORDER BY p.id"
+                AND (? = 1 OR pa.profesional_id = ?)
+              ORDER BY p.id",
+            // Quien no administra el centro ve SOLO a sus pacientes.
+            // No es una comodidad de pantalla: leer la ficha —y de ahí
+            // la historia clínica— de un paciente que uno no atiende es
+            // una falta de confidencialidad. Por eso el corte va en el
+            // WHERE y no filtrando después: lo que no corresponde no
+            // llega a salir de la base.
+            [Auth::veTodoElCentro() ? 1 : 0, Auth::personaId() ?? -1]
         );
         if ($filas === []) {
             return [];

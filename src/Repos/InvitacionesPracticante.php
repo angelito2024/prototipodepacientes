@@ -41,7 +41,8 @@ final class InvitacionesPracticante extends Repositorio
             'SELECT i.uid, i.referencia, i.telefono, i.email, i.mensaje,
                     i.creada_en, i.expira_en, i.abierta_en, i.n_aperturas,
                     i.usada_en, i.anulada_en,
-                    p.uid AS persona_uid, p.nombre_completo
+                    p.uid AS persona_uid, p.nombre_completo,
+                    p.eliminado_en AS persona_eliminada
                FROM practicante_invitacion i
           LEFT JOIN personas p ON p.id = i.persona_id
               ORDER BY i.id DESC'
@@ -62,6 +63,10 @@ final class InvitacionesPracticante extends Repositorio
                 'anuladaEn'    => $f['anulada_en'],
                 'practicanteId'=> $f['persona_uid'],
                 'practicante'  => (string) ($f['nombre_completo'] ?? ''),
+                // Se registró, pero después le borraron la ficha. El panel
+                // necesita distinguirlo de "todavía no la cargué": si no,
+                // insiste con un «pulsa Actualizar» que no arregla nada.
+                'fichaEliminada' => $f['persona_eliminada'] !== null,
                 'estado'       => self::estado($f),
             ];
         }, $filas);
@@ -135,6 +140,40 @@ final class InvitacionesPracticante extends Repositorio
     }
 
     /** Apaga una invitación que todavía no se usó. */
+    /**
+     * Saca de la lista una invitación que ya no sirve para nada.
+     *
+     * Se permite con las que terminaron: la que venció sin usarse, la
+     * anulada, y la que se usó pero cuya ficha fue eliminada después
+     * —el caso de una prueba—. Una invitación usada cuyo practicante
+     * sigue existiendo NO se borra: es el registro de cómo entró esa
+     * persona, y eso no es ruido de pantalla.
+     */
+    public static function borrar(string $uid): void
+    {
+        $f = Database::uno(
+            'SELECT i.id, i.usada_en, i.anulada_en, i.expira_en,
+                    p.eliminado_en AS persona_eliminada, i.persona_id
+               FROM practicante_invitacion i
+          LEFT JOIN personas p ON p.id = i.persona_id
+              WHERE i.uid = ?',
+            [$uid]
+        );
+        if ($f === null) {
+            throw new RuntimeException('Esa invitación ya no existe.');
+        }
+
+        $usada     = $f['usada_en'] !== null;
+        $conFicha  = $f['persona_id'] !== null && $f['persona_eliminada'] === null;
+        if ($usada && $conFicha) {
+            throw new RuntimeException(
+                'Esa invitación la usó un practicante que sigue registrado. '
+              . 'Si quieres que desaparezca de la lista, elimina primero su ficha.'
+            );
+        }
+
+        Database::query('DELETE FROM practicante_invitacion WHERE id = ?', [(int) $f['id']]);
+    }
     public static function anular(string $uid): void
     {
         $fila = Database::uno(

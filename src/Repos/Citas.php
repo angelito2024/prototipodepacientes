@@ -16,6 +16,10 @@ final class Citas extends Repositorio
     private const TIPOS_SESION = ['Consulta','Evaluacion','Terapia','Seguimiento',
                                   'Devolucion','Taller','Otro'];
 
+    /** Si venía por primera vez, si sigue, o si volvió tras mucho tiempo.
+     *  Cualquier otra cosa entra como NULL y el panel lo deduce solo. */
+    private const TIPOS_PACIENTE = ['Primera vez', 'Continuador', 'Reingreso'];
+
     public function clave(): string
     {
         return 'appointments';
@@ -38,10 +42,12 @@ final class Citas extends Repositorio
     public function leer(): array
     {
         $filas = Database::todos(
-            "SELECT c.uid, c.inicio, c.duracion_min, c.modalidad, c.estado,
+            "SELECT c.uid, c.codigo_atencion, c.inicio, c.duracion_min, c.modalidad, c.estado,
                     c.enlace, c.direccion, c.referencia,
                     c.recordatorio_enviado, c.cuenta_sesion, c.tipo_sesion,
+                    c.tipo_paciente,
                     pac.uid AS paciente_uid, pro.uid AS profesional_uid,
+                    pro.id AS profesional_persona_id,
                     CASE WHEN co.descripcion IS NULL OR co.descripcion = ''
                          THEN co.nombre
                          ELSE CONCAT(co.nombre, ' (', co.descripcion, ')') END AS sala
@@ -91,11 +97,49 @@ final class Citas extends Repositorio
             ];
         }
 
+        // Quien no administra el centro ve SUS citas enteras y las de los
+        // demás solo como una hora ocupada: sin nombre, sin teléfono, sin
+        // nada. Esconderlas del todo sería peor — agendaría encima de un
+        // colega y el paciente se encontraría con el consultorio tomado.
+        $veTodo = Auth::veTodoElCentro();
+        $miPersona = $veTodo ? null : Auth::personaId();
+
         $salida = [];
         foreach ($filas as $f) {
             $inicio = (string) $f['inicio'];
+
+            if (!$veTodo) {
+                $esMia = $miPersona !== null
+                    && (int) $f['profesional_persona_id'] === $miPersona;
+                if (!$esMia) {
+                    // Lo mínimo para que la agenda no se pise: cuándo,
+                    // cuánto dura y qué sala. De quién es, no se dice.
+                    $salida[] = [
+                        'id'             => (string) $f['uid'],
+                        'ajena'          => true,
+                        'patientId'      => '',
+                        'professionalId' => '',
+                        'participantes'  => [],
+                        'reprogramaciones' => [],
+                        'date'           => substr($inicio, 0, 10),
+                        'time'           => substr($inicio, 11, 5),
+                        'modality'       => (string) $f['modalidad'],
+                        'room'           => (string) ($f['sala'] ?? ''),
+                        'status'         => (string) $f['estado'],
+                        'meetingLink'    => '', 'address' => '', 'reference' => '',
+                        'reminderSent'   => true,
+                        'countedSession' => false,
+                        'tipoSesion'     => '', 'tipoPaciente' => '',
+                        'codigoAtencion' => '',
+                    ];
+                    continue;
+                }
+            }
             $salida[] = [
                 'id'             => (string) $f['uid'],
+                // El código que se dicta por teléfono y se escribe en el
+                // comprobante. Vacío mientras la atención no haya ocurrido.
+                'codigoAtencion' => (string) ($f['codigo_atencion'] ?? ''),
                 'patientId'      => (string) $f['paciente_uid'],
                 // Los demás que vienen a ESTA misma sesión. La sesión sigue
                 // siendo una: descuenta una del paquete, no una por cabeza.
@@ -119,6 +163,9 @@ final class Citas extends Repositorio
                 // terapia… Sin esto la agenda de un paciente son nueve
                 // renglones iguales y no se sabe cuál fue cuál.
                 'tipoSesion'     => (string) $f['tipo_sesion'],
+                // Vacío quiere decir «no se anotó»: ahí el panel lo deduce
+                // de las citas que esa persona ya tuvo.
+                'tipoPaciente'   => (string) ($f['tipo_paciente'] ?? ''),
             ];
         }
         return $salida;
@@ -157,6 +204,7 @@ final class Citas extends Repositorio
             }
 
             $uid = self::txt($item['id'] ?? '') ?: self::nuevoUid();
+            $estado = self::enum($item['status'] ?? null, self::ESTADOS, 'Programada');
             $uids[] = $uid;
             $pacienteId = $pacientes[$pacUid];
 
@@ -164,8 +212,9 @@ final class Citas extends Repositorio
                 'INSERT INTO citas
                     (uid, paciente_id, profesional_id, paquete_id, inicio, duracion_min,
                      modalidad, consultorio_id, enlace, direccion, referencia, estado,
-                     recordatorio_enviado, cuenta_sesion, tipo_sesion, eliminado_en)
-                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)
+                     recordatorio_enviado, cuenta_sesion, tipo_sesion,
+                     tipo_paciente, eliminado_en)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)
                  ON DUPLICATE KEY UPDATE
                     paciente_id=VALUES(paciente_id), profesional_id=VALUES(profesional_id),
                     paquete_id=VALUES(paquete_id), inicio=VALUES(inicio),
@@ -175,6 +224,7 @@ final class Citas extends Repositorio
                     estado=VALUES(estado),
                     recordatorio_enviado=VALUES(recordatorio_enviado),
                     cuenta_sesion=VALUES(cuenta_sesion), tipo_sesion=VALUES(tipo_sesion),
+                    tipo_paciente=VALUES(tipo_paciente),
                     eliminado_en=NULL',
                 [
                     $uid,
@@ -188,12 +238,21 @@ final class Citas extends Repositorio
                     self::nz($item['meetingLink'] ?? null),
                     self::nz($item['address'] ?? null),
                     self::nz($item['reference'] ?? null),
-                    self::enum($item['status'] ?? null, self::ESTADOS, 'Programada'),
+                    $estado,
                     self::bool($item['reminderSent'] ?? false),
                     self::bool($item['countedSession'] ?? false),
                     self::enum($item['tipoSesion'] ?? null, self::TIPOS_SESION, 'Terapia'),
+                    in_array($item['tipoPaciente'] ?? '', self::TIPOS_PACIENTE, true)
+                        ? $item['tipoPaciente'] : null,
                 ]
             );
+
+            // Ya ocurrió: le toca su código. Lo decide el servidor
+            // mirando el estado que acaba de quedar guardado, no lo que
+            // el panel diga traer en 'codigoAtencion'.
+            if ($estado === 'Completada') {
+                $this->asegurarCodigo($uid, (int) substr($fecha, 0, 4));
+            }
 
             $this->guardarParticipantes($uid, $pacienteId, $item['participantes'] ?? [], $pacientes);
             $this->guardarReprogramaciones($uid, $item['reprogramaciones'] ?? []);
@@ -204,6 +263,67 @@ final class Citas extends Repositorio
         $this->subirVersion();
     }
 
+    /**
+     * Le pone su código a una atención que acaba de ocurrir.
+     *
+     * Tres cosas que no son negociables y por eso viven acá y no en el
+     * panel:
+     *
+     *  · El número lo entrega el servidor. El panel manda la agenda
+     *    entera en cada guardado; si calculara «el último + 1», dos
+     *    pantallas abiertas sacarían el mismo número.
+     *  · Se entrega UNA vez. Si la cita ya tiene código no se toca,
+     *    aunque se reabra, se mueva de fecha o cambie de profesional:
+     *    el código identifica la atención, no su estado de hoy.
+     *  · No se recicla. Una atención anulada se queda con el suyo; el
+     *    comprobante que salió con ese número sigue existiendo.
+     *
+     * El año es el de la ATENCIÓN, no el de hoy: una sesión de 2025
+     * cargada ahora es A-2025-…, porque el correlativo se lee como la
+     * historia del centro.
+     */
+    private function asegurarCodigo(string $uid, int $anio): void
+    {
+        $ya = Database::valor(
+            'SELECT codigo_atencion FROM citas WHERE uid = ?', [$uid]
+        );
+        if ($ya !== null && $ya !== '') {
+            return;
+        }
+
+        $codigo = sprintf('A-%04d-%05d', $anio, self::correlativo('atencion', (string) $anio));
+
+        // La condición del WHERE es la red: si entre la consulta de arriba
+        // y este UPDATE otra pasada le puso código, esto no pisa nada.
+        Database::query(
+            'UPDATE citas SET codigo_atencion = ?
+              WHERE uid = ? AND codigo_atencion IS NULL',
+            [$codigo, $uid]
+        );
+    }
+
+    /**
+     * El siguiente número de una serie, sin que dos pedidos simultáneos
+     * reciban el mismo.
+     *
+     * Un SELECT MAX + 1 se rompe apenas haya dos personas trabajando a la
+     * vez —y eso es exactamente lo que viene con caja y admisión—. Este
+     * INSERT ... ON DUPLICATE KEY UPDATE es una sola operación atómica:
+     * MySQL serializa los pedidos por la clave de la fila y LAST_INSERT_ID
+     * devuelve, a cada conexión, el valor que le tocó a ella.
+     *
+     * Sirve igual para los recibos y para las ventas: por eso lleva ámbito.
+     */
+    private static function correlativo(string $ambito, string $periodo): int
+    {
+        Database::query(
+            'INSERT INTO correlativos (ambito, periodo, ultimo)
+                  VALUES (?, ?, LAST_INSERT_ID(1))
+             ON DUPLICATE KEY UPDATE ultimo = LAST_INSERT_ID(ultimo + 1)',
+            [$ambito, $periodo]
+        );
+        return (int) Database::valor('SELECT LAST_INSERT_ID()');
+    }
     /**
      * Quién más vino a esta misma sesión.
      *
@@ -331,6 +451,9 @@ final class Citas extends Repositorio
     /** Las citas borradas en el panel se marcan, no se destruyen. */
     private function bajaFaltantes(array $uids): void
     {
+        self::noVaciarTodo('citas', $uids,
+            (int) Database::valor('SELECT COUNT(*) FROM citas WHERE eliminado_en IS NULL'));
+
         $sql = 'UPDATE citas SET eliminado_en = NOW() WHERE eliminado_en IS NULL';
         $par = [];
         if ($uids !== []) {

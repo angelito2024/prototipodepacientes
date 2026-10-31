@@ -208,6 +208,40 @@ final class Auth
         return (int) $_SESSION['usuario_id'];
     }
 
+    /**
+     * La persona detrás de la sesión, cuando la cuenta está pegada a una
+     * ficha (todo profesional y todo practicante lo está: la cuenta se
+     * crea desde su ficha con el botón 🔑).
+     *
+     * Devuelve null si no hay sesión o si la cuenta no cuelga de nadie
+     * —el administrador de arranque, por ejemplo—. Quien pregunta debe
+     * tratar ese null como «no es profesional», nunca como «es todos».
+     */
+    public static function personaId(): ?int
+    {
+        $id = self::usuarioId();
+        if ($id === null) {
+            return null;
+        }
+        $p = Database::valor('SELECT persona_id FROM usuarios WHERE id = ?', [$id]);
+        return $p === null ? null : (int) $p;
+    }
+
+    /**
+     * ¿Esta sesión ve el centro entero, o solo lo suyo?
+     *
+     * Sin acceso con clave —el panel abierto, como lo usa Luis hoy— la
+     * respuesta es que sí: no hay a quién limitar, y limitar a nadie
+     * dejaría la pantalla en blanco.
+     */
+    public static function veTodoElCentro(): bool
+    {
+        if (self::usuarioId() === null) {
+            return true;
+        }
+        return self::puede('ver.todo');
+    }
+
     /** ¿Está activado el acceso con clave? (hay al menos un usuario activo) */
     public static function habilitado(): bool
     {

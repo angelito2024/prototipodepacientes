@@ -77,7 +77,10 @@ final class Colecciones
         'appointments'       => ['citas.ver',       'citas.editar'],
         'calendarEvents'     => ['citas.ver',       'citas.editar'],
         'roomUsage'          => ['citas.ver',       'citas.editar'],
-        'talleres'           => ['citas.ver',       'citas.editar'],
+        // Un taller no es una cita: es un convenio con un colegio o una
+        // empresa, con inscritos y dinero de por medio. Quien agenda una
+        // sesión no tiene por qué poder tocarlo.
+        'talleres'           => ['citas.ver',       'talleres.editar'],
         'attendanceLog'      => ['citas.ver',       'asistencia.registrar'],
         'payments'           => ['pagos.ver',       'pagos.registrar'],
         'expenses'           => ['gastos.ver',      'config.editar'],

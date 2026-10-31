@@ -36,6 +36,33 @@ final class Historia extends Repositorio
         return 'historia_' . $this->pacienteUid;
     }
 
+    /**
+     * ¿Esta sesión puede abrir la historia de este paciente?
+     *
+     * El permiso `historia.ver` dice que puede abrir historias; esto dice
+     * cuáles. Un profesional abre las de los pacientes que atiende y
+     * ninguna más — y eso no es una preferencia del centro, es el deber
+     * de confidencialidad: una historia clínica se lee cuando hace falta
+     * para atender, no porque uno tenga la pantalla a mano.
+     *
+     * Va acá, en el repositorio, y no escondiendo un botón: quien sepa
+     * pedir la dirección del paciente ajeno igual recibiría los datos.
+     */
+    private function puedoVerla(int $pacienteId): bool
+    {
+        if (Auth::veTodoElCentro()) {
+            return true;
+        }
+        $mia = Auth::personaId();
+        if ($mia === null) {
+            return false;
+        }
+        return (int) (Database::valor(
+            'SELECT COUNT(*) FROM pacientes WHERE persona_id = ? AND profesional_id = ?',
+            [$pacienteId, $mia]
+        ) ?? 0) > 0;
+    }
+
     private function pacienteId(): ?int
     {
         $id = Database::valor(
@@ -64,6 +91,17 @@ final class Historia extends Repositorio
 
     public function leer(): mixed
     {
+        // Antes que nada: ¿es un paciente de quien está preguntando?
+        // Se corta acá y no escondiendo la pestaña, porque quien sepa
+        // pedir la dirección del paciente ajeno igual recibiría todo.
+        $pac = $this->pacienteId();
+        if ($pac !== null && !$this->puedoVerla($pac)) {
+            throw new \RuntimeException(
+                'Esa historia clínica es de un paciente que no atiende usted. '
+                . 'Si necesita verla, pídaselo a quien administra el centro.'
+            );
+        }
+
         $id = $this->historiaId();
         if ($id === null) {
             return null;     // el panel usará defaultHistoria()
@@ -205,10 +243,23 @@ final class Historia extends Repositorio
             'objetivo'  => (string) ($e['objetivo'] ?? ''),
             'analisis'  => (string) ($e['analisis'] ?? ''),
             'plan'      => (string) ($e['plan'] ?? ''),
-            'firmado'   => $e['firmado_en'] !== null,
+            // Una nota firmada ya no se edita: lo impide el trigger
+            // trg_evolucion_bloqueo, en la base, no la pantalla. Acá solo
+            // se cuenta quién la cerró y cuándo, que es lo que hay que
+            // poder mostrar el día que pidan la historia.
+            'firmado'     => $e['firmado_en'] !== null,
+            'firmadoEn'   => (string) ($e['firmado_en'] ?? ''),
+            'firmadoPor'  => (string) ($e['firma_nombre'] ?? ''),
+            'citaId'      => (string) ($e['cita_uid'] ?? ''),
         ], Database::todos(
-            'SELECT id, fecha, subjetivo, objetivo, analisis, plan, firmado_en
-               FROM hc_evoluciones WHERE historia_id = ? ORDER BY fecha, id',
+            'SELECT e.id, e.fecha, e.subjetivo, e.objetivo, e.analisis, e.plan,
+                    e.firmado_en, c.uid AS cita_uid,
+                    COALESCE(per.nombre_completo, u.nombre_completo, u.usuario) AS firma_nombre
+               FROM hc_evoluciones e
+               LEFT JOIN citas c ON c.id = e.cita_id
+               LEFT JOIN usuarios u ON u.id = e.firmado_por
+               LEFT JOIN personas per ON per.id = u.persona_id
+              WHERE e.historia_id = ? ORDER BY e.fecha, e.id',
             [$historiaId]
         ));
     }
@@ -217,11 +268,14 @@ final class Historia extends Repositorio
     {
         $out = [];
         foreach (Database::todos(
-            'SELECT a.id AS adj_id, a.categoria, a.creado_en,
+            'SELECT a.id AS adj_id, a.categoria, a.creado_en, a.descripcion,
+                    a.subido_por_paciente, c.uid AS cita_uid, c.inicio AS cita_inicio,
+                    c.codigo_atencion,
                     ar.uuid, ar.nombre_original, ar.mime, ar.tamano_bytes,
                     ar.es_enlace, ar.url_externa
                FROM hc_adjuntos a
                JOIN archivos ar ON ar.id = a.archivo_id
+               LEFT JOIN citas c ON c.id = a.cita_id
               WHERE a.historia_id = ? AND ar.eliminado_en IS NULL
               ORDER BY a.id',
             [$historiaId]
@@ -230,6 +284,14 @@ final class Historia extends Repositorio
             $out[] = $base + [
                 'category'   => (string) $f['categoria'],
                 'uploadedAt' => (string) $f['creado_en'],
+                'descripcion'=> (string) ($f['descripcion'] ?? ''),
+                // De qué sesión salió. Un dibujo de la persona bajo la
+                // lluvia no es del paciente en general: es de la sesión
+                // en que se le mandó a dibujar.
+                'citaId'     => (string) ($f['cita_uid'] ?? ''),
+                'citaFecha'  => substr((string) ($f['cita_inicio'] ?? ''), 0, 10),
+                'codigoAtencion' => (string) ($f['codigo_atencion'] ?? ''),
+                'delPaciente'=> (int) ($f['subido_por_paciente'] ?? 0) === 1,
             ];
         }
         return $out;
@@ -245,6 +307,13 @@ final class Historia extends Repositorio
             return;                     // el paciente aún no existe
         }
         $pacienteId = (int) $this->pacienteId();
+        // Escribir en la historia de un paciente ajeno es peor que
+        // leerla: deja rastro de una atención que no ocurrió.
+        if (!$this->puedoVerla($pacienteId)) {
+            throw new \RuntimeException(
+                'No puede escribir en la historia de un paciente que no atiende usted.'
+            );
+        }
         $usuarioId  = Auth::usuarioId();
 
         // La fecha de nacimiento completa solo aparece en la historia clínica;
@@ -478,6 +547,64 @@ final class Historia extends Repositorio
         $this->borrarSobrantes('hc_evoluciones', 'historia_id', $historiaId, $conservar, 'firmado_en IS NULL');
     }
 
+    /** El id interno de una cita a partir del uid que usa el panel. */
+    private static function citaIdDe(mixed $uid): ?int
+    {
+        $uid = is_string($uid) ? trim($uid) : '';
+        if ($uid === '') {
+            return null;
+        }
+        $id = Database::valor('SELECT id FROM citas WHERE uid = ?', [$uid]);
+        return $id === null ? null : (int) $id;
+    }
+
+    /**
+     * Cierra una nota de evolución con la firma de quien atendió.
+     *
+     * Firmar no es un adorno: a partir de acá la nota **no se puede
+     * editar**, y eso lo impide la base (`trg_evolucion_bloqueo`), no la
+     * pantalla. Si después hay que corregir algo, se agrega una nota
+     * nueva con su fecha — así la historia muestra qué se dijo, cuándo, y
+     * qué se corrigió después, que es exactamente lo que se le pide a una
+     * historia clínica cuando alguien la revisa.
+     *
+     * No se puede firmar dos veces: la primera firma manda, y volver a
+     * firmar cambiaría la fecha de algo que ya estaba cerrado.
+     */
+    public static function firmarEvolucion(string $idPanel, int $usuarioId): array
+    {
+        $id = (int) preg_replace('/\D+/', '', $idPanel);
+        if ($id <= 0) {
+            return ['ok' => false, 'error' => 'Nota de evolución no válida.'];
+        }
+        $fila = Database::uno(
+            'SELECT id, firmado_en, subjetivo, objetivo, analisis, plan
+               FROM hc_evoluciones WHERE id = ?',
+            [$id]
+        );
+        if ($fila === null) {
+            return ['ok' => false, 'error' => 'Esa nota de evolución ya no existe.'];
+        }
+        if ($fila['firmado_en'] !== null) {
+            return ['ok' => false, 'error' => 'Esa nota ya estaba firmada el '
+                . substr((string) $fila['firmado_en'], 0, 16) . '.'];
+        }
+        // Una nota vacía no se firma: firmar es afirmar que eso fue la
+        // sesión, y no se puede afirmar nada de cuatro campos en blanco.
+        $texto = trim(($fila['subjetivo'] ?? '') . ($fila['objetivo'] ?? '')
+            . ($fila['analisis'] ?? '') . ($fila['plan'] ?? ''));
+        if ($texto === '') {
+            return ['ok' => false, 'error' => 'La nota está vacía. Escriba la sesión antes de firmarla.'];
+        }
+
+        Database::query(
+            'UPDATE hc_evoluciones SET firmado_en = NOW(), firmado_por = ?
+              WHERE id = ? AND firmado_en IS NULL',
+            [$usuarioId, $id]
+        );
+        return ['ok' => true];
+    }
+
     private function guardarAdjuntos(int $historiaId, mixed $lista, ?int $usuarioId): void
     {
         $conservar = [];
@@ -497,15 +624,29 @@ final class Historia extends Repositorio
             );
             if ($existente !== null) {
                 Database::query(
-                    'UPDATE hc_adjuntos SET categoria = ? WHERE id = ?',
-                    [self::enum($a['category'] ?? null, self::CATEGORIAS, 'Otro'), $existente]
+                    'UPDATE hc_adjuntos SET categoria = ?, cita_id = ?, descripcion = ?
+                      WHERE id = ?',
+                    [
+                        self::enum($a['category'] ?? null, self::CATEGORIAS, 'Otro'),
+                        self::citaIdDe($a['citaId'] ?? null),
+                        self::nz($a['descripcion'] ?? null),
+                        $existente,
+                    ]
                 );
                 $conservar[] = (int) $existente;
                 continue;
             }
             Database::query(
-                'INSERT INTO hc_adjuntos (historia_id, archivo_id, categoria) VALUES (?,?,?)',
-                [$historiaId, $archivoId, self::enum($a['category'] ?? null, self::CATEGORIAS, 'Otro')]
+                'INSERT INTO hc_adjuntos
+                    (historia_id, cita_id, archivo_id, categoria, descripcion)
+                 VALUES (?,?,?,?,?)',
+                [
+                    $historiaId,
+                    self::citaIdDe($a['citaId'] ?? null),
+                    $archivoId,
+                    self::enum($a['category'] ?? null, self::CATEGORIAS, 'Otro'),
+                    self::nz($a['descripcion'] ?? null),
+                ]
             );
             $conservar[] = Database::ultimoId();
         }

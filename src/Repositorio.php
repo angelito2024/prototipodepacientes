@@ -24,6 +24,42 @@ abstract class Repositorio
     /** Forma JSON de index.html -> modelo relacional. */
     abstract public function guardar(mixed $valor): void;
 
+    /**
+     * Freno de mano antes de dar de baja en bloque.
+     *
+     * Todos los repositorios concilian igual: el panel manda la lista
+     * completa y lo que no está en ella se da de baja. Eso funciona
+     * mientras la lista sea de verdad; si el panel no pudo leer —un error
+     * de SQL, la sesión caída, la red— se queda con la copia vacía en
+     * memoria, y el primer guardado posterior da de baja la colección
+     * entera. Pasó: una columna que faltaba dejó la agenda en cero en
+     * pantalla, y el único paso que faltaba para perderla era tocar
+     * «guardar».
+     *
+     * Por eso: lista vacía + filas vivas en la base = no se toca nada y se
+     * dice por qué. Si la colección ya estaba vacía, no hay nada que
+     * proteger y se sigue de largo. Y vaciar a propósito sigue siendo
+     * posible borrando fila por fila desde la pantalla, que es una
+     * decisión y no un accidente.
+     *
+     * @param string $que      cómo nombrarlo al usuario ('citas', 'pacientes')
+     * @param array  $quedan   lo que la pasada actual va a conservar
+     * @param int    $vivas    cuántas hay vivas en la base ahora mismo
+     */
+    public static function noVaciarTodo(string $que, array $quedan, int $vivas): void
+    {
+        if ($quedan !== [] || $vivas === 0) {
+            return;
+        }
+        throw new \Centro\VaciadoSospechoso(sprintf(
+            'No se guardó nada: llegó la lista de %s vacía y en la base hay %d. '
+            . 'Eso suele ser que la pantalla no pudo leer y se quedó sin datos. '
+            . 'Cierre el panel y vuelva a abrirlo desde el acceso directo; '
+            . 'sus %d %s siguen ahí.',
+            $que, $vivas, $vivas, $que
+        ));
+    }
+
     // ------------------------------------------------------------------
     // Utilidades compartidas
     // ------------------------------------------------------------------

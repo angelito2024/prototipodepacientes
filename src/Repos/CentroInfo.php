@@ -34,6 +34,9 @@ final class CentroInfo extends Repositorio
             'nombreComercial'     => (string) ($c['nombre_comercial'] ?? ''),
             'address'             => (string) ($c['direccion'] ?? ''),
             'phone'               => (string) ($c['telefono'] ?? ''),
+            // Por acá le escriben los colegios y las empresas. Estaba en
+            // la base desde el principio y nadie lo leía.
+            'email'               => (string) ($c['email'] ?? ''),
             'ruc'                 => (string) ($c['ruc'] ?? ''),
             'slogan'              => (string) ($c['lema'] ?? ''),
             // El nombre que el Gobierno le pone al año. Va arriba de
@@ -85,18 +88,19 @@ final class CentroInfo extends Repositorio
 
         Database::query(
             'INSERT INTO centro_config
-                (id, razon_social, nombre_comercial, direccion, telefono, ruc, lema, lema_anio, medios_pago,
+                (id, razon_social, nombre_comercial, direccion, telefono, email, ruc, lema, lema_anio, medios_pago,
                  mensaje_pacientes, pedir_documento,
                  titular_nombre, titular_documento, titular_cargo, titular_colegiatura,
                  sala_zoom, sala_meet, url_publica,
                  minutos_recordatorio, minutos_sesion, horas_reprogramacion,
                  porcentaje_penalidad, incluir_politica)
-             VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+             VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
              ON DUPLICATE KEY UPDATE
                 razon_social=VALUES(razon_social),
                 nombre_comercial=VALUES(nombre_comercial),
                 direccion=VALUES(direccion),
-                telefono=VALUES(telefono), ruc=VALUES(ruc), lema=VALUES(lema),
+                telefono=VALUES(telefono), email=VALUES(email),
+                ruc=VALUES(ruc), lema=VALUES(lema),
                 lema_anio=VALUES(lema_anio),
                 medios_pago=VALUES(medios_pago),
                 mensaje_pacientes=VALUES(mensaje_pacientes),
@@ -117,6 +121,7 @@ final class CentroInfo extends Repositorio
                 self::nz($valor['nombreComercial'] ?? null),
                 self::nz($valor['address'] ?? null),
                 self::nz($valor['phone'] ?? null),
+                self::nz($valor['email'] ?? null),
                 self::nz($valor['ruc'] ?? null),
                 self::nz($valor['slogan'] ?? null),
                 self::nz($valor['lemaAnio'] ?? null),

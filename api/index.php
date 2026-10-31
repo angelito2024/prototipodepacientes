@@ -205,6 +205,64 @@ try {
             Auth::exigir();
             Http::ok(['roles' => \Centro\Repos\Usuarios::roles()]);
 
+        case 'permisos':
+            Auth::exigir();
+            if (!Auth::puede('usuarios.editar')) {
+                Auth::auditar('PERMISO_DENEGADO', Auth::usuarioId(),
+                    ['accion' => $accion], 'roles');
+                Http::error('Solo quien administra el equipo puede tocar los perfiles.', 403);
+            }
+            Http::ok(['permisos' => \Centro\Repos\Usuarios::permisos()]);
+
+        /* Crear o cambiar un perfil. Los candados —que al administrador no
+           se le quiten sus permisos, que no se borre un perfil con gente—
+           van en el repositorio, no acá: esconder el botón no detiene a
+           quien llame a la API a mano. */
+        case 'guardar_perfil':
+            if (Http::metodo() !== 'POST') {
+                Http::error('Método no permitido.', 405);
+            }
+            Auth::exigir();
+            if (!Auth::puede('usuarios.editar')) {
+                Auth::auditar('PERMISO_DENEGADO', Auth::usuarioId(),
+                    ['accion' => $accion], 'roles');
+                Http::error('Solo quien administra el equipo puede tocar los perfiles.', 403);
+            }
+            $d = Http::cuerpo();
+            try {
+                \Centro\Repos\Usuarios::guardarPerfil(
+                    (string) ($d['clave'] ?? ''),
+                    (string) ($d['nombre'] ?? ''),
+                    (string) ($d['descripcion'] ?? ''),
+                    array_values(array_filter((array) ($d['permisos'] ?? []), 'is_string'))
+                );
+            } catch (RuntimeException $e) {
+                Http::error($e->getMessage(), 400);
+            }
+            Auth::auditar('perfil.guardar', Auth::usuarioId(),
+                ['clave' => $d['clave'] ?? ''], 'roles');
+            Http::ok(['roles' => \Centro\Repos\Usuarios::roles()]);
+
+        case 'borrar_perfil':
+            if (Http::metodo() !== 'POST') {
+                Http::error('Método no permitido.', 405);
+            }
+            Auth::exigir();
+            if (!Auth::puede('usuarios.editar')) {
+                Auth::auditar('PERMISO_DENEGADO', Auth::usuarioId(),
+                    ['accion' => $accion], 'roles');
+                Http::error('Solo quien administra el equipo puede tocar los perfiles.', 403);
+            }
+            $d = Http::cuerpo();
+            try {
+                \Centro\Repos\Usuarios::borrarPerfil((string) ($d['clave'] ?? ''));
+            } catch (RuntimeException $e) {
+                Http::error($e->getMessage(), 400);
+            }
+            Auth::auditar('perfil.borrar', Auth::usuarioId(),
+                ['clave' => $d['clave'] ?? ''], 'roles');
+            Http::ok(['roles' => \Centro\Repos\Usuarios::roles()]);
+
         case 'invitar_practicante':
             // Genera el enlace con el que un practicante llena su ficha.
             // La clave se devuelve una sola vez: después queda su hash.
@@ -241,6 +299,29 @@ try {
             }
             Http::ok([]);
 
+
+        /* Sacar de la lista una invitación terminada. El candado —no
+           borrar la de alguien que sigue registrado— vive en el
+           repositorio, no acá. */
+        case 'borrar_invitacion':
+            if (Http::metodo() !== 'POST') {
+                Http::error('Método no permitido.', 405);
+            }
+            Auth::exigir();
+            if (!Auth::puede('practicantes.editar')) {
+                Auth::auditar('PERMISO_DENEGADO', Auth::usuarioId(),
+                    ['accion' => $accion], 'practicante_invitacion');
+                Http::error('No tienes permiso para tocar las invitaciones.', 403);
+            }
+            $d = Http::cuerpo();
+            try {
+                \Centro\Repos\InvitacionesPracticante::borrar((string) ($d['id'] ?? ''));
+            } catch (RuntimeException $e) {
+                Http::error($e->getMessage(), 400);
+            }
+            Auth::auditar('invitacion.borrar', Auth::usuarioId(),
+                ['uid' => $d['id'] ?? ''], 'practicante_invitacion');
+            Http::ok();
         case 'asignar_prueba':
             // Le asigna una prueba a un paciente y devuelve el enlace para
             // mandárselo. La clave del enlace se muestra una sola vez: después
@@ -347,12 +428,41 @@ try {
             }
             Http::ok(['eliminado' => true]);
 
+        case 'firmar_evolucion':
+            // Firmar cierra la nota para siempre, así que exige el mismo
+            // permiso que escribirla y deja rastro en la auditoría.
+            if (Http::metodo() !== 'POST') {
+                Http::error('Método no permitido.', 405);
+            }
+            Auth::exigir();
+            if (!Auth::puede('historia.editar')) {
+                Auth::auditar('PERMISO_DENEGADO', Auth::usuarioId(),
+                    ['accion' => $accion], 'hc_evoluciones');
+                Http::error('No tiene permiso para firmar notas de evolución.', 403);
+            }
+            $cuerpo = Http::cuerpo();
+            $r = \Centro\Repos\Historia::firmarEvolucion(
+                (string) ($cuerpo['id'] ?? ''), (int) Auth::usuarioId()
+            );
+            if (!$r['ok']) {
+                Http::error($r['error'], 409);
+            }
+            Auth::auditar('EVOLUCION_FIRMADA', Auth::usuarioId(),
+                ['evolucion' => $cuerpo['id'] ?? '', 'paciente' => $cuerpo['paciente'] ?? ''],
+                'hc_evoluciones');
+            Http::ok(['ok' => true]);
+
         case 'coleccion':
             manejarColeccion();
 
         default:
             Http::error('Acción desconocida: ' . $accion, 404);
     }
+} catch (\Centro\VaciadoSospechoso $e) {
+    // Esto no es un error interno: es un aviso para quien está delante
+    // de la pantalla, y tiene que leerlo tal cual, con debug o sin él.
+    error_log('[api] vaciado frenado: ' . $e->getMessage());
+    Http::error($e->getMessage(), 409);
 } catch (Throwable $e) {
     $debug = (bool) (Database::config()['debug'] ?? false);
     error_log('[api] ' . $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine());
@@ -471,6 +581,19 @@ function manejarColeccion(): never
     // igual recibe los datos.
     if ($loginRequerido && ($escribe || !in_array($clave, $publicasParaLeer, true))) {
         comprobarPermiso($clave, $escribe);
+    }
+
+    // Quién abrió la historia clínica de quién. Es la pregunta que se hace
+    // cuando hay un reclamo, y «no se registra» es la peor respuesta posible.
+    //
+    // Va DESPUÉS de comprobar sesión y permiso, a propósito: un intento
+    // rechazado no es una lectura, y mezclarlo acá haría que «quién vio
+    // esta historia» devolviera gente que nunca llegó a verla. Lo que sí
+    // se rechazó queda en PERMISO_DENEGADO, que es su propio renglón.
+    // Y solo las lecturas: el guardado ya deja su propio rastro.
+    if (str_starts_with($clave, 'historia_') && !$escribe) {
+        Auth::auditar('HISTORIA_ABIERTA', Auth::usuarioId(),
+            ['paciente' => substr($clave, strlen('historia_'))], 'historias_clinicas');
     }
 
     if (!$escribe) {

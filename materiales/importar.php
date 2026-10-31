@@ -7,6 +7,15 @@ declare(strict_types=1);
  *   php materiales/importar.php "C:/ruta/al/pack"
  *   php materiales/importar.php "C:/ruta/al/pack" --coleccion="Niños con autismo (TEA)"
  *   php materiales/importar.php "C:/ruta/al/pack" --probar     (no escribe nada)
+ *   php materiales/importar.php "C:/ruta/al/pack" --licencia=solo_sesion
+ *                                                  --origen="Digital School"
+ *
+ * `--licencia` es para los packs COMPRADOS. Las reglas miran el nombre
+ * del archivo, y el nombre no distingue un pictograma libre de un kit de
+ * pago que se llama igual: «rutina» dispara la regla de ARASAAC y deja
+ * el pack marcado como entregable a las familias. Eso sería repartir el
+ * producto de otro. Quien descargó el pack es el único que sabe si lo
+ * pagó, así que lo dice al importar.
  *
  * Qué hace:
  *   · recorre la carpeta y sus subcarpetas;
@@ -39,6 +48,10 @@ $args    = array_slice($argv, 1);
 $carpeta = null;
 $coleccion = null;
 $probar  = false;
+// Para un pack comprado: las reglas miran el nombre, y el nombre no
+// distingue un pictograma libre de un kit de pago que se llama igual.
+$licenciaForzada = null;
+$origenForzado   = null;
 $base    = null;      // base de datos distinta, para probar sin tocar la real
 $almacen = null;      // carpeta de archivos distinta, por lo mismo
 
@@ -47,6 +60,10 @@ foreach ($args as $a) {
         $probar = true;
     } elseif (str_starts_with($a, '--coleccion=')) {
         $coleccion = substr($a, strlen('--coleccion='));
+    } elseif (str_starts_with($a, '--licencia=')) {
+        $licenciaForzada = substr($a, strlen('--licencia='));
+    } elseif (str_starts_with($a, '--origen=')) {
+        $origenForzado = substr($a, strlen('--origen='));
     } elseif (str_starts_with($a, '--base=')) {
         $base = substr($a, strlen('--base='));
     } elseif (str_starts_with($a, '--almacen=')) {
@@ -71,6 +88,12 @@ if ($base !== null || $almacen !== null) {
     echo "Base: {$cfg['db']['nombre']}\n";
 }
 
+$LICENCIAS_VALIDAS = ['propio', 'libre', 'solo_sesion', 'reservado'];
+if ($licenciaForzada !== null && !in_array($licenciaForzada, $LICENCIAS_VALIDAS, true)) {
+    exit("Licencia no válida: $licenciaForzada\n"
+       . 'Use una de: ' . implode(', ', $LICENCIAS_VALIDAS) . "\n");
+}
+
 if ($carpeta === null || !is_dir($carpeta)) {
     exit("Uso: php materiales/importar.php \"C:/ruta/a/la/carpeta\" [--coleccion=\"Nombre\"] [--probar]\n");
 }
@@ -80,6 +103,12 @@ $coleccion ??= nombreLegible(basename($carpeta));
 
 echo "Colección: $coleccion\n";
 echo "Carpeta:   $carpeta\n";
+if ($licenciaForzada !== null) {
+    echo "Licencia:  $licenciaForzada (forzada para todo el pack)\n";
+}
+if ($origenForzado !== null) {
+    echo "Origen:    $origenForzado\n";
+}
 echo $probar ? "Modo prueba: no se escribe nada.\n\n" : "\n";
 
 /* -------------------------------------------------------------------
@@ -210,6 +239,11 @@ foreach ($archivos as $ruta) {
     }
 
     $clase = clasificar($relativa, $archivo, $reglas);
+    // Lo pedido en la línea de comandos pisa a las reglas ACÁ, antes de
+    // contar y de mostrar: una vista previa que enseña una licencia y
+    // escribe otra es peor que no tener vista previa.
+    if ($licenciaForzada !== null) { $clase['licencia'] = $licenciaForzada; }
+    if ($origenForzado !== null)   { $clase['origen']   = $origenForzado; }
     $porLicencia[$clase['licencia']] = ($porLicencia[$clase['licencia']] ?? 0) + 1;
 
     printf(
@@ -244,6 +278,9 @@ foreach ($archivos as $ruta) {
             'descripcion' => $clase['nota'],
             'formato'     => Materiales::formatoPorNombre($archivo),
             'destino'     => $clase['destino'],
+            // Lo que se pidió en la línea de comandos manda sobre las
+            // reglas: quien descargó el pack sabe si lo pagó, y el
+            // nombre del archivo no lo sabe.
             'licencia'    => $clase['licencia'],
             'origen'      => $clase['origen'],
             'orden'       => ++$orden,

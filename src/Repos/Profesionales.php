@@ -26,7 +26,8 @@ final class Profesionales extends Repositorio
             'SELECT p.id, p.uid, p.nombre_completo, p.documento, p.telefono, p.email,
                     p.dia_cumple, p.activo,
                     pr.titulo, pr.carrera, pr.especialidad, pr.colegiatura,
-                    pr.colegiatura_habil, pr.colegiatura_esp, pr.colegiatura_esp_habil,
+                    pr.colegiatura_habil, pr.colegiatura_vence, pr.colegiatura_verificada,
+                    pr.colegiatura_esp, pr.colegiatura_esp_habil, pr.colegiatura_esp_vence,
                     pr.modelo_pago, pr.monto_centro_sesion, pr.pago_virtual, pr.pago_presencial, pr.pago_colegio, pr.centro_colegio,
                     pr.alquiler_modo,
                     pr.alquiler_tarifa, pr.horario_texto, pr.saldo_por_pagar,
@@ -51,6 +52,12 @@ final class Profesionales extends Repositorio
                 'specialty'                   => (string) ($f['especialidad'] ?? ''),
                 'colegiatura'                 => (string) ($f['colegiatura'] ?? ''),
                 'colegiaturaHabilitada'       => (int) $f['colegiatura_habil'] === 1,
+                // Hasta cuándo. Un sí/no que alguien tiene que acordarse de
+                // cambiar a mano no avisa de nada: el día que vence sigue
+                // diciendo que sí. Con la fecha, el sistema avisa antes.
+                'colegiaturaVence'            => (string) ($f['colegiatura_vence'] ?? ''),
+                'colegiaturaVerificada'       => (string) ($f['colegiatura_verificada'] ?? ''),
+                'specColegiaturaVence'        => (string) ($f['colegiatura_esp_vence'] ?? ''),
                 'specColegiatura'             => (string) ($f['colegiatura_esp'] ?? ''),
                 'specColegiaturaHabilitada'   => $f['colegiatura_esp_habil'] === null
                                                     ? null
@@ -123,15 +130,20 @@ final class Profesionales extends Repositorio
             Database::query(
                 'INSERT INTO profesionales
                     (persona_id, titulo, carrera, especialidad, colegiatura, colegiatura_habil,
-                     colegiatura_esp, colegiatura_esp_habil, modelo_pago, monto_centro_sesion,
+                     colegiatura_vence, colegiatura_verificada,
+                     colegiatura_esp, colegiatura_esp_habil, colegiatura_esp_vence,
+                     modelo_pago, monto_centro_sesion,
                      pago_virtual, pago_presencial, pago_colegio, centro_colegio,
                      alquiler_modo, alquiler_tarifa, horario_texto, saldo_por_pagar,
                      al_dia, ultima_liquidacion, liquidaciones_json)
-                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                  ON DUPLICATE KEY UPDATE
                     titulo=VALUES(titulo), carrera=VALUES(carrera),
                     especialidad=VALUES(especialidad), colegiatura=VALUES(colegiatura),
                     colegiatura_habil=VALUES(colegiatura_habil),
+                    colegiatura_vence=VALUES(colegiatura_vence),
+                    colegiatura_verificada=VALUES(colegiatura_verificada),
+                    colegiatura_esp_vence=VALUES(colegiatura_esp_vence),
                     colegiatura_esp=VALUES(colegiatura_esp),
                     colegiatura_esp_habil=VALUES(colegiatura_esp_habil),
                     modelo_pago=VALUES(modelo_pago),
@@ -154,8 +166,11 @@ final class Profesionales extends Repositorio
                     self::nz($item['specialty'] ?? null),
                     self::nz($item['colegiatura'] ?? null),
                     self::bool($item['colegiaturaHabilitada'] ?? true),
+                    self::fecha($item['colegiaturaVence'] ?? null),
+                    self::fecha($item['colegiaturaVerificada'] ?? null),
                     self::nz($item['specColegiatura'] ?? null),
                     $espHabil === null ? null : self::bool($espHabil),
+                    self::fecha($item['specColegiaturaVence'] ?? null),
                     self::enum($item['paymentModel'] ?? null, self::MODELOS, 'Comisión'),
                     self::num($item['centerShareAmount'] ?? 0),
                     self::num($item['pagoVirtual'] ?? 0),

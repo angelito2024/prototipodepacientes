@@ -41,3 +41,18 @@ respaldo/copias/
 *.mkv
 *.webm
 *.avi
+
+# Los formatos del programa de practicantes llevan el DNI del gerente y
+# los datos de la empresa ya impresos. El programa los sirve; el
+# repositorio no los guarda.
+/practicantes/formatos/
+
+# Packs de material comprado o descargado. Pesan cientos de megas y son de
+# otros autores: el repositorio guarda el programa, no la biblioteca. Los
+# archivos viven en storage/ y el importador los registra desde ahí.
+/materiales/*/
+
+# La segunda copia de los formatos del practicante. Son los mismos PDF que
+# /practicantes/formatos/ —comprobado byte por byte— y llevan impreso el DNI
+# del gerente, así que la regla de arriba no sirve de nada si entran por aquí.
+/src/Pruebas/Magusa_Programa_Practicantes/

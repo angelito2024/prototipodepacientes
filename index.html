@@ -843,7 +843,8 @@
       <div class="field"><label>Razón social (como figura en SUNAT)</label><input id="ci_name"><p class="hint" style="margin:3px 0 0">Con su <b>S.A.C.</b> Es la que va junto al RUC en informes, contratos y recibos.</p></div>
       <div class="field"><label>Nombre comercial (el que ve el paciente)</label><input id="ci_nombreComercial" placeholder="Ej: MAGUSA Arcoíris de Esperanza"><p class="hint" style="margin:3px 0 0">Sin el S.A.C. Sale en la prueba y en la tarea que recibe el paciente. Si lo dejas vacío, ahí se usa la razón social.</p></div>
       <div class="field"><label>Dirección</label><input id="ci_address"></div>
-      <div class="field"><label>Teléfono</label><input id="ci_phone"></div>
+      <div class="field"><label>Teléfono / WhatsApp</label><input id="ci_phone"></div>
+      <div class="field"><label>Correo del centro</label><input id="ci_email" type="email" placeholder="centro@ejemplo.com"><p class="hint" style="margin:3px 0 0">Va en el membrete de los informes, debajo del teléfono.</p></div>
       <div class="field"><label>RUC (opcional)</label><input id="ci_ruc" inputmode="numeric" maxlength="11" placeholder="11 dígitos"><p class="hint" style="margin:3px 0 0">Once dígitos. Se comprueba el dígito verificador, así que una cifra cambiada de sitio no pasa.</p></div>
       <div class="field"><label>Eslogan / frase (opcional)</label><input id="ci_slogan" placeholder="Ej: Atención previa cita: presencial, virtual y a domicilio"><p class="hint" style="margin:3px 0 0">Sale al pie de cada informe, junto a «Documento confidencial».</p></div>
       <div class="field"><label>Lema del año (para los documentos oficiales)</label><input id="ci_lemaAnio" placeholder="Ej: Año de la Esperanza y el Fortalecimiento de la Democracia"><p class="hint" style="margin:3px 0 0">El nombre que el Gobierno le pone al año. Va arriba a la derecha de cada informe y cambia cada enero.</p></div>
@@ -2180,7 +2181,7 @@ function defaultHistoria(patientId){
 /* Las cuentas de cobro (Yape, banco, CCI) NO van escritas aquí: este archivo
    está en GitHub y son datos bancarios. Se escriben una sola vez en
    "Datos del centro" y viven en la base, junto con el token de apiperu. */
-const DEFAULT_CENTER_INFO = {name:'Centro Psicológico MAGUSA ARCOIRIS DE ESPERANZA', address:'', phone:'', ruc:'', slogan:'', paymentMethods:'', zoomSala:'', meetSala:'', reminderMinutes:10, rescheduleHours:24, latePenaltyPercent:10, includePolicy:true, sessionMinutes:60, apiPeruToken:'', mensajePacientes:'', pedirDocumento:false, lemaAnio:'', nombreComercial:''};
+const DEFAULT_CENTER_INFO = {name:'Centro Psicológico MAGUSA ARCOIRIS DE ESPERANZA', address:'', phone:'', ruc:'', slogan:'', paymentMethods:'', zoomSala:'', meetSala:'', reminderMinutes:10, rescheduleHours:24, latePenaltyPercent:10, includePolicy:true, sessionMinutes:60, apiPeruToken:'', mensajePacientes:'', pedirDocumento:false, lemaAnio:'', nombreComercial:'', email:''};
 const DEFAULT_AUTH_CONFIG = {enabled:false, username:'', password:''};
 
 /* ===== Horario semanal de profesionales ===== */
@@ -2674,6 +2675,98 @@ function nombreDeEstePanel(){
                        : ((DB.centerInfo && DB.centerInfo.name) || 'Centro Psicológico');
 }
 
+/* ============ QUIÉN VE QUÉ ============
+
+   Los permisos existen en la base desde el principio y el servidor los
+   respeta: rechaza lo que el usuario no puede hacer. Pero el panel no se
+   enteraba. La recepcionista veía las dieciocho pestañas, entraba a
+   Historia clínica, escribía media página y recién al guardar le salía un
+   error. Trabajo perdido y una persona convencida de que el sistema
+   falla.
+
+   Se decidió **esconder**, no deshabilitar. Un botón apagado sigue
+   invitando a tocarlo y obliga a preguntarse "¿por qué no me deja?"; una
+   pestaña que no está no genera esa pregunta. Quien entra a cobrar ve
+   Pagos y Tarifas, y eso es todo lo que hay.
+
+   El servidor sigue siendo el que manda: esconder pestañas es comodidad,
+   no seguridad. Si alguien llamara a la API a mano, le seguiría diciendo
+   que no. Las dos cosas hacen falta, y en ese orden.                  */
+
+let usuarioDelPanel = null;   // lo que devuelve api?accion=sesion
+
+/* Qué permiso hace falta para que una pestaña tenga sentido.
+   La clave es "para qué entra uno ahí", no "qué tabla toca". */
+const PERMISO_DE_PESTANA = {
+  resumen:       null,                   // la portada la ve cualquiera
+  alertas:       'alertas.ver',
+  calendario:    'citas.ver',
+  pacientes:     'pacientes.ver',
+  citas:         'citas.ver',
+  pruebas:       'historia.ver',
+  materiales:    'historia.ver',
+  informes:      'informes.editar',
+  talleres:      'talleres.editar',
+  profesionales: 'profesionales.editar',
+  practicantes:  'practicantes.editar',
+  asistencia:    'asistencia.registrar',
+  accesos:       'usuarios.editar',
+  tarifas:       'pagos.ver',
+  pagos:         'pagos.ver',
+  finanzas:      'finanzas.reportes',
+  graficos:      'finanzas.reportes',
+  ideas:         'finanzas.reportes',
+  reportes:      'reportes.ver',
+  personal:      null,                   // es del panel personal, va aparte
+};
+
+/* ¿Este usuario puede?
+
+   Sin sesión con usuario —el panel abierto sin clave, que es como lo usa
+   Luis hoy— se contesta que sí a todo: el sistema no tiene a quién
+   limitar y esconderle cosas al dueño sería absurdo. En cuanto hay
+   cuentas de verdad, manda la lista que mandó el servidor. */
+function puedo(permiso){
+  if(!permiso) return true;
+  if(!usuarioDelPanel || !Array.isArray(usuarioDelPanel.permisos)) return true;
+  return usuarioDelPanel.permisos.includes(permiso);
+}
+
+function esAdministrador(){
+  return !usuarioDelPanel
+      || (usuarioDelPanel.roles || []).includes('admin')
+      || puedo('config.editar');
+}
+
+/* Las pestañas que este usuario sí puede usar. */
+function tabsPermitidas(lista){
+  return lista.filter(t => puedo(PERMISO_DE_PESTANA[t.id]));
+}
+
+/* Lo que recibe el panel al entrar. Se guarda acá para no volver a
+   preguntarle al servidor en cada dibujo. */
+function recordarUsuario(u){
+  usuarioDelPanel = u || null;
+}
+
+/* El nombre y el perfil de quien está usando el panel, para la barra. */
+function etiquetaDelUsuario(){
+  if(!usuarioDelPanel) return '';
+  const roles = (usuarioDelPanel.roles || [])
+    .map(r => (NOMBRES_DE_PERFIL[r] || r)).join(' · ');
+  return `${usuarioDelPanel.nombre_completo || usuarioDelPanel.usuario || ''}`
+       + (roles ? ` · ${roles}` : '');
+}
+
+const NOMBRES_DE_PERFIL = {
+  admin: 'Administración',
+  recepcion: 'Admisión',
+  profesional: 'Psicólogo(a)',
+  practicante: 'Practicante',
+  caja: 'Caja',
+  alertas: 'Seguimiento',
+};
+
 const TABS = [
   {id:'resumen', label:'Resumen', group:'Hoy'},
   {id:'alertas', label:'Alertas', group:'Hoy'},
@@ -2720,9 +2813,13 @@ function pendingAlertCount(){
    pestaña solo mostraría una pantalla vacía— y en el personal no
    aparece nada del centro. */
 function tabsDeEstePanel(){
-  return SOLO_PERSONAL
+  // Primero las de este panel, después las que esta persona puede usar.
+  // Si no hay cuentas de verdad —el panel abierto sin clave— `puedo()`
+  // dice que sí a todo y no cambia nada.
+  const propias = SOLO_PERSONAL
     ? TABS.filter(t => TABS_PERSONALES.includes(t.id))
     : TABS.filter(t => !TABS_PERSONALES.includes(t.id));
+  return SOLO_PERSONAL ? propias : tabsPermitidas(propias);
 }
 
 function renderTabs(){
@@ -2749,6 +2846,13 @@ function renderTabs(){
     </div>`).join('');
 }
 function goTab(id){
+  // Un enlace viejo o un botón de otra pantalla puede mandar a alguien a
+  // una pestaña que su perfil no abre. En vez de dejarlo en blanco, se le
+  // dice y se le devuelve al resumen.
+  if(!SOLO_PERSONAL && !puedo(PERMISO_DE_PESTANA[id])){
+    showToast('Esa sección no está habilitada para tu perfil.', false);
+    id = 'resumen';
+  }
   currentTab = id;
   renderTabs();
   renderPanel();
@@ -2988,6 +3092,99 @@ function fmtBirthday(mmdd){
 function findName(list,id){ const it=list.find(x=>x.id===id); return it? it.name : '—'; }
 /* Arma "(Carrera, especialista en Especialidad)" para incluir en mensajes y listados,
    omitiendo lo que no esté registrado. */
+/* ---- ¿El profesional está habilitado para atender? -----------------
+
+   La ficha sabía si la colegiatura estaba habilitada, pero no hasta
+   cuándo. Un sí/no que alguien tiene que acordarse de cambiar a mano no
+   avisa de nada: el día que vence sigue diciendo que sí.
+
+   Importa de verdad. Un informe firmado por quien no estaba habilitado
+   ese día es un informe impugnable, y eso se descubre cuando ya se
+   entregó, con el membrete y la firma encima. */
+
+/* Con cuánta anticipación empieza a avisar. Un mes alcanza para pagar
+   la cuota y que el colegio la registre. */
+const DIAS_AVISO_COLEGIATURA = 45;
+
+function estadoDeHabilitacion(pr){
+  if(!pr) return {clave:'sin', texto:'Sin profesional', chip:'neutral'};
+  if(!pr.colegiatura)
+    return {clave:'sin', texto:'Sin colegiatura registrada', chip:'neutral'};
+
+  // Lo que una persona marcó a mano manda sobre la fecha: si dijo que no
+  // está habilitada, no está, aunque la fecha todavía no haya llegado.
+  if(pr.colegiaturaHabilitada === false)
+    return {clave:'no', texto:'No habilitada', chip:'alert'};
+
+  const vence = pr.colegiaturaVence || '';
+  if(!vence)
+    return {clave:'sinFecha', texto:'Habilitada · sin fecha de vencimiento',
+            chip:'warn', dias:null};
+
+  const dias = diasEntre(todayISO(), vence);
+  if(dias === null)
+    return {clave:'sinFecha', texto:'Habilitada', chip:'ok'};
+  if(dias < 0)
+    return {clave:'vencida', dias,
+            texto:`Vencida el ${fmtFechaCorta(vence)}`, chip:'alert'};
+  if(dias <= DIAS_AVISO_COLEGIATURA)
+    return {clave:'porVencer', dias,
+            texto:`Vence el ${fmtFechaCorta(vence)} · faltan ${dias} día(s)`,
+            chip:'warn'};
+  return {clave:'ok', dias, texto:`Habilitada hasta el ${fmtFechaCorta(vence)}`,
+          chip:'ok'};
+}
+
+function chipDeHabilitacion(pr){
+  const e = estadoDeHabilitacion(pr);
+  return `<span class="chip ${e.chip}">${esc(e.texto)}</span>`;
+}
+
+/* Los que hay que mirar hoy: vencidos primero, que son los que no
+   deberían estar atendiendo. */
+function profesionalesPorVencer(){
+  return (DB.professionals||[])
+    .map(pr => ({pr, e: estadoDeHabilitacion(pr)}))
+    .filter(x => ['vencida','porVencer','no'].includes(x.e.clave))
+    .sort((a,b) => (a.e.dias ?? -9999) - (b.e.dias ?? -9999));
+}
+
+/* El aviso del panel. No se esconde detrás de un botón: alguien
+   atendiendo sin habilitación es de las pocas cosas que justifican
+   ocupar espacio en la pantalla principal. */
+function avisoDeHabilitacion(){
+  const lista = profesionalesPorVencer();
+  if(!lista.length) return '';
+  const graves = lista.filter(x => x.e.clave !== 'porVencer').length;
+  return `<div class="card" style="border-left:4px solid var(--${graves?'alert':'warn'});margin-bottom:12px">
+    <b>${graves
+      ? `${graves} profesional(es) sin habilitación vigente`
+      : 'Colegiatura por vencer'}</b>
+    <p class="hint" style="margin:4px 0 8px">Un informe firmado por quien no estaba
+      habilitado ese día es un informe impugnable.</p>
+    ${lista.map(({pr, e}) => `<div style="margin:6px 0">
+      <b>${esc(pr.name||'')}</b> ${chipDeHabilitacion(pr)}
+      ${pr.colegiatura? `<span class="sub">C.Ps.P. ${esc(pr.colegiatura)}</span>`:''}
+      <button class="btn small secondary" style="margin-left:6px"
+        onclick="editProfessional('${pr.id}')">Actualizar</button>
+    </div>`).join('')}
+  </div>`;
+}
+
+/* Si la cita la va a atender alguien sin habilitación, se dice ANTES de
+   agendarla, no después. Agendar es el único momento en que todavía se
+   puede cambiar de profesional sin llamar al paciente. */
+function avisoDeHabilitacionDeCita(profesionalId){
+  const pr = (DB.professionals||[]).find(x => x.id === profesionalId);
+  const e = estadoDeHabilitacion(pr);
+  if(!['vencida','no','porVencer'].includes(e.clave)) return '';
+  return `<p class="hint ${e.clave==='porVencer'?'':'alert'}" style="margin:4px 0 0">
+    <b>${esc((pr||{}).name||'')}: ${esc(e.texto)}.</b>
+    ${e.clave==='porVencer'
+      ? 'Revise que siga vigente el día de la cita.'
+      : 'Lo que firme esta sesión se puede impugnar.'}</p>`;
+}
+
 function professionalTitleLine(pr){
   if(!pr) return '';
   const parts = [];
@@ -5530,6 +5727,9 @@ function paquetesDe(p){
     precio:   Number(h.packagePrice||0) || redondear(Number(h.packageTotal||0) * Number(h.pricePerSession||0)),
     desde:    h.iniciadoEl || '',
     hasta:    h.cerradoEl || '',
+    // Por qué se cerró: alta, abandono, devolución. Sin esto, meses
+    // después un paquete de 5 de 6 no dice si se fue o si lo dieron de alta.
+    nota:     h.nota || '',
     vigente:  false,
   }));
   if(p.billingType !== 'Individual' && Number(p.packageTotal||0) > 0){
@@ -5822,9 +6022,17 @@ function bloqueDePaquetes(p, soloLectura){
     ${soloLectura? '' : `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
       <button class="btn secondary" onclick="abrirPaqueteAnterior('${p.id}')">
         + Registrar un paquete anterior</button>
+      <button class="btn secondary" title="Si su profesional deja el centro"
+              onclick="abrirTraspaso('${p.id}')">
+        ⇄ Pasar a otro profesional</button>
       ${(p.billingType!=='Individual' && Number(p.packageTotal||0)>0)
         ? `<button class="btn secondary" onclick="startNewPackage('${p.id}')">
-             Cerrar este e iniciar uno nuevo</button>` : ''}
+             Cerrar este e iniciar uno nuevo</button>
+           <button class="btn secondary" title="Si el paciente no continúa"
+                   onclick="abrirCierreDePaquete('${p.id}')">
+             Cerrar sin abrir otro</button>
+           <button class="btn small danger" title="Si se registró por error"
+                   onclick="anularPaqueteVigente('${p.id}')">Anular</button>` : ''}
     </div>
     <p class="hint" style="margin-top:8px">Un paquete anterior sirve para dejar
       registrado lo que ya pasó —por ejemplo las 5 sesiones de evaluación de agosto—
@@ -5970,6 +6178,7 @@ function bloqueDeUnPaquete(p, q, numero, cuantos, soloLectura){
     ${r.total? `<div class="barwrap"><div class="bar ${pct<100?'':'alertbar'}"
          style="width:${pct}%"></div></div>` : ''}
     <p style="margin:6px 0 0">${rango}</p>
+    ${q.nota ? `<p class="hint" style="margin:4px 0 0">${esc(q.nota)}</p>` : ''}
     ${dias}
     ${descuadreDeFecha}
     ${descuadreDeSesiones}
@@ -6015,7 +6224,8 @@ function verSesionesDelPaquete(pid, qid, cajaId, btn){
       .map(x=>(DB.patients.find(y=>y.id===x)||{}).name).filter(Boolean);
     return `<tr>
       <td style="text-align:right">${i+1}</td>
-      <td style="white-space:nowrap">${esc(fmtFechaCorta(a.date))}</td>
+      <td style="white-space:nowrap">${esc(fmtFechaCorta(a.date))}
+        ${codigoDeAtencion(a)? `<br>${chipDeCodigo(a)}` : ''}</td>
       <td style="white-space:nowrap">${esc(a.time||'')}</td>
       <td>${esc(etiquetaDeSesion(tipoDeSesion(a)))}${
         otros.length? `<br><span class="hint">con ${esc(otros.join(', '))}</span>`:''}</td>
@@ -6054,6 +6264,259 @@ async function ajustarInicioDePaquete(pid, hid, fecha){
   showToast(ok? 'Fecha de inicio corregida.' : 'No se pudo guardar.', ok);
   renderPanel();
 }
+/* ============ CERRAR UN PAQUETE QUE NO LLEGÓ AL FINAL ============
+
+   Hasta ahora un paquete solo se podía cerrar abriendo otro: el botón
+   decía "Cerrar este e iniciar uno nuevo". Sirve cuando el paciente
+   renueva, que es lo normal. No sirve cuando no renueva.
+
+   Y entonces el paquete quedaba abierto para siempre. El paciente que se
+   fue en la sesión 5 de 6 seguía figurando con una sesión por usar, en
+   las alertas de cobro, en el reporte, en todas partes. El caso que lo
+   pidió: el paciente se va, pide que le devuelvan la sesión que no usó, y
+   ese paquete no puede quedar colgado.
+
+   Las tres cosas que decide este cierre:
+
+     · POR QUÉ se cierra — no es lo mismo un alta que un abandono, y de
+       eso depende si se le vuelve a llamar;
+     · QUÉ PASA con las sesiones que no usó — se pierden, se devuelven o
+       quedan a favor;
+     · y si hay DEVOLUCIÓN, queda registrada como movimiento de dinero,
+       no como una resta a mano en un cuaderno.
+
+   Lo que NO hace: borrar nada. Las sesiones atendidas, los pagos y la
+   historia clínica se quedan donde están. Cerrar es decir "esto terminó",
+   no "esto no pasó". Para eso está anular, que es otra cosa y avisa.   */
+
+const MOTIVOS_DE_CIERRE = [
+  'Alta terapéutica',
+  'El paciente no continuó',
+  'El profesional dejó el centro',
+  'Devolución acordada',
+  'Se pasó a otro servicio',
+  'Otro',
+];
+
+function abrirCierreDePaquete(patientId){
+  const p = DB.patients.find(x => x.id === patientId);
+  if(!p) return;
+  const paq = paqueteDe(p);
+  if(!paq || !paq.total){
+    alert('Este paciente no tiene un paquete en curso que cerrar.');
+    return;
+  }
+  const lista = paquetesDe(p);
+  const q = lista[lista.length - 1];
+  const r = resumenDePaquete(p, q);
+  const sinUsar = Math.max(0, r.total - r.atendidas);
+  const precioSesion = Number(p.pricePerSession || 0)
+    || (r.total ? redondear(r.precio / r.total) : 0);
+  // Lo máximo devolvible: lo que pagó de más por sesiones que no recibió.
+  // Nunca más de lo que entregó, por mucho que le queden sesiones.
+  const sugerido = Math.min(r.pagado, redondear(sinUsar * precioSesion));
+
+  const caja = document.getElementById('accesoContent');
+  document.getElementById('accesoModal').classList.add('open');
+  caja.innerHTML = `
+    <h2 style="margin-top:0">Cerrar el paquete de ${esc(p.name)}</h2>
+    <p class="hint">${esc(q.concepto || 'Paquete')} de ${r.total} sesiones ·
+      atendidas <b>${r.atendidas}</b> · <b>sin usar ${sinUsar}</b><br>
+      Pagó ${fmtMoney(r.pagado)} de ${fmtMoney(r.precio)}${
+      r.saldo > 0 ? ` · <b>debe ${fmtMoney(r.saldo)}</b>` : ''}</p>
+
+    <div class="formgrid" style="margin-top:12px">
+      <div class="field"><label>¿Por qué se cierra?</label>
+        <select id="cp_motivo">
+          ${MOTIVOS_DE_CIERRE.map(m => `<option>${esc(m)}</option>`).join('')}
+        </select></div>
+      <div class="field"><label>Fecha de cierre</label>
+        <input type="date" id="cp_fecha" value="${todayISO()}"></div>
+    </div>
+
+    <div class="field" style="margin-top:8px">
+      <label>¿Qué pasa con ${sinUsar === 1 ? 'la sesión' : `las ${sinUsar} sesiones`} sin usar?</label>
+      <select id="cp_destino" onchange="pintarDevolucion(${sugerido})">
+        <option value="pierde">Se pierden — no se devuelve nada</option>
+        <option value="devuelve">Se le devuelve el dinero</option>
+        <option value="favor">Quedan a favor para un paquete futuro</option>
+      </select>
+    </div>
+    <div id="cp_dev"></div>
+
+    <div class="field" style="margin-top:8px">
+      <label>Nota (queda en su historial)</label>
+      <input id="cp_nota" placeholder="Ej: se mudó de distrito">
+    </div>
+
+    ${r.saldo > 0 ? `<p class="hint alert" style="margin-top:10px">
+      Queda debiendo <b>${fmtMoney(r.saldo)}</b>. Cerrar el paquete
+      <b>no borra esa deuda</b>: sigue registrada en sus pagos.</p>` : ''}
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
+      <button class="btn" onclick="confirmarCierreDePaquete('${p.id}')">Cerrar el paquete</button>
+      <button class="btn secondary"
+        onclick="document.getElementById('accesoModal').classList.remove('open')">Cancelar</button>
+    </div>
+    <p class="hint" style="margin-top:8px">No se borra nada: las sesiones
+      atendidas y los pagos quedan como están. El paciente queda sin paquete
+      en curso, y se le puede abrir otro cuando vuelva.</p>`;
+}
+
+function pintarDevolucion(sugerido){
+  const caja = document.getElementById('cp_dev');
+  const destino = (document.getElementById('cp_destino') || {}).value;
+  if(!caja) return;
+  caja.innerHTML = destino === 'devuelve'
+    ? `<div class="field" style="margin-top:8px">
+         <label>¿Cuánto se le devuelve? (S/)</label>
+         <input type="number" id="cp_monto" step="0.01" min="0" value="${sugerido}">
+         <p class="hint" style="margin-top:3px">Sale de las sesiones que no usó,
+           y nunca puede ser más de lo que pagó. Queda registrado como
+           devolución en Pagos, con su fecha.</p>
+       </div>`
+    : '';
+}
+
+async function confirmarCierreDePaquete(patientId){
+  const p = DB.patients.find(x => x.id === patientId);
+  if(!p) return;
+  const lista = paquetesDe(p);
+  const q = lista[lista.length - 1];
+  const r = resumenDePaquete(p, q);
+
+  const v = id => (document.getElementById(id) || {}).value || '';
+  const motivo = v('cp_motivo');
+  const fecha = v('cp_fecha') || todayISO();
+  const destino = v('cp_destino');
+  const nota = v('cp_nota').trim();
+  const monto = destino === 'devuelve' ? Number(v('cp_monto')) || 0 : 0;
+
+  if(destino === 'devuelve'){
+    if(monto <= 0){ alert('Pon cuánto se le devuelve, o elige otra opción.'); return; }
+    if(monto > r.pagado){
+      alert(`No se le puede devolver ${fmtMoney(monto)}: solo pagó ${fmtMoney(r.pagado)}.`);
+      return;
+    }
+  }
+  // Una sesión dada después de la fecha de cierre no tendría a qué paquete
+  // ir: el cierre no puede quedar antes de la última atención.
+  if(r.ultima && fecha < r.ultima){
+    alert(`La fecha de cierre no puede ser anterior a su última sesión `
+        + `(${fmtFechaCorta(r.ultima)}).`);
+    return;
+  }
+
+  const sinUsar = Math.max(0, r.total - r.atendidas);
+  if(!confirm(`Cerrar el paquete de ${p.name}.\n\n`
+    + `${r.atendidas} de ${r.total} sesiones atendidas · ${sinUsar} sin usar\n`
+    + `Motivo: ${motivo}\n`
+    + (monto > 0 ? `Se le devuelve ${fmtMoney(monto)}\n` : '')
+    + `\nEl paciente queda SIN paquete en curso. No se borra nada.\n\n¿Lo cierro?`)) return;
+
+  const acompanantes = acompanantesDe(patientId);
+  const resumenNota = [motivo, nota,
+    destino === 'devuelve' ? `Devuelto ${fmtMoney(monto)}`
+    : destino === 'favor' ? `${sinUsar} sesión(es) a favor` : ''
+  ].filter(Boolean).join(' · ');
+
+  const cerrado = {
+    id: uid(),
+    concepto: p.packageConcepto || '',
+    packageTotal: Number(p.packageTotal || 0),
+    sessionsUsed: r.atendidas,
+    packagePrice: precioDelPaquete(p),
+    pricePerSession: Number(p.pricePerSession || 0),
+    iniciadoEl: p.packageStartDate || '',
+    cerradoEl: fecha,
+    nota: resumenNota,
+  };
+
+  p.paquetesHistorial = [...(p.paquetesHistorial || []), cerrado];
+  // Sin paquete en curso: el contador deja de pedir sesiones que ya no
+  // se van a dar, y el paciente sale de las alertas de "le faltan N".
+  p.packageTotal = 0;
+  p.packagePrice = 0;
+  p.sessionsUsed = 0;
+  p.packageConcepto = '';
+  p.packageStartDate = '';
+
+  // El paquete es uno solo: si se cierra, se cierra para todos.
+  acompanantes.forEach(a => {
+    a.paquetesHistorial = [...(a.paquetesHistorial || []), {
+      id: uid(), concepto: cerrado.concepto, packageTotal: cerrado.packageTotal,
+      sessionsUsed: sesionesAtendidas(a), pricePerSession: 0, packagePrice: 0,
+      iniciadoEl: a.packageStartDate || '', cerradoEl: fecha, nota: resumenNota,
+    }];
+    a.sessionsUsed = 0;
+    a.packageStartDate = '';
+  });
+
+  const tocados = new Set([patientId, ...acompanantes.map(a => a.id)]);
+  DB.patients = DB.patients.map(x => !tocados.has(x.id) ? x
+    : (x.id === patientId ? p : acompanantes.find(a => a.id === x.id)));
+  const ok = await setColl('patients', DB.patients);
+  if(!ok){ alert('No se pudo guardar. Revisa la conexión.'); return; }
+
+  // La devolución va como movimiento de dinero, en negativo: así el
+  // "pagado" del paciente baja solo y la caja del mes lo refleja. Una
+  // resta hecha a mano en un cuaderno no aparece en ningún reporte.
+  if(monto > 0){
+    DB.payments = [...(DB.payments || []), {
+      id: uid(),
+      patientId,
+      amount: -Math.abs(monto),
+      date: fecha,
+      concept: `Devolución por cierre de paquete · ${motivo}`,
+      category: 'Paciente',
+      type: 'Otro',
+    }];
+    const ok2 = await setColl('payments', DB.payments);
+    if(!ok2) alert('El paquete se cerró, pero la devolución no se registró. '
+                 + 'Regístrala desde Pagos.');
+  }
+
+  document.getElementById('accesoModal').classList.remove('open');
+  showToast(`Paquete cerrado: ${r.atendidas} de ${r.total}.`
+    + (monto > 0 ? ` Devolución de ${fmtMoney(monto)} registrada.` : ''));
+  renderPanel();
+}
+
+/* ---- Anular: esto no debió existir --------------------------------
+   Distinto de cerrar. Cerrar dice "terminó"; anular dice "se registró
+   por error". Por eso borra el paquete en vez de archivarlo, y avisa de
+   lo que se lleva por delante. */
+async function anularPaqueteVigente(patientId){
+  const p = DB.patients.find(x => x.id === patientId);
+  if(!p || !Number(p.packageTotal || 0)){
+    alert('Este paciente no tiene un paquete en curso.');
+    return;
+  }
+  const lista = paquetesDe(p);
+  const r = resumenDePaquete(p, lista[lista.length - 1]);
+
+  if(r.atendidas > 0){
+    if(!confirm(`Ojo: este paquete ya tiene ${r.atendidas} sesión(es) atendida(s).\n\n`
+      + 'Anularlo borra el acuerdo, pero NO borra esas sesiones: van a quedar '
+      + 'sin paquete al que pertenecer.\n\n'
+      + 'Si el paciente simplemente dejó de venir, lo correcto es CERRARLO, no anularlo.\n\n'
+      + '¿Aun así lo anulo?')) return;
+  }else if(!confirm('Anular el paquete en curso. Se usa cuando se registró por '
+      + 'error.\n\nLos pagos NO se borran.\n\n¿Lo anulo?')){
+    return;
+  }
+
+  p.packageTotal = 0;
+  p.packagePrice = 0;
+  p.sessionsUsed = 0;
+  p.packageConcepto = '';
+  p.packageStartDate = '';
+  DB.patients = DB.patients.map(x => x.id === patientId ? p : x);
+  const ok = await setColl('patients', DB.patients);
+  showToast(ok ? 'Paquete anulado.' : 'No se pudo guardar.', ok);
+  renderPanel();
+}
+
 /* ----- Un paquete que ya ocurrió -----------------------------------
    No reabre nada ni cambia el contador del vigente: entra derecho al
    historial, con sus propias fechas. Es memoria, no una operación. */
@@ -6369,6 +6832,63 @@ let mostrarCitasDeAntes = false;
    una para saber cuál es cuál. El corte es el mismo de todo lo demás
    (`inicioDelPaqueteVigente`), así que la lista no puede contradecir al
    contador que está justo arriba. */
+/* ---- El código de cada atención ------------------------------------
+
+   Toda cita tenía ya un identificador único y la base impedía repetirlo.
+   Lo que no tenía era uno que una persona pueda usar: el de adentro es
+   `mve1ng04jmg90`, que no se dicta por teléfono ni se escribe en un
+   comprobante sin copiarlo y pegarlo.
+
+   A-2026-00001. Doce caracteres, y el año se lee de un vistazo.
+
+   Tres cosas que decide el SERVIDOR y que el panel solo muestra:
+
+     · el número se entrega cuando la atención OCURRE, no al agendar —
+       una cita cancelada no es una prestación y no gasta número, y un
+       correlativo con huecos obliga a explicar dónde está el que falta;
+     · se entrega una sola vez, y reabrir o mover la cita no lo cambia;
+     · no se recicla nunca. Una atención anulada se queda con el suyo,
+       porque el comprobante que salió con ese número sigue existiendo.
+
+   Si el panel lo calculara, dos pantallas abiertas sacarían el mismo. */
+
+function codigoDeAtencion(a){
+  return (a && a.codigoAtencion) ? String(a.codigoAtencion) : '';
+}
+
+/* El código como se ve: monoespaciado para que los ceros se cuenten de
+   un golpe, y se copia con un clic — se usa para pegarlo en un mensaje
+   o en un recibo, y transcribirlo a mano es donde se cambia un dígito. */
+function chipDeCodigo(a, estilo){
+  const c = codigoDeAtencion(a);
+  if(!c) return '';
+  return `<span class="sub" style="font-family:ui-monospace,Consolas,monospace;
+    letter-spacing:.02em;cursor:pointer;${estilo||''}"
+    title="Código de esta atención · clic para copiarlo"
+    onclick="copiarCodigoDeAtencion(event,'${esc(c)}')">${esc(c)}</span>`;
+}
+
+async function copiarCodigoDeAtencion(ev, codigo){
+  if(ev) ev.stopPropagation();
+  try{
+    await navigator.clipboard.writeText(codigo);
+    showToast(`Copiado: ${codigo}`);
+  }catch(e){
+    showToast(codigo, true);   // sin permiso de portapapeles, al menos se lee
+  }
+}
+
+/* Buscar una atención por su código. Se compara sin guiones ni mayúsculas
+   porque quien lo dicta por teléfono dice «a 2026 66» y quien lo copia de
+   un recibo trae los guiones: las dos formas tienen que encontrarlo. */
+function codigoCoincide(a, q){
+  const c = codigoDeAtencion(a);
+  if(!c) return false;
+  const limpio = s => String(s).toLowerCase().replace(/[^a-z0-9]/g, '');
+  const t = limpio(q);
+  return t.length >= 3 && limpio(c).includes(t);
+}
+
 function citasDelPaqueteDeAhora(citas){
   const ids = [...new Set(citas.map(a => a.patientId))];
   if(ids.length !== 1) return {mostradas: citas, deAntes: [], paciente: null};
@@ -6413,9 +6933,15 @@ function viewCitas(){
   // Se busca por el paciente de la cita y también por quien la acompaña:
   // una sesión conjunta tiene que salir buscando a cualquiera de los dos.
   const q = filtroDeLista.citas || '';
-  const coincidentes = !q.trim() ? DB.appointments : DB.appointments.filter(a =>
+  // Y por el código de la atención: es lo que trae el paciente cuando
+  // llama con un comprobante en la mano y no se acuerda del día.
+  // Las de otros profesionales llegan sin nombre, solo para que la
+  // agenda no se pise. No son suyas: no van en su lista.
+  const agenda = (DB.appointments||[]).filter(a => !esCitaAjena(a));
+  const coincidentes = !q.trim() ? agenda : agenda.filter(a =>
     personasEnLaCita(a).some(id => pacienteCoincide(DB.patients.find(p=>p.id===id), q))
-    || pacienteCoincide({name: findName(DB.professionals, a.professionalId)}, q));
+    || pacienteCoincide({name: findName(DB.professionals, a.professionalId)}, q)
+    || codigoCoincide(a, q));
   const corte = citasDelPaqueteDeAhora(coincidentes);
   const visibles = corte.mostradas;
   const sorted = [...visibles]
@@ -6491,6 +7017,7 @@ function filaDeCita(a, grupo){
                  : grupo>=3 ? 'opacity:.62;' : '';
     return `<tr style="${realce}">
     <td style="white-space:nowrap"><b>${a.time||'--:--'}</b><br><span class="hint">${a.date}</span>
+      ${codigoDeAtencion(a)? `<br>${chipDeCodigo(a)}` : ''}
       ${grupo===0? '<br><span class="chip ok">Ahora</span>'
        : grupo===1? '<br><span class="chip alert">Sin cerrar</span>' : ''}
       ${reprogramacionesDe(a).length? `<br><span class="chip warn"
@@ -7107,19 +7634,21 @@ function resumenDePacienteEnCitas(citas){
        </div>`
     : `<p style="margin:8px 0 4px">Lleva <b>${atendidas} sesión(es)</b> atendidas.</p>`;
 
-  // La plata, separada en dos preguntas que no son la misma: cuánto falta
-  // del paquete entero, y cuánto se debe de lo que YA se atendió.
+  // Mientras uno agenda, de la plata solo importa una cosa: si debe algo.
+  // El desglose entero —precio, pagado, saldo, deuda de lo ya atendido—
+  // vive en Reportes, en «Cómo va cada paciente». Tenerlo en los dos
+  // sitios no daba más información: obligaba a compararlos.
   const dinero = `
-    <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:8px">
-      ${conPaquete? `<div><span class="sub">Paquete completo</span><br>
-        <b>${fmtMoney(bal.totalPrice)}</b></div>`:''}
-      <div><span class="sub">Pagado</span><br><b>${fmtMoney(pagado)}</b></div>
-      ${conPaquete? `<div><span class="sub">Saldo del paquete</span><br>
-        <b style="color:${bal.saldo>0?'var(--alert)':'var(--ok)'}">${fmtMoney(bal.saldo)}</b></div>`:''}
-      <div><span class="sub">De lo ya atendido</span><br>
-        <b style="color:${deudaDeLoDado>0?'var(--alert)':'var(--ok)'}">${
-          deudaDeLoDado>0? `${fmtMoney(deudaDeLoDado)} por cobrar` : 'todo pagado'}</b></div>
-    </div>`;
+    <p style="margin:8px 0 4px">
+      ${deudaDeLoDado > 0
+        ? `<b style="color:var(--alert)">Debe ${fmtMoney(deudaDeLoDado)}</b>
+           de lo ya atendido.`
+        : (bal.saldo > 0
+            ? `<b style="color:var(--alert)">Saldo del paquete: ${fmtMoney(bal.saldo)}</b>
+               <span class="hint">— lo atendido está cubierto.</span>`
+            : `<b style="color:var(--ok)">Al día.</b>`)}
+      <span class="hint"> · el detalle completo está en Reportes.</span>
+    </p>`;
 
   // Cuántas veces se le movió la sesión, y por pedido de quién. Es lo que
   // hay que tener a mano cuando el paciente pregunta, y también cuando hay
@@ -7203,8 +7732,22 @@ function viewCitasHtml(rows, visibles, avisoDeAntes){
         <div class="field"><label>Profesional</label>
           <select id="af_prof" onchange="checkProfAvailabilityHint()">${DB.professionals.filter(pr=>pr.active!==false || (editingApptId && (DB.appointments.find(a=>a.id===editingApptId)||{}).professionalId===pr.id)).map(pr=>`<option value="${pr.id}">${pr.name}</option>`).join('')}</select>
         </div>
-        <div class="field"><label>Fecha</label><input type="date" id="af_date" value="${todayISO()}" onchange="checkProfAvailabilityHint()"></div>
-        <div class="field"><label>Hora</label><input type="time" id="af_time" value="09:00" onchange="checkProfAvailabilityHint()"></div>
+        <div class="field"><label>Fecha</label><input type="date" id="af_date" value="${todayISO()}"
+          onchange="checkProfAvailabilityHint(); pintarTipoDePaciente()"></div>
+        <div class="field"><label>Hora</label>
+          <input type="time" id="af_time" value="09:00" onchange="checkProfAvailabilityHint()">
+          <button type="button" class="btn small secondary" style="margin-top:6px"
+            onclick="verHorasLibres()">🕐 Ver horas libres</button>
+          <div id="af_horasLibres"></div>
+        </div>
+        <div class="field"><label>¿Quién viene?</label>
+          <select id="af_tipoPaciente" onchange="cambiarTipoDePaciente()">
+            <option value="">— el sistema lo deduce —</option>
+            ${TIPOS_DE_PACIENTE.map(t=>`<option value="${t.clave}"
+              title="${esc(t.explica)}">${t.etiqueta}</option>`).join('')}
+          </select>
+          <div id="af_tipoPacienteCaja"></div>
+        </div>
         <div class="field"><label>¿Qué es esta sesión?</label>
           <select id="af_tipoSesion" onchange="pintarQueEsLaSesion()">
             ${TIPOS_DE_SESION.map(t=>`<option value="${t.clave}">${t.texto}</option>`).join('')}
@@ -7269,6 +7812,8 @@ function editAppt(id){
   document.getElementById('af_room').value = a.room||'';
   toggleRoomField();
   document.getElementById('af_tipoSesion').value = tipoDeSesion(a);
+  const selTP = document.getElementById('af_tipoPaciente');
+  if(selTP) selTP.value = a.tipoPaciente || '';
   pintarQueEsLaSesion();
   document.getElementById('af_status').value = a.status;
   document.getElementById('af_status').disabled = true;
@@ -7345,16 +7890,122 @@ function conflictosDeCita(cita){
   });
   return conflictos;
 }
-/* Devuelve true si se puede continuar (sin cruces, o la persona los aceptó a conciencia). */
+/* ---- El cruce de agenda ya no se puede forzar ---------------------
+
+   Antes cualquier cruce se podía guardar confirmando un aviso. Para
+   cargar datos históricos eso hacía falta; para agendar el día a día,
+   no: un profesional no puede estar con dos pacientes a la vez, una
+   persona no puede estar en dos sitios, y en un consultorio no caben
+   dos sesiones. Lo que el aviso producía era una agenda con cruces que
+   nadie veía hasta el día de la cita.
+
+   Quien administra el centro (`ver.todo`) todavía puede forzarlo —hace
+   falta para cargar lo que ya pasó—. Quien agenda su propia consulta,
+   no: para él es un error, no una excepción. */
+
 function confirmarPeseAlCruce(cita, fechaLegible){
   const conflictos = conflictosDeCita(cita);
-  if(conflictos.length===0) return true;
-  const lista = conflictos.map(c=>'  • '+c).join('\n');
+  if(conflictos.length === 0) return true;
+
+  const lista = conflictos.map(c => '  • ' + c).join('\n');
+  const cuando = fechaLegible || fmtFechaCorta(cita.date);
+  const dur = `Se considera que cada sesión dura ${duracionSesionMin()} minutos`
+            + ' (se cambia en Datos del centro).';
+
+  if(!puedo('ver.todo')){
+    alert(`No se puede guardar: hay un cruce el ${cuando}.\n\n${lista}\n\n`
+      + `${dur}\n\n`
+      + 'Elija otra hora. El botón «Ver horas libres» le muestra las que quedan.');
+    return false;
+  }
+
   return confirm(
-    `⚠ Cruce de agenda el ${fechaLegible || cita.date}:\n\n${lista}\n\n` +
-    `(Se considera que cada sesión dura ${duracionSesionMin()} minutos; puedes cambiarlo en Datos del centro.)\n\n` +
-    `¿Guardar de todas formas?`
+    `⚠ Cruce de agenda el ${cuando}:\n\n${lista}\n\n${dur}\n\n`
+    + 'Como administra el centro, puede guardarlo igual —sirve para cargar lo '
+    + 'que ya pasó—, pero en la agenda de adelante esto deja dos sesiones '
+    + 'encimadas.\n\n¿Guardar de todas formas?'
   );
+}
+
+/* ---- Las horas que quedan libres ----------------------------------
+
+   Lo que hace falta cuando el paciente está al teléfono y pregunta
+   «¿a qué hora puede?». Hasta ahora había que mirar la agenda y
+   restar de cabeza.
+
+   Se calcula sobre el horario del profesional ese día, descontando lo
+   que ya tiene —y también las citas ajenas, que llegan sin nombre pero
+   con su hora: por eso el consultorio no se pisa aunque uno no vea de
+   quién es la otra sesión. */
+function horasLibresDe(profId, fecha, sala){
+  const pr = (DB.professionals||[]).find(p => p.id === profId);
+  if(!pr || !fecha) return {error: 'Elija profesional y fecha.'};
+
+  const sched = getDayScheduleFor(pr, fecha);
+  if(sched.unconfigured) return {error: 'Ese profesional todavía no tiene horario semanal cargado.'};
+  if(!sched.working) return {error: `${professionalDisplayName(pr)} no atiende ese día.`};
+
+  const dur = duracionSesionMin();
+  const ini = minutosDeHora(sched.start), fin = minutosDeHora(sched.end);
+  const ocupadas = (DB.appointments||[]).filter(a =>
+    a.date === fecha && a.status !== 'Cancelada' && a.id !== editingApptId
+    && (a.professionalId === profId
+        || (sala && a.room === sala && a.modality === 'Presencial')));
+
+  const libres = [];
+  for(let m = ini; m + dur <= fin; m += dur){
+    const choca = ocupadas.some(a => {
+      const aIni = minutosDeHora(a.time), aFin = aIni + dur;
+      return aIni < m + dur && aFin > m;
+    });
+    if(!choca) libres.push(horaDeMinutos(m));
+  }
+  return {libres, horario: `${sched.start} – ${sched.end}`, ocupadas: ocupadas.length};
+}
+
+function horaDeMinutos(m){
+  return String(Math.floor(m/60)).padStart(2,'0') + ':' + String(m%60).padStart(2,'0');
+}
+
+/* El botón. Al elegir una hora la escribe en el formulario: si hay que
+   copiarla a mano, se copia mal. */
+function verHorasLibres(){
+  const profId = (document.getElementById('af_prof')||{}).value || '';
+  const fecha  = (document.getElementById('af_date')||{}).value || '';
+  const salaEl = document.getElementById('af_room');
+  const modal  = (document.getElementById('af_modality')||{}).value || '';
+  const sala   = (modal === 'Presencial' && salaEl) ? salaEl.value : '';
+  const caja   = document.getElementById('af_horasLibres');
+  if(!caja) return;
+
+  const r = horasLibresDe(profId, fecha, sala);
+  if(r.error){ caja.innerHTML = `<p class="hint alert">${esc(r.error)}</p>`; return; }
+  if(!r.libres.length){
+    caja.innerHTML = `<p class="hint alert">No le queda ninguna hora libre ese día
+      (atiende ${esc(r.horario)} y ya tiene ${r.ocupadas}).</p>`;
+    return;
+  }
+  caja.innerHTML = `<p class="hint" style="margin:6px 0 4px">
+      Atiende ${esc(r.horario)} · <b>${r.libres.length} hora(s) libre(s)</b>
+      ${sala? `en ${esc(sala)}` : ''}:</p>
+    <div style="display:flex;flex-wrap:wrap;gap:6px">
+      ${r.libres.map(h => `<button type="button" class="btn small secondary"
+        onclick="elegirHoraLibre('${h}')">${h}</button>`).join('')}
+    </div>`;
+}
+
+function elegirHoraLibre(h){
+  const el = document.getElementById('af_time');
+  if(el){ el.value = h; checkProfAvailabilityHint(); }
+  const caja = document.getElementById('af_horasLibres');
+  if(caja) caja.innerHTML = `<p class="hint ok">Hora elegida: <b>${esc(h)}</b>.</p>`;
+}
+
+/* Una cita de otro profesional, que llega sin nombre. El servidor manda
+   la hora y la sala y nada más, para que la agenda no se pise sin
+   enseñar de quién es el paciente. */
+function esCitaAjena(a){
+  return !!(a && a.ajena);
 }
 /* Avisa antes de agendar una sesión que ya no entra en el paquete.
    No la impide: puede ser a propósito —se atiende hoy y se cobra aparte, o
@@ -7432,6 +8083,12 @@ async function saveAppt(){
       address: document.getElementById('af_address').value.trim(),
       reference: document.getElementById('af_reference').value.trim(),
       tipoSesion: document.getElementById('af_tipoSesion').value,
+    // Vacío = lo que el sistema deduce. Se resuelve ahora y se guarda
+    // escrito: dentro de un año, recalcularlo daría otra cosa, porque
+    // para entonces esa persona ya tendría más sesiones encima.
+    tipoPaciente: ((document.getElementById('af_tipoPaciente')||{}).value || '')
+      || tipoDePacienteDeducido(document.getElementById('af_patient').value,
+                               document.getElementById('af_date').value),
       participantes: [...citaJuntos],
       // el estado no se toca aquí: se mantiene el que ya tenía (se cambia desde la tabla)
     };
@@ -7456,6 +8113,12 @@ async function saveAppt(){
     address: document.getElementById('af_address').value.trim(),
     reference: document.getElementById('af_reference').value.trim(),
     tipoSesion: document.getElementById('af_tipoSesion').value,
+    // Vacío = lo que el sistema deduce. Se resuelve ahora y se guarda
+    // escrito: dentro de un año, recalcularlo daría otra cosa, porque
+    // para entonces esa persona ya tendría más sesiones encima.
+    tipoPaciente: ((document.getElementById('af_tipoPaciente')||{}).value || '')
+      || tipoDePacienteDeducido(document.getElementById('af_patient').value,
+                               document.getElementById('af_date').value),
     participantes: [...citaJuntos],
     reminderSent: false,
   };
@@ -7976,6 +8639,94 @@ function fillApptFromPatient(){
   mostrarAvanceDelPaquete();
 }
 
+/* ---- ¿Viene por primera vez, o ya lo veníamos atendiendo? ----------
+
+   Al agendar, eso cambia todo: cuánto dura la sesión, qué se prepara, si
+   hay que pedirle el consentimiento y a qué tarifa entra. Hasta ahora
+   había que salir a su ficha para saberlo — justo la pantalla que uno no
+   quiere abandonar cuando está con el paciente al teléfono.
+
+   El sistema lo deduce de sus citas atendidas y lo propone, pero deja
+   corregirlo, porque hay un caso que ninguna cuenta resuelve: alguien
+   que volvió después de dos años no es un «continuador», es un
+   reingreso, y decidir eso es de quien atiende. */
+const TIPOS_DE_PACIENTE = [
+  {clave:'Primera vez',  etiqueta:'Primera vez',
+   explica:'Nunca lo hemos atendido. Su primera cita suele ser una consulta.'},
+  {clave:'Continuador',  etiqueta:'Continuador',
+   explica:'Ya está en tratamiento con nosotros.'},
+  {clave:'Reingreso',    etiqueta:'Reingreso',
+   explica:'Volvió después de un tiempo largo sin venir.'},
+];
+
+/* Cuántos días sin venir hacen que una vuelta sea un reingreso y no la
+   continuación de lo mismo. Seis meses: menos que eso, el tratamiento
+   todavía se siente como el mismo proceso. */
+const DIAS_PARA_REINGRESO = 180;
+
+function tipoDePacienteDeducido(patientId, fecha){
+  const hasta = fecha || todayISO();
+  const previas = DB.appointments
+    .filter(a => a.status === 'Completada'
+      && (a.patientId === patientId || participantesDeCita(a).includes(patientId))
+      && a.date < hasta)
+    .map(a => a.date).sort();
+  if(!previas.length) return 'Primera vez';
+  const dias = diasEntre(previas[previas.length - 1], hasta);
+  return (dias !== null && dias > DIAS_PARA_REINGRESO) ? 'Reingreso' : 'Continuador';
+}
+
+/* Lo que vale para una cita: lo que se anotó, y si no, lo deducido. */
+function tipoDePacienteDeCita(a){
+  if(!a) return '';
+  return a.tipoPaciente || tipoDePacienteDeducido(a.patientId, a.date);
+}
+
+/* El aviso del formulario. Lo importante es la primera línea: si es la
+   primera vez de alguien, hay que verlo antes de seguir escribiendo. */
+function pintarTipoDePaciente(){
+  const caja = document.getElementById('af_tipoPacienteCaja');
+  const sel  = document.getElementById('af_tipoPaciente');
+  if(!caja || !sel) return;
+
+  const pid = (document.getElementById('af_patient') || {}).value || '';
+  const p = DB.patients.find(x => x.id === pid);
+  if(!p){ caja.innerHTML = ''; sel.value = ''; return; }
+
+  const fecha = (document.getElementById('af_date') || {}).value || todayISO();
+  const deducido = tipoDePacienteDeducido(pid, fecha);
+
+  // El desplegable NO se toca acá. Arranca en «el sistema lo deduce» y
+  // solo cambia si una persona lo cambia: antes se reescribía en cada
+  // repintado, así que marcar «Reingreso» y después corregir la fecha
+  // borraba la decisión sin decir nada.
+
+  const atendidas = DB.appointments.filter(a => a.status === 'Completada'
+    && (a.patientId === pid || participantesDeCita(a).includes(pid))).length;
+  const paq = p.billingType === 'Individual' ? null : paqueteDe(p);
+  const comoPaga = (paq && paq.total)
+    ? `del <b>paquete</b> de ${paq.total} sesiones · van ${paq.usadas}`
+    : `<b>sesión por sesión</b>`;
+
+  const esPrimera = deducido === 'Primera vez';
+  caja.innerHTML = `<p class="hint${esPrimera ? ' alert' : ''}" style="margin:4px 0 0">
+    ${esPrimera
+      ? `<b>Es la primera vez de ${esc(p.name)}.</b> No tiene sesiones atendidas.`
+      : `${esc(p.name)} lleva <b>${atendidas} sesión(es)</b> atendidas · se atiende ${comoPaga}.`}
+    ${deducido === 'Reingreso'
+      ? ` Hace más de ${Math.round(DIAS_PARA_REINGRESO/30)} meses que no venía.` : ''}
+    ${!sel.value
+      ? `<br>Se va a guardar como <b>${esc(deducido)}</b>.`
+      : (sel.value === deducido
+          ? `<br>Anotado como <b>${esc(sel.value)}</b>, igual que lo deducido.`
+          : `<br>Anotado como <b>${esc(sel.value)}</b>, y el sistema deduce
+             <b>${esc(deducido)}</b>. Manda lo anotado.`)}</p>`;
+}
+
+function cambiarTipoDePaciente(){
+  pintarTipoDePaciente();
+}
+
 /* Muestra en qué sesión del paquete va el paciente al agendarle una cita.
    Sin esto hay que salir a la ficha para saber si le queda paquete o si esta
    es la última sesión — que es justo cuando toca cobrarle el siguiente o
@@ -8004,6 +8755,9 @@ function mostrarAvanceDelPaquete(){
     selTipo.value = tipoSugeridoPara(pid);
     pintarQueEsLaSesion();
   }
+
+  // Y quién viene: primera vez, continuador o reingreso.
+  pintarTipoDePaciente();
 
   // Las que ya atendió más las que ya tiene agendadas por delante: esta cita
   // nueva sería la siguiente de la fila. Si el paquete lo comparte con
@@ -8177,7 +8931,9 @@ function viewProfesionales(){
     const deudaProf = deudaConProfesional(pr);
     const usosMesRegistros = DB.roomUsage.filter(u=>u.professionalId===pr.id && u.date.slice(0,7)===mesActual);
     const usosMesMonto = usosMesRegistros.reduce((s,u)=>s+Number(u.amount ?? 10),0);
-    const colegChip = pr.colegiaturaHabilitada===false? '<span class="chip alert">Colegiatura no habilitada</span>' : (pr.colegiatura? '<span class="chip ok">Colegiatura habilitada</span>' : '<span class="chip neutral">Sin colegiatura registrada</span>');
+    // Un chip que solo dice «habilitada» no distingue a quien lo está
+    // hasta diciembre de quien vence la semana que viene.
+    const colegChip = chipDeHabilitacion(pr);
     const specColegChip = pr.specColegiaturaHabilitada===false? '<span class="chip alert">Especialidad no habilitada</span>' : (pr.specColegiaturaHabilitada===true? '<span class="chip ok">Especialidad habilitada</span>' : '');
     return `<tr style="${pr.active===false?'opacity:0.55':''}">
       <td><span class="nom" title="${professionalDisplayName(pr)}"><b>${professionalDisplayName(pr)}</b></span>${pr.active===false?' <span class="chip neutral">Inhabilitado</span>':''}
@@ -8249,6 +9005,15 @@ function viewProfesionales(){
         <div class="field"><label>N° de colegiatura (de la carrera)</label><input id="prf_colegiatura" placeholder="Ej: CPsP 12345"></div>
         <div class="field"><label>¿Colegiatura habilitada?</label>
           <select id="prf_colegHab"><option value="true">Sí, habilitada</option><option value="false">No / vencida</option></select>
+        </div>
+        <div class="field"><label>Habilitada hasta</label>
+          <input type="date" id="prf_colegVence">
+          <span class="hint">Con esta fecha el sistema avisa ${DIAS_AVISO_COLEGIATURA} días antes.
+            Sin ella, el sí/no se queda diciendo que sí para siempre.</span>
+        </div>
+        <div class="field"><label>Verificada en el colegio el</label>
+          <input type="date" id="prf_colegVerif">
+          <span class="hint">Cuándo se comprobó por última vez en el padrón.</span>
         </div>
       </div>
 
@@ -8591,6 +9356,10 @@ function editProf(id){
   document.getElementById('prf_spec').value = pr.specialty||'';
   document.getElementById('prf_colegiatura').value = pr.colegiatura||'';
   document.getElementById('prf_colegHab').value = String(pr.colegiaturaHabilitada!==false);
+  const cv = document.getElementById('prf_colegVence');
+  if(cv) cv.value = pr.colegiaturaVence || '';
+  const cvf = document.getElementById('prf_colegVerif');
+  if(cvf) cvf.value = pr.colegiaturaVerificada || '';
   document.getElementById('prf_specColegiatura').value = pr.specColegiatura||'';
   document.getElementById('prf_specColegHab').value = pr.specColegiaturaHabilitada===false? 'false' : (pr.specColegiaturaHabilitada===true? 'true' : '');
   document.getElementById('prf_hasSpecialty').checked = !!(pr.specialty || pr.specColegiatura);
@@ -8639,6 +9408,8 @@ async function saveProf(){
     specialty: document.getElementById('prf_spec').value.trim(),
     colegiatura: document.getElementById('prf_colegiatura').value.trim(),
     colegiaturaHabilitada: document.getElementById('prf_colegHab').value==='true',
+    colegiaturaVence: (document.getElementById('prf_colegVence')||{}).value || '',
+    colegiaturaVerificada: (document.getElementById('prf_colegVerif')||{}).value || '',
     specColegiatura: document.getElementById('prf_specColegiatura').value.trim(),
     specColegiaturaHabilitada: document.getElementById('prf_specColegHab').value===''? null : document.getElementById('prf_specColegHab').value==='true',
     schedule: document.getElementById('prf_sched').value.trim(),
@@ -9387,6 +10158,269 @@ function estadoDeCuenta(u){
   return {texto:'Puede entrar', clase:'ok'};
 }
 
+/* ============ LOS PERFILES, DESDE LA PANTALLA ============
+
+   Los permisos existían desde el principio, pero los perfiles solo se
+   podían crear escribiendo SQL. Por eso los únicos que había eran los
+   cuatro de la instalación, y cuando Luis necesitó uno de caja hubo que
+   pedírselo a alguien.
+
+   La pantalla no inventa nada: muestra el catálogo de permisos que ya
+   está en la base, agrupado por módulo, con una casilla cada uno. Marcar
+   y guardar.
+
+   Lo que se ve acá es comodidad; los candados están en el servidor. Si
+   alguien llamara a la API a mano para quitarle `usuarios.editar` al
+   administrador, el servidor se lo devuelve igual. Esconder el botón
+   nunca fue seguridad.                                                */
+
+let perfilesCargados = null;    // [{clave, nombre, descripcion, permisos, usuarios, protegido}]
+let catalogoPermisos = null;    // [{clave, modulo}]
+let perfilEnEdicion = null;     // {clave, nombre, descripcion, permisos:Set, esNuevo}
+
+/* Para que la pantalla hable en cristiano y no en claves de permiso. */
+const QUE_HACE_EL_PERMISO = {
+  'pacientes.ver':        'Ver la lista de pacientes y sus fichas',
+  'pacientes.editar':     'Registrar pacientes y cambiar sus datos',
+  'citas.ver':            'Ver la agenda',
+  'citas.editar':         'Agendar, mover y cerrar citas',
+  'asistencia.registrar': 'Marcar quién vino y quién faltó',
+  'historia.ver':         'Abrir la historia clínica',
+  'historia.editar':      'Escribir en la historia clínica',
+  'historia.firmar':      'Firmar la historia clínica',
+  'informes.editar':      'Redactar y emitir informes',
+  'pagos.ver':            'Ver los pagos y lo que se debe',
+  'pagos.registrar':      'Cobrar y registrar pagos',
+  'pagos.anular':         'Anular un pago ya registrado',
+  'gastos.ver':           'Ver los gastos del centro',
+  'finanzas.reportes':    'Ver las finanzas y los gráficos',
+  'reportes.ver':         'Ver los reportes de pacientes',
+  'alertas.ver':          'Ver las alertas y los pendientes',
+  'talleres.editar':      'Manejar talleres y convenios',
+  'profesionales.editar': 'Dar de alta profesionales',
+  'practicantes.editar':  'Dar de alta practicantes',
+  'usuarios.editar':      'Crear cuentas y perfiles',
+  'config.editar':        'Cambiar los datos y la configuración del centro',
+  'auditoria.ver':        'Ver quién hizo qué en el sistema',
+  'backup.exportar':      'Descargar la copia de seguridad',
+};
+
+const NOMBRE_DEL_MODULO = {
+  pacientes:'Pacientes', citas:'Agenda', asistencia:'Asistencia',
+  historia:'Historia clínica', informes:'Informes', pagos:'Dinero',
+  gastos:'Dinero', finanzas:'Dinero', reportes:'Reportes', alertas:'Alertas',
+  talleres:'Talleres', profesionales:'Equipo', practicantes:'Equipo',
+  usuarios:'Administración', config:'Administración', auditoria:'Administración',
+  backup:'Administración',
+};
+
+async function cargarPerfiles(forzar){
+  if(perfilesCargados && !forzar) return;
+  try{
+    const r1 = await fetch(`${API_URL}?accion=roles`, {credentials:'same-origin'});
+    const d1 = await r1.json();
+    perfilesCargados = d1.roles || [];
+    const r2 = await fetch(`${API_URL}?accion=permisos`, {credentials:'same-origin'});
+    const d2 = await r2.json();
+    catalogoPermisos = d2.permisos || [];
+  }catch(e){
+    perfilesCargados = perfilesCargados || [];
+    catalogoPermisos = catalogoPermisos || [];
+  }
+}
+
+async function mostrarPerfiles(){
+  await cargarPerfiles(true);
+  const caja = document.getElementById('cajaDePerfiles');
+  if(caja) caja.innerHTML = bloqueDePerfiles();
+}
+
+function bloqueDePerfiles(){
+  if(!perfilesCargados){
+    cargarPerfiles().then(() => {
+      const c = document.getElementById('cajaDePerfiles');
+      if(c) c.innerHTML = bloqueDePerfiles();
+    });
+    return '<p class="hint">Cargando los perfiles…</p>';
+  }
+  if(!perfilesCargados.length){
+    return `<p class="hint">No se pudieron leer los perfiles. Esto solo funciona
+      con el panel servido por Laragon y con sesión de administrador.</p>`;
+  }
+
+  const filas = perfilesCargados.map(r => `<tr>
+    <td><b>${esc(r.nombre)}</b>
+      <br><span class="hint">${esc(r.clave)}</span>
+      ${r.protegido ? ' <span class="chip neutral">protegido</span>' : ''}</td>
+    <td>${esc(r.descripcion || '—')}</td>
+    <td style="text-align:right">${r.permisos.length}</td>
+    <td style="text-align:right">${r.usuarios}</td>
+    <td style="white-space:nowrap">
+      <button class="btn small secondary" onclick="editarPerfil('${esc(r.clave)}')">Editar</button>
+      ${r.protegido || r.usuarios > 0 ? ''
+        : `<button class="btn small danger" onclick="borrarPerfil('${esc(r.clave)}')">Borrar</button>`}
+    </td></tr>`).join('');
+
+  return `
+    <p class="hint" style="margin:0 0 10px">Un perfil es un juego de permisos.
+      Quien lo tenga ve en el panel <b>solo lo que ese perfil permite</b>: el
+      resto de las pestañas no aparecen. Si alguien reemplaza a otro —la de
+      admisión cubriendo caja en vacaciones— se le suman los dos perfiles.</p>
+    <div class="tablewrap"><table>
+      <tr><th>Perfil</th><th>Para qué es</th><th style="text-align:right">Permisos</th>
+          <th style="text-align:right">Personas</th><th></th></tr>
+      ${filas}</table></div>
+    <button class="btn secondary" style="margin-top:10px"
+      onclick="editarPerfil('')">+ Crear un perfil</button>
+    ${perfilEnEdicion ? formularioDePerfil() : ''}`;
+}
+
+function editarPerfil(clave){
+  const r = (perfilesCargados || []).find(x => x.clave === clave);
+  perfilEnEdicion = r
+    ? {clave:r.clave, nombre:r.nombre, descripcion:r.descripcion || '',
+       permisos:new Set(r.permisos), protegido:r.protegido, esNuevo:false}
+    : {clave:'', nombre:'', descripcion:'', permisos:new Set(),
+       protegido:false, esNuevo:true};
+  const c = document.getElementById('cajaDePerfiles');
+  if(c) c.innerHTML = bloqueDePerfiles();
+  const f = document.getElementById('formPerfil');
+  if(f) f.scrollIntoView({block:'center', behavior:'smooth'});
+}
+
+function marcarPermiso(clave, puesto){
+  if(!perfilEnEdicion) return;
+  if(puesto) perfilEnEdicion.permisos.add(clave);
+  else perfilEnEdicion.permisos.delete(clave);
+  const n = document.getElementById('cuentaPermisos');
+  if(n) n.textContent = perfilEnEdicion.permisos.size;
+}
+
+function campoDelPerfil(id, valor){
+  if(!perfilEnEdicion) return;
+  perfilEnEdicion[id] = valor;
+}
+
+function formularioDePerfil(){
+  const p = perfilEnEdicion;
+  const porModulo = {};
+  (catalogoPermisos || []).forEach(x => {
+    const g = NOMBRE_DEL_MODULO[x.modulo] || x.modulo;
+    (porModulo[g] = porModulo[g] || []).push(x.clave);
+  });
+
+  const grupos = Object.entries(porModulo).map(([grupo, claves]) => `
+    <div style="margin:10px 0">
+      <b style="font-size:13px">${esc(grupo)}</b>
+      ${claves.map(c => {
+        // Al administrador no se le pueden desmarcar sus llaves: el
+        // servidor se las devuelve igual, así que mejor no mentir acá.
+        const fijo = p.clave === 'admin'
+          && (c === 'usuarios.editar' || c === 'config.editar');
+        return `<label style="display:flex;gap:8px;align-items:flex-start;
+                              padding:4px 0;cursor:${fijo?'not-allowed':'pointer'}">
+          <input type="checkbox" ${p.permisos.has(c) || fijo ? 'checked' : ''}
+                 ${fijo ? 'disabled' : ''}
+                 onchange="marcarPermiso('${esc(c)}', this.checked)">
+          <span>${esc(QUE_HACE_EL_PERMISO[c] || c)}
+            <span class="hint"> · ${esc(c)}</span>
+            ${fijo ? '<span class="hint"> · no se puede quitar</span>' : ''}</span>
+        </label>`;
+      }).join('')}
+    </div>`).join('');
+
+  return `<div class="card" id="formPerfil" style="margin-top:14px;
+            border-left:4px solid var(--primary)">
+    <h3 style="margin-top:0">${p.esNuevo ? 'Crear un perfil' : 'Editar «' + esc(p.nombre) + '»'}</h3>
+    ${p.protegido ? `<p class="hint alert" style="margin:0 0 8px">Es el perfil
+      de administrador: se le puede cambiar el nombre y agregar permisos, pero
+      no quitarle los que le dejan administrar el sistema.</p>` : ''}
+    <div class="formgrid">
+      <div class="field"><label>Nombre</label>
+        <input id="pf_nombre" value="${esc(p.nombre)}"
+               oninput="campoDelPerfil('nombre', this.value)"
+               placeholder="Ej: Caja"></div>
+      <div class="field"><label>Identificador</label>
+        <input id="pf_clave" value="${esc(p.clave)}" ${p.esNuevo ? '' : 'disabled'}
+               oninput="campoDelPerfil('clave', this.value)"
+               placeholder="Ej: caja">
+        <p class="hint" style="margin-top:3px">${p.esNuevo
+          ? 'Letras, números y guion bajo. No se puede cambiar después.'
+          : 'No se cambia: hay cuentas apuntando a él.'}</p></div>
+      <div class="field" style="grid-column:1/-1"><label>Para qué es</label>
+        <input id="pf_desc" value="${esc(p.descripcion)}"
+               oninput="campoDelPerfil('descripcion', this.value)"
+               placeholder="Ej: cobra y registra pagos, no entra a la historia clínica"></div>
+    </div>
+
+    <p style="margin:12px 0 0"><b>¿Qué puede hacer?</b>
+      <span class="hint">Marcados: <b id="cuentaPermisos">${p.permisos.size}</b></span></p>
+    ${grupos}
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+      <button class="btn" onclick="guardarPerfil()">Guardar el perfil</button>
+      <button class="btn secondary" onclick="cancelarPerfil()">Cancelar</button>
+    </div>
+  </div>`;
+}
+
+function cancelarPerfil(){
+  perfilEnEdicion = null;
+  const c = document.getElementById('cajaDePerfiles');
+  if(c) c.innerHTML = bloqueDePerfiles();
+}
+
+async function guardarPerfil(){
+  const p = perfilEnEdicion;
+  if(!p) return;
+  if(!p.nombre.trim()){ alert('Ponle un nombre al perfil.'); return; }
+  if(!p.clave.trim()){ alert('Ponle un identificador, en minúsculas y sin espacios.'); return; }
+  if(!p.permisos.size && !confirm('Este perfil no tiene ningún permiso marcado.\n\n'
+    + 'Quien lo tenga va a entrar y no va a ver nada más que el resumen.\n\n¿Lo guardo igual?')) return;
+
+  try{
+    const r = await fetch(`${API_URL}?accion=guardar_perfil`, {
+      method:'POST', credentials:'same-origin',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({clave:p.clave.trim().toLowerCase(), nombre:p.nombre.trim(),
+                            descripcion:p.descripcion.trim(),
+                            permisos:[...p.permisos]}),
+    });
+    const d = await r.json();
+    if(!d.ok) throw new Error(d.error || 'No se pudo guardar.');
+    perfilesCargados = d.roles || perfilesCargados;
+    perfilEnEdicion = null;
+    showToast('Perfil guardado.');
+    const c = document.getElementById('cajaDePerfiles');
+    if(c) c.innerHTML = bloqueDePerfiles();
+  }catch(e){
+    alert(e.message || 'No se pudo guardar el perfil.');
+  }
+}
+
+async function borrarPerfil(clave){
+  const r = (perfilesCargados || []).find(x => x.clave === clave);
+  if(!r) return;
+  if(!confirm(`Borrar el perfil «${r.nombre}».\n\n`
+    + 'No borra a nadie ni toca sus datos: solo desaparece este juego de '
+    + 'permisos.\n\n¿Lo borro?')) return;
+  try{
+    const res = await fetch(`${API_URL}?accion=borrar_perfil`, {
+      method:'POST', credentials:'same-origin',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({clave}),
+    });
+    const d = await res.json();
+    if(!d.ok) throw new Error(d.error || 'No se pudo borrar.');
+    perfilesCargados = d.roles || perfilesCargados;
+    showToast('Perfil borrado.');
+    const c = document.getElementById('cajaDePerfiles');
+    if(c) c.innerHTML = bloqueDePerfiles();
+  }catch(e){
+    alert(e.message || 'No se pudo borrar el perfil.');
+  }
+}
+
 function viewAccesos(){
   if(STORAGE_MODE !== 'api'){
     return `<div class="sectiontitle"><h2>Accesos al sistema</h2></div>
@@ -9478,14 +10512,8 @@ function viewAccesos(){
     </div>`:''}
 
     <div class="card">
-      <h3 style="margin-top:0">Qué puede hacer cada rol</h3>
-      <div class="tablewrap"><table>
-        <tr><th>Rol</th><th>Alcance</th></tr>
-        ${rolesDelSistema.length
-          ? rolesDelSistema.map(r=>`<tr><td><b>${esc(r.nombre)}</b></td>
-              <td>${esc(ROL_EXPLICADO[r.clave]||r.descripcion||'')}</td></tr>`).join('')
-          : '<tr><td colspan="2"><span class="hint">Cargando…</span></td></tr>'}
-      </table></div>
+      <h3 style="margin-top:0">Perfiles y permisos</h3>
+      <div id="cajaDePerfiles">${bloqueDePerfiles()}</div>
     </div>
 
     <div class="card" style="background:var(--surface-alt)">
@@ -9886,6 +10914,35 @@ function cajaInvitacion(info){
   </div>`;
 }
 
+/* Sacar de la lista una invitación que ya no sirve.
+
+   No es lo mismo que anular. Anular cierra un enlace que todavía abre:
+   se usa cuando se mandó a quien no era. Esto otro quita de la pantalla
+   lo que ya terminó y no tiene nada que hacer ahí — la que venció sin
+   usarse, la anulada, y la que se usó para una prueba cuya ficha se
+   borró después.
+
+   La de alguien que sigue registrado NO se puede quitar, y eso lo
+   decide el servidor: esa invitación dice cómo entró esa persona al
+   centro, y eso no es ruido de pantalla. */
+async function quitarInvitacion(id){
+  if(!confirm('Quitar esta invitación de la lista.\n\n'
+    + 'No borra ninguna ficha ni ningún dato del centro: solo saca de la '
+    + 'pantalla una invitación que ya terminó.\n\n¿La quito?')) return;
+  try{
+    const r = await fetch(`${API_URL}?accion=borrar_invitacion`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      credentials:'same-origin', body: JSON.stringify({id})
+    });
+    const j = await r.json();
+    if(!j.ok){ showToast(j.error || 'No se pudo quitar.', false); return; }
+    DB.practicanteInvitaciones = await getColl('practicanteInvitaciones', []);
+    renderPanel();
+    showToast('Invitación quitada de la lista.');
+  }catch(e){
+    showToast('No se pudo conectar con el servidor.', false);
+  }
+}
 function pintarInvitaciones(){
   const caja = document.getElementById('pi_lista');
   if(caja) caja.innerHTML = bloqueInvitaciones();
@@ -9899,16 +10956,25 @@ function bloqueInvitaciones(){
     const e = ESTADO_INVITACION[i.estado] || ESTADO_INVITACION.enviada;
     const quien = i.practicante || i.referencia || '—';
     const contacto = [i.telefono, i.email].filter(Boolean).join(' · ');
+    const borrada = i.fichaEliminada
+      ? `<span class="sub" style="color:var(--alert)">su ficha fue eliminada</span>` : '';
     const cuando = i.usadaEn ? `Se registró el ${String(i.usadaEn).slice(0,10)}`
                  : i.abiertaEn ? `La abrió el ${String(i.abiertaEn).slice(0,10)}`
                  : i.expiraEn ? `Vence el ${String(i.expiraEn).slice(0,10)}` : '';
     const puedeAnular = i.estado==='enviada' || i.estado==='abierta';
+    // Se puede sacar de la lista la que ya terminó: la vencida sin usar,
+    // la anulada, y la que se usó para una prueba cuya ficha se borró.
+    const puedeQuitar = i.fichaEliminada || i.estado==='anulada'
+                     || (i.estado==='vencida' && !i.practicanteId);
     return `<tr>
       <td><b>${esc(quien)}</b>${contacto? `<span class="sub">${esc(contacto)}</span>`:''}</td>
       <td><span class="chip ${e.clase}">${e.texto}</span></td>
-      <td>${esc(cuando)}${i.aperturas>1? `<span class="sub">la abrió ${i.aperturas} veces</span>`:''}</td>
+      <td>${esc(cuando)}${i.aperturas>1? `<span class="sub">la abrió ${i.aperturas} veces</span>`:''}${borrada}</td>
       <td style="white-space:nowrap">${puedeAnular
         ? `<button class="btn small danger" onclick="anularInvitacion('${i.id}')">Anular</button>`
+        : puedeQuitar
+        ? `<button class="btn small secondary" title="Esta invitación ya no sirve para nada"
+            onclick="quitarInvitacion('${i.id}')">Quitar de la lista</button>`
         : ''}</td>
     </tr>`;
   }).join('');
@@ -9942,6 +11008,59 @@ async function anularInvitacion(id){
   }catch(e){
     showToast('No se pudo conectar con el servidor.', false);
   }
+}
+
+/* ---- Cuando la pantalla se contradice sola -------------------------
+
+   Pasó de verdad, y costó un registro: una invitación decía "Registrado ·
+   se registró el 30 de octubre" y, tres centímetros más abajo, la lista
+   decía "Aún no hay practicantes registrados". Luis dio por hecho que el
+   registro había fallado y borró la ficha. Treinta y cuatro segundos
+   entre que se creó y que se eliminó.
+
+   Ninguna de las dos frases era mentira: el practicante se había
+   registrado desde el enlace público, fuera del panel, y esta ventana
+   —abierta desde antes, sin barra de recargar— seguía con su lista
+   vacía. Pero juntas se leían como un error del sistema.
+
+   La invitación guarda el id del practicante que la usó, así que el
+   desfase se puede detectar: si hay una invitación usada cuyo
+   practicante no está en la lista cargada, esta ventana está vieja. Y
+   entonces hay que decirlo, en vez de afirmar que no hay nadie.       */
+function invitacionesSinSuFicha(){
+  const lista = DB.practicanteInvitaciones || [];
+  const ids = new Set((DB.practicantes || []).map(p => p.id));
+  // Si el servidor dice que la ficha fue eliminada, no es un desfase de
+  // esta ventana: no hay nada que actualizar. Insistir ahí sería pedirle
+  // a alguien que pulse un botón que no va a cambiar nada.
+  return lista.filter(i => i.practicanteId && !i.fichaEliminada
+                        && !ids.has(i.practicanteId));
+}
+
+/* Las que se registraron y después se borraron. No es un error ni un
+   pendiente: es un dato del historial, y así se cuenta. */
+function invitacionesConFichaBorrada(){
+  return (DB.practicanteInvitaciones || []).filter(i => i.fichaEliminada);
+}
+
+/* El aviso, para poner donde se vería la contradicción. */
+function avisoDeFichasQueNoEstan(){
+  const faltan = invitacionesSinSuFicha();
+  if(!faltan.length) return '';
+  const quienes = faltan.map(i => esc(i.practicante || i.referencia || 'alguien'))
+    .join(', ');
+  return `<div class="card" style="border-left:4px solid var(--alert);margin-bottom:12px">
+    <b>Hay ${faltan.length === 1 ? 'un registro' : faltan.length + ' registros'} que
+      esta ventana no tiene</b>
+    <p class="hint" style="margin:4px 0 0">${quienes} ${faltan.length === 1
+      ? 'usó su invitación y su ficha ya existe' : 'usaron su invitación y sus fichas ya existen'},
+      pero esta pantalla se abrió antes y todavía no ${faltan.length === 1 ? 'la' : 'las'} tiene.</p>
+    <p class="hint" style="margin:4px 0 0">Pulsa <b>Actualizar</b> arriba.
+      Si después de actualizar sigue sin aparecer, es que
+      ${faltan.length === 1 ? 'su ficha fue eliminada' : 'sus fichas fueron eliminadas'}.</p>
+    <button class="btn small" style="margin-top:8px"
+      onclick="refrescarTodo(this)">Actualizar ahora</button>
+  </div>`;
 }
 
 function viewPracticantes(){
@@ -10067,9 +11186,17 @@ function viewPracticantes(){
       <button class="btn" onclick="savePract()">Guardar practicante</button>
       <button class="btn secondary" onclick="toggleForm('practForm')">Cancelar</button>
     </div>
+    ${avisoDeFichasQueNoEstan()}
     <div class="tablewrap">
       ${DB.practicantes.length? `<table><tr><th>Practicante</th><th>Horario</th><th>Contacto</th><th>Producción</th><th>Cumple</th><th></th></tr>${rows}</table>`
-      : `<div class="empty">Aún no hay practicantes registrados.</div>`}
+      : (invitacionesSinSuFicha().length
+          ? `<div class="empty">La lista de esta ventana está vacía, pero arriba
+             dice que alguien ya se registró. Pulsa Actualizar.</div>`
+          : invitacionesConFichaBorrada().length
+          ? `<div class="empty">Aún no hay practicantes registrados.<br>
+             <span class="hint">${invitacionesConFichaBorrada().length} se registró
+             con su invitación y su ficha fue eliminada después.</span></div>`
+          : `<div class="empty">Aún no hay practicantes registrados.</div>`)}
     </div>
     <div id="pi_lista">${STORAGE_MODE==='api'? bloqueInvitaciones() : ''}</div>
     <input type="file" id="practFileInput" style="display:none" onchange="handlePractFileUpload(event)">
@@ -11290,6 +12417,7 @@ function openCenterInfoModal(){
   document.getElementById('ci_name').value = DB.centerInfo.name||'';
   document.getElementById('ci_address').value = DB.centerInfo.address||'';
   document.getElementById('ci_phone').value = DB.centerInfo.phone||'';
+  document.getElementById('ci_email').value = DB.centerInfo.email||'';
   document.getElementById('ci_ruc').value = DB.centerInfo.ruc||'';
   document.getElementById('ci_nombreComercial').value = DB.centerInfo.nombreComercial||'';
   document.getElementById('ci_slogan').value = DB.centerInfo.slogan||'';
@@ -11572,6 +12700,7 @@ async function saveCenterInfo(){
     name: document.getElementById('ci_name').value.trim() || 'Centro Psicológico',
     address: document.getElementById('ci_address').value.trim(),
     phone: document.getElementById('ci_phone').value.trim(),
+    email: document.getElementById('ci_email').value.trim(),
     ruc: document.getElementById('ci_ruc').value.trim(),
     nombreComercial: document.getElementById('ci_nombreComercial').value.trim(),
     slogan: document.getElementById('ci_slogan').value.trim(),
@@ -12595,6 +13724,7 @@ function viewAlertas(){
 
   return `
     <div class="sectiontitle"><h2>Alertas y avisos</h2></div>
+    ${avisoDeHabilitacion()}
     ${avisoDeCopias()}
     ${bloqueAvanceDePaquetes()}
     <p class="hint">Estos botones abren WhatsApp o tu correo con el mensaje ya redactado — solo confirmas el envío. No hay envío 100% automático sin intervención humana porque este panel no tiene un servidor propio de mensajería; esta es la forma más práctica de lograrlo sin contratar un servicio externo de pago. <b>El número/correo al que se enviará aparece escrito en el propio botón</b> — verifícalo antes de hacer clic; si dice "Tel. inválido" o no aparece botón, revisa el dato en la ficha del paciente o profesional.</p>
@@ -13968,6 +15098,7 @@ function membreteDoc(paraImpresion){
         ${esc(nombre)}</div>
       ${contacto? `<div style="font-size:8pt;color:${MARCA_DOC.gris};margin-top:2pt">${esc(contacto)}</div>`:''}
       ${ci.address? `<div style="font-size:8pt;color:${MARCA_DOC.gris}">${esc(ci.address)}</div>`:''}
+      ${ci.email? `<div style="font-size:8pt;color:${MARCA_DOC.gris}">${esc(ci.email)}</div>`:''}
     </td>
     ${lemaAnio? `<td style="border:none;vertical-align:middle;padding:0 0 0 10pt;
       width:150pt;text-align:right;font-size:8pt;font-style:italic;color:${MARCA_DOC.gris};line-height:1.25">
@@ -14713,7 +15844,7 @@ function cuerpoFichaSeguimiento(pac){
   ${tresFirmasDoc(pac, prof)}
   <p style="margin:14pt 0 0;text-align:center;font-size:9pt;font-style:italic;
             color:${MARCA_DOC.principal}">
-    Cada paso cuenta, cada color suma esperanza.</p>
+    ${esc((DB.centerInfo||{}).slogan || 'Cada paso cuenta, cada color suma esperanza.')}</p>
   <p style="margin:6pt 0 0;font-size:8pt;color:${MARCA_DOC.gris};text-align:center">
     Documento confidencial · Ley N.° 29733 (Protección de Datos Personales) y
     Ley N.° 30947 (Salud Mental)</p>`;
@@ -14749,6 +15880,170 @@ function tresFirmasDoc(pac, prof){
         'DNI: ' + esc(ci.titular_documento || ''))}
    </tr>
   </table>`;
+}
+
+/* ============ PASAR UN PACIENTE A OTRO PROFESIONAL ============
+
+   El caso que lo pidió: una psicóloga deja de trabajar en el centro y sus
+   pacientes quedan a mitad de tratamiento — uno con un paquete de seis y
+   una sesión por usar. Hay que pasarlo a otra, y que no se pierda nada.
+
+   Cambiar el profesional en la ficha ya se podía, pero no alcanzaba: las
+   **citas futuras seguían apuntando a quien se fue**. La agenda mostraba
+   sesiones de alguien que ya no viene, y el día de la cita nadie la
+   atendía. Por eso el traspaso mueve las dos cosas a la vez y comprueba
+   antes que el profesional nuevo tenga libres esas horas.
+
+   Lo que NO se toca, a propósito:
+
+     · las citas ya atendidas — las atendió quien las atendió, y la
+       historia clínica dice quién firmó cada sesión;
+     · el paquete y lo pagado — son del paciente, no del profesional. El
+       que tenía cinco de seis sigue teniendo cinco de seis.          */
+
+function abrirTraspaso(patientId){
+  const p = DB.patients.find(x => x.id === patientId);
+  if(!p) return;
+  const actual = DB.professionals.find(x => x.id === p.professionalId);
+  const otros = DB.professionals.filter(x =>
+    x.active !== false && x.id !== p.professionalId);
+
+  if(!otros.length){
+    alert('No hay otro profesional activo al que pasarle el paciente.\n\n'
+        + 'Da de alta al profesional nuevo en la pestaña Profesionales y vuelve.');
+    return;
+  }
+
+  const futuras = citasPorAtender(p.id);
+  const paq = p.billingType === 'Individual' ? null : paqueteDe(p);
+
+  const caja = document.getElementById('accesoContent');
+  document.getElementById('accesoModal').classList.add('open');
+  caja.innerHTML = `
+    <h2 style="margin-top:0">Pasar a ${esc(p.name)} a otro profesional</h2>
+    <p class="hint">Atiende <b>${esc((actual || {}).name || 'nadie asignado')}</b>.
+      ${paq && paq.total ? `Tiene un paquete de ${paq.total} sesiones y lleva
+        ${paq.usadas}: eso no se toca, es del paciente.` : ''}</p>
+
+    <div class="field" style="margin-top:12px">
+      <label>¿A quién pasa?</label>
+      <select id="tr_prof" onchange="pintarChoquesDelTraspaso('${p.id}')">
+        <option value="">— elegir —</option>
+        ${otros.map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join('')}
+      </select>
+    </div>
+
+    ${futuras.length ? `
+      <div class="field" style="margin-top:10px">
+        <label>Sus ${futuras.length} cita(s) por atender</label>
+        <select id="tr_citas" onchange="pintarChoquesDelTraspaso('${p.id}')">
+          <option value="si">Pasarlas también al profesional nuevo</option>
+          <option value="no">Dejarlas con quien está (las reagendo después)</option>
+        </select>
+        <p class="hint" style="margin-top:3px">Si las dejas, van a quedar en la
+          agenda de alguien que quizá ya no viene.</p>
+      </div>
+      <div class="hint" style="margin-top:6px">${futuras.map(a =>
+        `${esc(fmtFechaCorta(a.date))} ${esc(a.time || '')}`).join(' · ')}</div>
+    ` : `<p class="hint" style="margin-top:10px">No tiene citas por atender.</p>`}
+
+    <div id="tr_choques"></div>
+
+    <div class="field" style="margin-top:10px">
+      <label>¿Por qué se pasa? (queda anotado)</label>
+      <input id="tr_motivo" placeholder="Ej: la profesional dejó el centro">
+    </div>
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+      <button class="btn" onclick="confirmarTraspaso('${p.id}')">Pasar el paciente</button>
+      <button class="btn secondary"
+        onclick="document.getElementById('accesoModal').classList.remove('open')">Cancelar</button>
+    </div>`;
+}
+
+/* Las que todavía no se atendieron: son las únicas que se mueven. */
+function citasPorAtender(patientId){
+  const hoy = todayISO();
+  return DB.appointments
+    .filter(a => a.patientId === patientId
+      && a.status !== 'Completada' && a.status !== 'Cancelada'
+      && a.date >= hoy)
+    .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+}
+
+/* Antes de mover nada: ¿el profesional nuevo tiene esas horas libres?
+   Mover una cita encima de otra deja a dos pacientes citados a la misma
+   hora con la misma persona, y eso se descubre el día de la cita. */
+function pintarChoquesDelTraspaso(patientId){
+  const caja = document.getElementById('tr_choques');
+  if(!caja) return;
+  const destino = (document.getElementById('tr_prof') || {}).value || '';
+  const mover = ((document.getElementById('tr_citas') || {}).value || 'si') === 'si';
+  if(!destino || !mover){ caja.innerHTML = ''; return; }
+
+  const choques = citasPorAtender(patientId)
+    .map(a => ({a, c: conflictosDeCita({...a, professionalId: destino})
+                     .filter(x => /ya tiene cita/.test(x))}))
+    .filter(x => x.c.length);
+
+  caja.innerHTML = choques.length
+    ? `<p class="hint alert" style="margin-top:10px"><b>Ojo:</b> el profesional
+       nuevo ya tiene ocupadas ${choques.length} de esas horas:<br>${
+       choques.map(x => `${esc(fmtFechaCorta(x.a.date))} ${esc(x.a.time)}`).join(' · ')
+       }.<br>Se pasan igual, pero hay que reagendarlas.</p>`
+    : `<p class="hint" style="margin-top:10px">El profesional nuevo tiene libres
+       todas esas horas.</p>`;
+}
+
+async function confirmarTraspaso(patientId){
+  const p = DB.patients.find(x => x.id === patientId);
+  const destino = (document.getElementById('tr_prof') || {}).value || '';
+  if(!p || !destino){ alert('Elige a quién le pasas el paciente.'); return; }
+
+  const nuevo = DB.professionals.find(x => x.id === destino) || {};
+  const anterior = DB.professionals.find(x => x.id === p.professionalId) || {};
+  const mover = ((document.getElementById('tr_citas') || {}).value || 'si') === 'si';
+  const motivo = ((document.getElementById('tr_motivo') || {}).value || '').trim();
+  const futuras = mover ? citasPorAtender(patientId) : [];
+
+  if(!confirm(`Pasar a ${p.name} de ${anterior.name || 'nadie'} a ${nuevo.name}.\n\n`
+    + (futuras.length ? `Se mueven también sus ${futuras.length} cita(s) por atender.\n`
+                      : 'Sus citas por atender NO se mueven.\n')
+    + 'Las sesiones ya atendidas y el paquete no se tocan.\n\n¿Lo paso?')) return;
+
+  DB.patients = DB.patients.map(x =>
+    x.id === patientId ? {...x, professionalId: destino} : x);
+  const ok = await setColl('patients', DB.patients);
+  if(!ok){ alert('No se pudo guardar. Revisa la conexión.'); return; }
+
+  if(futuras.length){
+    const ids = new Set(futuras.map(a => a.id));
+    DB.appointments = DB.appointments.map(a =>
+      ids.has(a.id) ? {...a, professionalId: destino} : a);
+    const ok2 = await setColl('appointments', DB.appointments);
+    if(!ok2){
+      alert('El paciente se pasó, pero las citas no. Vuelve a intentarlo con las citas.');
+      renderPanel();
+      return;
+    }
+  }
+
+  // Queda escrito en su historia: dentro de un año, "¿por qué cambió de
+  // psicóloga?" es una pregunta que se hace y que nadie sabe contestar.
+  if(currentHistoryPatientId === patientId && currentHistoriaData){
+    currentHistoriaData.evolucion = currentHistoriaData.evolucion || [];
+    currentHistoriaData.evolucion.push({
+      id: uid(), fecha: todayISO(),
+      objetivo: `Cambio de profesional tratante: de ${anterior.name || '—'} `
+              + `a ${nuevo.name}.${motivo ? ' Motivo: ' + motivo : ''}`,
+    });
+    await setColl('historia_' + patientId, currentHistoriaData);
+  }
+
+  document.getElementById('accesoModal').classList.remove('open');
+  showToast(`${p.name} ahora lo atiende ${nuevo.name}`
+    + (futuras.length ? `, con sus ${futuras.length} cita(s).` : '.'));
+  renderPanel();
 }
 
 /* Qué documentos se le pueden emitir a este paciente. */
@@ -17478,12 +18773,621 @@ function exportTallerParticipantsCSV(){
 /* ===================== REPORTES =====================
    Los reportes que antes vivían dentro de otras pestañas se juntan aquí, para que
    generar un reporte no obligue a recordar en qué sección estaba escondido. */
+/* ============ CÓMO VA CADA PACIENTE ============
+
+   Lo que antes había que armar mirando cuatro pestañas: cuántas sesiones
+   lleva del paquete, cuándo vino la última vez, cuándo vuelve, cuánto
+   debe y si tiene informe pendiente.
+
+   Se busca por nombre o por DNI porque así es como pregunta la gente: la
+   mamá llama y dice su número de documento, no el nombre completo del
+   hijo como está escrito en la ficha.
+
+   Y se puede mandar. A tres destinatarios distintos, porque a cada uno le
+   corresponde algo distinto:
+
+     · a la psicóloga le va el estado clínico y el avance del paquete;
+     · a la familia le va lo suyo, sin diagnósticos — un detalle clínico
+       no viaja por WhatsApp;
+     · y el de cobro va solo con el saldo, nunca con el total, que es la
+       regla de la casa desde el principio.                            */
+
+let filtroReportePacientes = '';
+let pacienteDelReporte = '';
+
+function fijarFiltroReporte(valor){
+  filtroReportePacientes = valor;
+  const caja = document.getElementById('repPacientesCaja');
+  if(caja) caja.innerHTML = cuerpoDelReportePacientes();
+}
+
+function verEnElReporte(id){
+  pacienteDelReporte = (pacienteDelReporte === id) ? '' : id;
+  const caja = document.getElementById('repPacientesCaja');
+  if(caja) caja.innerHTML = cuerpoDelReportePacientes();
+}
+
+/* Un paciente, resumido. Todo sale de lo que ya está registrado: no hay
+   ningún número escrito a mano acá. */
+function comoVaElPaciente(p){
+  const paq = p.billingType === 'Individual' ? null : paqueteDe(p);
+  const conPaquete = !!paq && paq.total > 0;
+  const bal = patientBalance(conPaquete ? paq.titular : p);
+  const atendidas = conPaquete ? paq.usadas : sesionesAtendidas(p);
+
+  const suyas = a => a.status === 'Completada'
+    && (a.patientId === p.id || participantesDeCita(a).includes(p.id));
+  const hechas = DB.appointments.filter(suyas).map(a => a.date).sort();
+  const hoy = todayISO();
+  const proxima = DB.appointments
+    .filter(a => (a.patientId === p.id || participantesDeCita(a).includes(p.id))
+      && a.date >= hoy && a.status !== 'Cancelada' && a.status !== 'Completada')
+    .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))[0] || null;
+
+  const lista = paquetesDe(p);
+  const vigente = lista.length ? lista[lista.length - 1] : null;
+
+  return {
+    paciente: p, paq, conPaquete, bal, atendidas,
+    total: conPaquete ? paq.total : 0,
+    restantes: conPaquete ? paq.restantes : 0,
+    ultima: hechas.length ? hechas[hechas.length - 1] : '',
+    diasSinVenir: hechas.length ? diasEntre(hechas[hechas.length - 1], hoy) : null,
+    proxima,
+    paquetes: lista.length,
+    concepto: (vigente || {}).concepto || '',
+    saldo: bal.saldo,
+    informe: p.reportStatus,
+    informeVence: p.reportDueDate || '',
+    profesional: (DB.professionals.find(x => x.id === p.professionalId) || {}).name || '',
+  };
+}
+
+/* Días entre dos fechas sueltas. Armadas con sus tres números, que si no
+   el navegador las lee como medianoche UTC y en Perú salen un día antes. */
+function diasEntre(desde, hasta){
+  const d = (s) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s||''));
+    return m ? new Date(+m[1], +m[2]-1, +m[3]) : null; };
+  const a = d(desde), b = d(hasta);
+  if(!a || !b) return null;
+  return Math.round((b - a) / 86400000);
+}
+
+/* A quién corresponde este paciente, según lo buscado. Se compara el
+   nombre sin tildes y el documento solo por sus dígitos: nadie escribe
+   el DNI con guiones, pero puede estar guardado así. */
+function pacientesDelReporte(){
+  const q = (filtroReportePacientes || '').trim();
+  const activos = DB.patients.filter(p => p.active !== false);
+  if(!q) return activos;
+  const digitos = q.replace(/\D/g, '');
+  return activos.filter(p => {
+    if(pacienteCoincide(p, q)) return true;
+    if(digitos.length >= 4){
+      const doc = String(p.dni || p.document || '').replace(/\D/g, '');
+      if(doc.includes(digitos)) return true;
+      if((p.guardians || []).some(g =>
+        String(g.dni || '').replace(/\D/g, '').includes(digitos))) return true;
+    }
+    return false;
+  });
+}
+
+function viewReportePacientes(){
+  return `<div class="card" style="margin-bottom:18px">
+    <h3 style="margin-top:0">Cómo va cada paciente</h3>
+    <p class="hint" style="margin:0 0 10px">Sus sesiones, su paquete, cuánto debe
+      y cuándo vuelve. Búscalo por nombre o por DNI —el suyo o el del apoderado—
+      y mándaselo a quien corresponda.</p>
+    <input id="repBuscar" type="search" value="${esc(filtroReportePacientes)}"
+      placeholder="🔍 Nombre o DNI…" style="width:100%;max-width:420px"
+      oninput="fijarFiltroReporte(this.value)">
+    <div id="repPacientesCaja" style="margin-top:12px">${cuerpoDelReportePacientes()}</div>
+  </div>`;
+}
+
+function cuerpoDelReportePacientes(){
+  const lista = pacientesDelReporte();
+  if(!lista.length){
+    return `<div class="empty">Ningún paciente coincide con
+      «${esc(filtroReportePacientes)}».</div>`;
+  }
+
+  const filas = lista.map(p => {
+    const v = comoVaElPaciente(p);
+    const abierto = pacienteDelReporte === p.id;
+    const pct = v.total ? Math.min(100, Math.round(v.atendidas * 100 / v.total)) : 0;
+
+    const chipSesiones = v.conPaquete
+      ? `<b>${v.atendidas}</b> de ${v.total}`
+      : `<b>${v.atendidas}</b> sesión(es)`;
+    const chipDeuda = v.saldo > 0
+      ? `<span class="chip alert">debe ${fmtMoney(v.saldo)}</span>`
+      : `<span class="chip ok">al día</span>`;
+    const chipInforme = v.informe === 'Pendiente'
+      ? `<span class="chip warn">informe pendiente</span>` : '';
+    const chipQuieto = (v.diasSinVenir !== null && v.diasSinVenir > 30)
+      ? `<span class="chip alert">${v.diasSinVenir} días sin venir</span>` : '';
+
+    return `<div style="border-left:3px solid ${abierto ? 'var(--primary)' : 'var(--line)'};
+                        padding:8px 0 10px 12px;margin:0 0 10px">
+      <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;
+                  align-items:baseline;cursor:pointer" onclick="verEnElReporte('${p.id}')">
+        <div>
+          <b>${esc(p.name)}</b>
+          ${p.dni || p.document ? `<span class="hint"> · ${esc(p.dni || p.document)}</span>` : ''}
+          ${v.concepto ? `<span class="hint"> · ${esc(v.concepto)}</span>` : ''}
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+          <span>${chipSesiones}</span>${chipDeuda}${chipInforme}${chipQuieto}
+        </div>
+      </div>
+      ${v.conPaquete ? `<div class="barwrap" style="margin:5px 0 4px">
+        <div class="bar ${pct < 100 ? '' : 'alertbar'}" style="width:${pct}%"></div></div>` : ''}
+      <div class="hint">
+        ${v.ultima ? `Última sesión: <b>${esc(fmtFechaCorta(v.ultima))}</b>`
+                   : 'Todavía no tiene sesiones atendidas'}
+        ${v.proxima ? ` · Vuelve el <b>${esc(fmtFechaCorta(v.proxima.date))}</b>
+          a las ${esc(v.proxima.time || '')}` : ' · <b>sin próxima cita</b>'}
+        ${v.profesional ? ` · ${esc(v.profesional)}` : ''}
+      </div>
+      ${abierto ? detalleDelReporte(p, v) : ''}
+    </div>`;
+  }).join('');
+
+  return `<p class="hint" style="margin:0 0 8px">${lista.length} paciente${
+    lista.length === 1 ? '' : 's'}. Toca uno para ver el detalle y mandarlo.</p>${filas}`;
+}
+
+function detalleDelReporte(p, v){
+  const sesiones = v.paq ? sesionesDelPaquete(p, 'vigente') : [];
+  return `<div class="card" style="margin:8px 0 0">
+    <div style="display:flex;gap:18px;flex-wrap:wrap">
+      <div><span class="sub">Paquetes</span><br><b>${v.paquetes}</b></div>
+      <div><span class="sub">Atendidas</span><br><b>${v.atendidas}</b>${
+        v.conPaquete ? ` <span class="hint">de ${v.total}</span>` : ''}</div>
+      ${v.conPaquete ? `<div><span class="sub">Le quedan</span><br>
+        <b>${v.restantes}</b></div>` : ''}
+      <div><span class="sub">Pagado</span><br><b>${fmtMoney(v.bal.paid)}</b></div>
+      <div><span class="sub">Saldo</span><br>
+        <b style="color:${v.saldo > 0 ? 'var(--alert)' : 'var(--ok)'}">${
+          v.saldo > 0 ? fmtMoney(v.saldo) : 'al día'}</b></div>
+    </div>
+    ${sesiones.length ? `<p class="hint" style="margin:8px 0 0">Vino el ${
+      listaDeDiasCorta(sesiones.map(a => a.date))}</p>` : ''}
+    ${v.informe === 'Pendiente' ? `<p class="hint alert" style="margin:6px 0 0">
+      Informe pendiente${v.informeVence ? `, vence el ${esc(fmtFechaCorta(v.informeVence))}` : ''}.</p>` : ''}
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+      <button class="btn small" onclick="enviarReporteDe('${p.id}','profesional')">
+        👩‍⚕️ Enviar a la psicóloga</button>
+      <button class="btn small secondary" onclick="enviarReporteDe('${p.id}','familia')">
+        👨‍👩‍👦 Enviar a la familia</button>
+      ${v.saldo > 0 ? `<button class="btn small secondary"
+        onclick="enviarReporteDe('${p.id}','cobro')">💰 Recordar el saldo</button>` : ''}
+      <button class="btn small secondary" onclick="editPatient('${p.id}')">Abrir su ficha</button>
+    </div>
+  </div>`;
+}
+
+/* ---- Los tres mensajes ---------------------------------------------
+   No es el mismo texto con otro encabezado: a cada uno le corresponde
+   una cosa distinta, y lo que sobra en uno es lo que no debe ir. */
+function textoDelReporte(p, para){
+  const v = comoVaElPaciente(p);
+  const centro = nombreDelCentro();
+  const sesiones = v.paq ? sesionesDelPaquete(p, 'vigente') : [];
+
+  if(para === 'cobro'){
+    // Solo el saldo. Nunca el total: ya lo pagado está pagado.
+    let t = `Hola, le escribimos del ${centro}.\n\n`;
+    t += `Sobre la atención de ${p.name}:\n`;
+    t += `Saldo pendiente: ${fmtMoney(v.saldo)}\n`;
+    if(v.conPaquete) t += `Paquete de ${v.total} sesiones · lleva ${v.atendidas}\n`;
+    const medios = ((DB.centerInfo || {}).paymentMethods || '').trim();
+    if(medios) t += `\nPuede pagar por:\n${medios}\n`;
+    return t + `\nGracias.`;
+  }
+
+  if(para === 'familia'){
+    // Sin diagnósticos ni contenido de sesión: eso es historia clínica.
+    const {greetName, mentionName} = greetingFor(p);
+    let t = `Hola ${greetName}, le escribimos del ${centro}.\n\n`;
+    t += `Cómo va${mentionName ? ' ' + mentionName : ''}:\n`;
+    if(v.conPaquete){
+      t += `· Paquete de ${v.total} sesiones${v.concepto ? ' de ' + v.concepto.toLowerCase() : ''}\n`;
+      t += `· Sesiones atendidas: ${v.atendidas} de ${v.total}\n`;
+      t += `· Le quedan ${v.restantes}\n`;
+    }else{
+      t += `· Sesiones atendidas: ${v.atendidas}\n`;
+    }
+    if(v.ultima) t += `· Última sesión: ${fechaEnPalabras(v.ultima)}\n`;
+    if(v.proxima) t += `· Próxima cita: ${fechaEnPalabras(v.proxima.date)} a las ${v.proxima.time}\n`;
+    else t += `· Sin próxima cita agendada\n`;
+    if(v.saldo > 0) t += `· Saldo pendiente: ${fmtMoney(v.saldo)}\n`;
+    return t + `\nCualquier consulta, con gusto la atendemos.`;
+  }
+
+  // Para la psicóloga: lo que necesita antes de entrar a la sesión.
+  let t = `${p.name}${p.dni ? ` · DNI ${p.dni}` : ''}\n${centro}\n\n`;
+  if(v.conPaquete){
+    t += `Paquete${v.concepto ? ' de ' + v.concepto.toLowerCase() : ''}: `
+       + `${v.atendidas} de ${v.total} · le quedan ${v.restantes}\n`;
+  }else{
+    t += `Se atiende sesión por sesión · ${v.atendidas} atendidas\n`;
+  }
+  t += `Paquetes en total: ${v.paquetes}\n`;
+  if(v.ultima){
+    t += `Última sesión: ${fechaEnPalabras(v.ultima)}`;
+    if(v.diasSinVenir !== null) t += ` (hace ${v.diasSinVenir} días)`;
+    t += '\n';
+  }
+  t += v.proxima
+    ? `Próxima cita: ${fechaEnPalabras(v.proxima.date)} a las ${v.proxima.time}\n`
+    : `Próxima cita: sin agendar\n`;
+  if(sesiones.length) t += `Vino el ${listaDeDiasCorta(sesiones.map(a => a.date))}\n`;
+  t += `Pagado ${fmtMoney(v.bal.paid)}`;
+  t += v.saldo > 0 ? ` · debe ${fmtMoney(v.saldo)}\n` : ` · al día\n`;
+  if(v.informe === 'Pendiente'){
+    t += `Informe PENDIENTE`;
+    t += v.informeVence ? ` · vence el ${fechaEnPalabras(v.informeVence)}\n` : '\n';
+  }
+  return t;
+}
+
+function enviarReporteDe(patientId, para){
+  const p = DB.patients.find(x => x.id === patientId);
+  if(!p) return;
+  const texto = textoDelReporte(p, para);
+
+  let destinos = [];
+  if(para === 'profesional'){
+    const pr = DB.professionals.find(x => x.id === p.professionalId);
+    if(pr && (pr.phone || pr.email)){
+      destinos = [{name: pr.name, role: 'Profesional',
+                   phone: pr.phone || '', email: pr.email || ''}];
+    }
+  }else{
+    // A la familia y al cobro van los mismos destinatarios que los
+    // recordatorios de cita: así se respeta a quién se le avisa y a quién no.
+    destinos = reminderRecipients(p).filter(r => r.notify);
+  }
+
+  const titulo = para === 'cobro' ? `Saldo pendiente — ${p.name}`
+               : para === 'familia' ? `Cómo va ${p.name}`
+               : `Estado del paciente — ${p.name}`;
+  abrirEnvioDeTexto(titulo, texto, destinos, titulo);
+}
+
+/* ============ EL TABLERO: LO BUENO Y LO MALO ============
+
+   Lo pidió así: "para ver si mi personal está trabajando bien, o en qué
+   puedo mejorar, y poder tomar decisiones".
+
+   Dos miradas, porque son dos preguntas distintas y la misma cifra no
+   contesta las dos:
+
+     · POR PROFESIONAL — ¿quién está atendiendo, a cuánta gente, y a quién
+       se le caen las citas? Es una conversación con una persona.
+     · POR MES — ¿el centro crece o se encoge? Es una decisión de negocio.
+
+   Lo que NO hace, a propósito: inventar una nota. No hay un puntaje del 1
+   al 10 por profesional, porque un número así se usa mal —se compara a
+   quien atiende niños con quien atiende adultos— y esconde el porqué. Lo
+   que hay son cifras con su explicación al lado, y un semáforo solo
+   donde el umbral es indiscutible: un informe vencido está vencido.
+
+   Y una cifra que casi nadie mira y que acá sale sola: **quién pidió la
+   reprogramación**. El paciente que corrió su hora cuatro veces y la cita
+   que el centro tuvo que mover no son el mismo problema, y hasta ahora
+   ese dato se guardaba sin que nadie lo leyera nunca.              */
+
+let tableroVista = 'profesional';   // 'profesional' | 'mes'
+let tableroMeses = 6;
+
+function cambiarTablero(vista){
+  tableroVista = vista;
+  const c = document.getElementById('cajaDelTablero');
+  if(c) c.innerHTML = cuerpoDelTablero();
+}
+function cambiarMesesTablero(n){
+  tableroMeses = Number(n) || 6;
+  const c = document.getElementById('cajaDelTablero');
+  if(c) c.innerHTML = cuerpoDelTablero();
+}
+
+/* Los últimos N meses, del más viejo al más nuevo. */
+function mesesDelTablero(n){
+  const hoy = new Date();
+  const out = [];
+  for(let i = n - 1; i >= 0; i--){
+    const d = new Date(hoy.getFullYear(), hoy.getMonth() - i, 1);
+    out.push({
+      clave: `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`,
+      etiqueta: `${MESES[d.getMonth()].slice(0,3)}. ${String(d.getFullYear()).slice(2)}`,
+    });
+  }
+  return out;
+}
+
+/* Las citas de un período, ya clasificadas. Una sola pasada: después
+   todo el tablero se arma de acá y no vuelve a recorrer la agenda. */
+function citasDelPeriodo(desde, hasta, filtroProf){
+  return DB.appointments.filter(a => {
+    if(!a.date || a.date < desde || a.date > hasta) return false;
+    if(filtroProf && a.professionalId !== filtroProf) return false;
+    return true;
+  });
+}
+
+function contarCitas(citas){
+  const r = {total:citas.length, atendidas:0, faltas:0, canceladas:0,
+             movidas:0, pidioPaciente:0, pidioCentro:0, pidioProfesional:0};
+  citas.forEach(a => {
+    if(a.status === 'Completada') r.atendidas++;
+    else if(a.status === 'No asistió') r.faltas++;
+    else if(a.status === 'Cancelada') r.canceladas++;
+    (reprogramacionesDe(a) || []).forEach(x => {
+      r.movidas++;
+      if(x.aPedidoDe === 'paciente') r.pidioPaciente++;
+      else if(x.aPedidoDe === 'centro') r.pidioCentro++;
+      else if(x.aPedidoDe === 'profesional') r.pidioProfesional++;
+    });
+  });
+  return r;
+}
+
+/* El dinero cobrado en un rango. Las devoluciones van en negativo, así
+   que restan solas: eso es lo que se quiere ver. */
+function cobradoEntre(desde, hasta, filtroProf){
+  return redondear((DB.payments || []).reduce((s, p) => {
+    if(!p.date || p.date < desde || p.date > hasta) return s;
+    if(filtroProf){
+      const pac = DB.patients.find(x => x.id === p.patientId);
+      if(!pac || pac.professionalId !== filtroProf) return s;
+    }
+    return s + Number(p.amount || 0);
+  }, 0));
+}
+
+/* Pacientes que vinieron una sola vez y no volvieron.
+   Es la cifra que más duele y la que nadie mira: no es que no paguen, es
+   que no vuelven. Se cuenta solo a quien tuvo su primera sesión hace más
+   de 45 días, para no contar al que todavía puede volver la otra semana. */
+function noVolvieron(filtroProf){
+  const hoy = todayISO();
+  const corte = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 45);
+    return fechaLocalISO(d);
+  })();
+  return DB.patients.filter(p => {
+    if(p.active === false) return false;
+    if(filtroProf && p.professionalId !== filtroProf) return false;
+    const suyas = DB.appointments
+      .filter(a => a.patientId === p.id && a.status === 'Completada')
+      .map(a => a.date).sort();
+    if(suyas.length !== 1) return false;
+    return suyas[0] < corte;
+  });
+}
+
+function viewTablero(){
+  return `<div class="card" style="margin-bottom:18px">
+    <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;
+                align-items:baseline">
+      <h3 style="margin:0">Cómo va el centro</h3>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn small ${tableroVista==='profesional'?'':'secondary'}"
+          onclick="cambiarTablero('profesional')">Por profesional</button>
+        <button class="btn small ${tableroVista==='mes'?'':'secondary'}"
+          onclick="cambiarTablero('mes')">Por mes</button>
+        <select onchange="cambiarMesesTablero(this.value)" style="width:auto">
+          ${[3,6,12].map(n => `<option value="${n}"${n===tableroMeses?' selected':''}
+            >últimos ${n} meses</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <p class="hint" style="margin:6px 0 10px">Se arma solo con lo que ya está
+      registrado. Las cifras no llevan nota: llevan su explicación al lado.</p>
+    <div id="cajaDelTablero">${cuerpoDelTablero()}</div>
+  </div>`;
+}
+
+function cuerpoDelTablero(){
+  const meses = mesesDelTablero(tableroMeses);
+  const desde = meses[0].clave + '-01';
+  const hasta = todayISO();
+  return tableroVista === 'profesional'
+    ? tableroPorProfesional(desde, hasta)
+    : tableroPorMes(meses, hasta);
+}
+
+/* ---- POR PROFESIONAL ---------------------------------------------- */
+function tableroPorProfesional(desde, hasta){
+  const activos = DB.professionals.filter(p => p.active !== false);
+  if(!activos.length) return '<p class="hint">No hay profesionales activos.</p>';
+
+  const filas = activos.map(pr => {
+    const c = contarCitas(citasDelPeriodo(desde, hasta, pr.id));
+    const pacientes = new Set(DB.appointments
+      .filter(a => a.professionalId === pr.id && a.date >= desde && a.date <= hasta
+        && a.status === 'Completada')
+      .map(a => a.patientId)).size;
+    const cobrado = cobradoEntre(desde, hasta, pr.id);
+    const perdidos = noVolvieron(pr.id).length;
+    // El porcentaje de citas que no se dieron. Sobre el total agendado:
+    // es lo que mide cuánta agenda se desperdicia.
+    const caidas = c.total ? Math.round((c.faltas + c.canceladas) * 100 / c.total) : 0;
+    const informes = DB.patients.filter(p => p.professionalId === pr.id
+      && p.reportStatus === 'Pendiente').length;
+    const vencidos = DB.patients.filter(p => p.professionalId === pr.id
+      && p.reportStatus === 'Pendiente' && p.reportDueDate
+      && p.reportDueDate < hasta).length;
+
+    return `<tr>
+      <td><b>${esc(pr.name)}</b>
+        ${pr.license ? `<br><span class="hint">C.Ps.P. ${esc(pr.license)}</span>` : ''}</td>
+      <td style="text-align:right"><b>${c.atendidas}</b></td>
+      <td style="text-align:right">${pacientes}</td>
+      <td style="text-align:right">${c.faltas + c.canceladas}
+        ${caidas > 0 ? `<br><span class="chip ${caidas >= 25 ? 'alert'
+          : caidas >= 15 ? 'warn' : 'neutral'}">${caidas}%</span>` : ''}</td>
+      <td style="text-align:right">${c.movidas}
+        ${c.movidas ? `<br><span class="hint">${
+          [c.pidioPaciente ? `${c.pidioPaciente} el paciente` : '',
+           c.pidioProfesional ? `<b>${c.pidioProfesional} ${esc(nombreDePila(pr.name))}</b>` : '',
+           c.pidioCentro ? `${c.pidioCentro} el centro` : ''
+          ].filter(Boolean).join(' · ')}</span>` : ''}</td>
+      <td style="text-align:right">${perdidos || '—'}</td>
+      <td style="text-align:right">${informes
+        ? `${informes}${vencidos ? ` <span class="chip alert">${vencidos} vencido(s)</span>` : ''}`
+        : '—'}</td>
+      <td style="text-align:right">${fmtMoney(cobrado)}</td>
+    </tr>`;
+  }).join('');
+
+  return `<div class="tablewrap"><table>
+      <tr>
+        <th>Profesional</th>
+        <th style="text-align:right">Sesiones</th>
+        <th style="text-align:right">Pacientes</th>
+        <th style="text-align:right">No se dieron</th>
+        <th style="text-align:right">Movidas · quién pidió</th>
+        <th style="text-align:right">No volvieron</th>
+        <th style="text-align:right">Informes</th>
+        <th style="text-align:right">Cobrado</th>
+      </tr>${filas}</table></div>
+    <p class="hint" style="margin-top:10px">
+      <b>No se dieron</b>: faltas más cancelaciones, sobre el total agendado.
+      Hasta 15% es normal; <b>desde 25% hay algo que conversar</b>.<br>
+      <b>Movidas</b>: la cifra que casi nadie mira. No es lo mismo que mueva
+      el paciente a que mueva el profesional — lo segundo sale en negrita.<br>
+      <b>No volvieron</b>: vinieron una sola vez y hace más de 45 días que no
+      vuelven. Es la plata que se va sin que nadie se entere.</p>`;
+}
+
+/* ---- POR MES ------------------------------------------------------- */
+function tableroPorMes(meses, hasta){
+  const datos = meses.map(m => {
+    const ini = m.clave + '-01';
+    const fin = m.clave + '-31';
+    const c = contarCitas(citasDelPeriodo(ini, fin, ''));
+    const nuevos = DB.patients.filter(p => {
+      const suyas = DB.appointments
+        .filter(a => a.patientId === p.id && a.status === 'Completada')
+        .map(a => a.date).sort();
+      return suyas.length && suyas[0].slice(0,7) === m.clave;
+    }).length;
+    return {...m, ...c, nuevos, cobrado: cobradoEntre(ini, fin, '')};
+  });
+
+  const max = Math.max(1, ...datos.map(d => d.atendidas));
+  const maxPlata = Math.max(1, ...datos.map(d => d.cobrado));
+  const ultimo = datos[datos.length - 1] || {};
+  const previo = datos[datos.length - 2] || {};
+  const dif = (a, b) => (b === 0 ? null : Math.round((a - b) * 100 / b));
+
+  const flecha = (n) => n === null ? ''
+    : `<span class="chip ${n > 0 ? 'ok' : n < 0 ? 'alert' : 'neutral'}">${
+        n > 0 ? '↑' : n < 0 ? '↓' : '='} ${Math.abs(n)}%</span>`;
+
+  const barras = datos.map(d => `<tr>
+    <td style="white-space:nowrap"><b>${esc(d.etiqueta)}</b></td>
+    <td style="width:40%">
+      <div class="barwrap"><div class="bar" style="width:${
+        Math.round(d.atendidas * 100 / max)}%"></div></div></td>
+    <td style="text-align:right"><b>${d.atendidas}</b> sesiones</td>
+    <td style="text-align:right">${d.nuevos} nuevo(s)</td>
+    <td style="text-align:right">${d.faltas + d.canceladas} no se dieron</td>
+    <td style="text-align:right">${fmtMoney(d.cobrado)}</td>
+  </tr>`).join('');
+
+  // Lo que el dueño quiere ver de un vistazo: ¿este mes vamos mejor o peor?
+  const resumen = `
+    <div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:12px">
+      <div><span class="sub">Sesiones este mes</span><br>
+        <b style="font-size:20px">${ultimo.atendidas || 0}</b>
+        ${flecha(dif(ultimo.atendidas || 0, previo.atendidas || 0))}</div>
+      <div><span class="sub">Pacientes nuevos</span><br>
+        <b style="font-size:20px">${ultimo.nuevos || 0}</b>
+        ${flecha(dif(ultimo.nuevos || 0, previo.nuevos || 0))}</div>
+      <div><span class="sub">Cobrado</span><br>
+        <b style="font-size:20px">${fmtMoney(ultimo.cobrado || 0)}</b>
+        ${flecha(dif(ultimo.cobrado || 0, previo.cobrado || 0))}</div>
+      <div><span class="sub">No se dieron</span><br>
+        <b style="font-size:20px">${(ultimo.faltas || 0) + (ultimo.canceladas || 0)}</b></div>
+    </div>`;
+
+  return resumen + `<div class="tablewrap"><table>${barras}</table></div>
+    ${avisosDelTablero(datos)}
+    <p class="hint" style="margin-top:10px">La flecha compara con el mes
+      anterior. El mes en curso va incompleto, así que al principio de mes
+      siempre se ve en bajada: compárelo cuando termine.</p>`;
+}
+
+/* ---- Lo malo, dicho con todas las letras ---------------------------
+   Solo donde el umbral es indiscutible. Nada de "su rendimiento es bajo":
+   un informe vencido está vencido y punto. */
+function avisosDelTablero(datos){
+  const avisos = [];
+  const hoy = todayISO();
+
+  const vencidos = DB.patients.filter(p => p.reportStatus === 'Pendiente'
+    && p.reportDueDate && p.reportDueDate < hoy);
+  if(vencidos.length){
+    avisos.push(`<b>${vencidos.length} informe(s) vencido(s)</b>: ${
+      vencidos.slice(0,4).map(p => esc(p.name)).join(', ')}${
+      vencidos.length > 4 ? ' y más' : ''}.`);
+  }
+
+  const perdidos = noVolvieron('');
+  if(perdidos.length){
+    avisos.push(`<b>${perdidos.length} paciente(s) vinieron una sola vez</b> y hace
+      más de 45 días que no vuelven. Vale una llamada.`);
+  }
+
+  const deben = DB.patients.filter(p => p.active !== false
+    && patientBalance(p).saldo > 0);
+  const total = redondear(deben.reduce((s, p) => s + patientBalance(p).saldo, 0));
+  if(total > 0){
+    avisos.push(`<b>${fmtMoney(total)} por cobrar</b> repartidos en
+      ${deben.length} paciente(s).`);
+  }
+
+  const sinCita = DB.patients.filter(p => {
+    if(p.active === false || p.billingType === 'Individual') return false;
+    const paq = paqueteDe(p);
+    if(!paq || !paq.total || paq.restantes <= 0) return false;
+    return !DB.appointments.some(a => a.patientId === p.id && a.date >= hoy
+      && a.status !== 'Cancelada' && a.status !== 'Completada');
+  });
+  if(sinCita.length){
+    avisos.push(`<b>${sinCita.length} paciente(s) con sesiones pagadas y sin
+      próxima cita</b>. Ya pagaron: solo falta agendarlos.`);
+  }
+
+  if(!avisos.length){
+    return `<p class="hint" style="margin-top:10px;color:var(--ok)">
+      Sin pendientes: no hay informes vencidos, ni pacientes perdidos, ni
+      sesiones pagadas sin agendar.</p>`;
+  }
+  return `<div class="card" style="margin-top:12px;border-left:4px solid var(--alert)">
+    <b>Lo que hay que mirar</b>
+    <ul style="margin:6px 0 0;padding-left:20px">
+      ${avisos.map(a => `<li style="margin-bottom:4px">${a}</li>`).join('')}
+    </ul></div>`;
+}
+
 function viewReportes(){
   const mesActual = todayISO().slice(0,7);
   const desde = mesActual+'-01';
   const hasta = todayISO();
   return `
     <div class="sectiontitle"><h2>Reportes</h2></div>
+
+    ${viewTablero()}
+
+    ${viewReportePacientes()}
 
     <div class="card">
       <h3 style="margin-top:0">Atenciones por profesional</h3>
@@ -21104,6 +23008,106 @@ async function removeDiagnostico(id){
   await setColl('historia_'+currentHistoryPatientId, currentHistoriaData);
   renderPanel();
 }
+/* ---- Firmar la nota de la sesión -----------------------------------
+
+   Una historia clínica sin firmas es un cuaderno de apuntes: no dice
+   quién se hace responsable de lo que ahí está escrito, ni desde
+   cuándo. Firmar es lo que la convierte en documento.
+
+   Firmar **cierra** la nota. A partir de ahí no se edita, y eso lo
+   impide la base —el trigger `trg_evolucion_bloqueo`—, no esta
+   pantalla: esconder el botón no detiene a quien llame a la API a
+   mano. Si después hay que corregir algo, se agrega una nota nueva con
+   su fecha; así la historia muestra qué se dijo, cuándo, y qué se
+   corrigió después, que es exactamente lo que se mira cuando alguien
+   la revisa.
+
+   Esto es firma del sistema: deja constancia de quién y cuándo. La
+   firma digital con DNIe es otra cosa y va sobre el PDF exportado —
+   las dos se complementan y ninguna reemplaza a la otra. */
+
+function selloDeFirma(ev){
+  if(!ev || !ev.firmado) return '';
+  const quien = ev.firmadoPor ? esc(ev.firmadoPor) : 'el profesional';
+  const cuando = (ev.firmadoEn || '').slice(0, 16).replace('T', ' ');
+  return `<span class="chip ok" title="Esta nota ya no se puede editar">
+    🔒 Firmada por ${quien}${cuando ? ' · ' + esc(cuando) : ''}</span>`;
+}
+
+/* Los botones de una nota. Una firmada no ofrece editar ni eliminar:
+   un botón que al tocarlo siempre falla es peor que no tenerlo. */
+function accionesDeEvolucion(ev){
+  if(ev.firmado){
+    return `<span class="sub">Cerrada. Para corregir, agregue una nota nueva.</span>`;
+  }
+  return `<button class="btn small" onclick="firmarEvolucion('${ev.id}')"
+            title="Al firmarla queda cerrada y no se podrá editar">✍ Firmar</button>
+          <button class="btn small danger" onclick="removeEvolucion('${ev.id}')">Eliminar</button>`;
+}
+
+async function firmarEvolucion(id){
+  const ev = ((currentHistoriaData||{}).evolucion||[]).find(x=>x.id===id);
+  if(!ev){ showToast('No encontré esa nota.', false); return; }
+  if(ev.firmado){ showToast('Esa nota ya estaba firmada.', false); return; }
+
+  if(!confirm('Firmar la nota del ' + fmtFechaCorta(ev.fecha) + '.\n\n'
+    + 'Queda cerrada: no se podrá editar ni borrar. Si después hay que '
+    + 'corregir algo, se agrega una nota nueva con su fecha.\n\n'
+    + '¿La firmo?')) return;
+
+  // Lo escrito en pantalla se guarda ANTES de firmar: si no, se firmaría
+  // lo que está en la base, que puede no ser lo que se está leyendo.
+  captureHistoriaFields();
+  const guardado = await setColl('historia_'+currentHistoryPatientId, currentHistoriaData);
+  if(!guardado){
+    showToast('No se pudo guardar antes de firmar. No se firmó nada.', false);
+    return;
+  }
+
+  try{
+    const r = await fetch(`${API_URL}?accion=firmar_evolucion`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      credentials:'same-origin',
+      body: JSON.stringify({id, paciente: currentHistoryPatientId})
+    });
+    const j = await r.json();
+    if(!j.ok){ showToast(j.error || 'No se pudo firmar.', false); return; }
+    currentHistoriaData = await getColl('historia_'+currentHistoryPatientId, currentHistoriaData);
+    renderPanel();
+    showToast('Nota firmada. Queda cerrada.');
+  }catch(e){
+    showToast('No se pudo conectar con el servidor.', false);
+  }
+}
+
+/* ---- El anexo sale de una sesión -----------------------------------
+
+   Un dibujo de «la persona bajo la lluvia» no es del paciente en
+   general: es de la sesión en que se le mandó a dibujar. Sin eso, el
+   día que uno abre la sesión del 8 de octubre para preparar la
+   siguiente, no encuentra lo que salió de ella — y el anexo queda en
+   una pila ordenada por fecha de subida, que no es la fecha en que
+   ocurrió. */
+
+function opcionesDeSesion(patient){
+  const citas = (DB.appointments||[])
+    .filter(a => personasEnLaCita(a).includes(patient.id) && a.status === 'Completada')
+    .sort((a,b) => (b.date+(b.time||'')).localeCompare(a.date+(a.time||'')));
+  return `<option value="">— sin sesión (va a la carpeta general) —</option>`
+    + citas.map(a => `<option value="${a.id}">${esc(fmtFechaCorta(a.date))}
+        ${esc(a.time||'')} · ${esc(etiquetaDeSesion(tipoDeSesion(a)))}${
+        codigoDeAtencion(a) ? ' · ' + esc(codigoDeAtencion(a)) : ''}</option>`).join('');
+}
+
+/* De qué sesión salió, para la tabla de anexos. */
+function deQueSesion(a){
+  if(!a || !a.citaId) return '<span class="sub">carpeta general</span>';
+  const txt = a.citaFecha ? fmtFechaCorta(a.citaFecha) : 'sesión';
+  return `<span class="chip neutral">${esc(txt)}</span>${
+    a.codigoAtencion ? ` ${chipDeCodigo({codigoAtencion:a.codigoAtencion})}` : ''}${
+    a.delPaciente ? ' <span class="sub">lo subió el paciente</span>' : ''}`;
+}
+
 async function addEvolucion(){
   const fecha = document.getElementById('hc_evoFecha').value || todayISO();
   const s=document.getElementById('hc_evoS').value.trim();
@@ -21166,19 +23170,59 @@ async function removeEvolucion(id){
   await setColl('historia_'+currentHistoryPatientId, currentHistoriaData);
   renderPanel();
 }
+/* Cuánto puede pesar un anexo, y qué formatos entran.
+
+   El tope de 4MB venía de cuando el panel guardaba en el navegador: ahí
+   todo iba en base64 al localStorage, que tope unos 4.9MB. Con base de
+   datos el binario va a disco y PHP acepta hasta 2GB, así que ese número
+   dejó de tener sentido — era una cerradura vieja en una puerta que ya se
+   había cambiado, y dejaba afuera justo lo que el centro necesita subir:
+   la foto de un dibujo tomada con el celular pasa de 4MB sin esfuerzo.
+
+   El límite que sí queda es el navegador: el archivo se lee entero en
+   memoria antes de mandarlo, y pasado cierto tamaño la pestaña se traba.
+   25MB es holgado para una foto, un protocolo escaneado o un audio de
+   sesión; un video largo sigue siendo mejor por enlace. */
+const TOPE_ANEXO = 25 * 1024 * 1024;
+
+/* Lo que el centro usa de verdad. Antes solo entraban imagen y PDF, y el
+   informe que llega en Word o la planilla de resultados en Excel se
+   quedaban afuera — justo los dos formatos en los que viene lo que
+   mandan de otros sitios. El motor de archivos ya los guardaba: hay
+   video, PowerPoint y Excel en la base desde hace meses. Lo único que
+   faltaba era dejarlos entrar por esta puerta. */
+const FORMATOS_ANEXO = [
+  'image/*', 'application/pdf',
+  '.doc', '.docx', 'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xls', '.xlsx', 'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.ppt', '.pptx',
+  'audio/*', 'video/*'
+].join(',');
+
 async function handleAttachmentUpload(event){
   const file = event.target.files[0];
   if(!file) return;
-  if(file.size > 4*1024*1024){
-    alert('El archivo pesa más de 4MB (límite recomendado). Usa la opción de "enlace externo" — por ejemplo, súbelo a Google Drive y pega aquí el link.');
+  if(file.size > TOPE_ANEXO){
+    const pesa = (file.size/1048576).toFixed(1);
+    const tope = Math.round(TOPE_ANEXO/1048576);
+    alert(`"${file.name}" pesa ${pesa}MB y el tope para subir desde acá es ${tope}MB.\n\n`
+      + 'Para algo más grande —un video de sesión, por ejemplo— use el enlace '
+      + 'externo: súbalo a Drive y pegue acá la dirección.');
     event.target.value=''; return;
   }
+
   const category = document.getElementById('hc_attachCategory').value;
   const reader = new FileReader();
   reader.onload = async ()=>{
     captureHistoriaFields();
     currentHistoriaData.attachments = currentHistoriaData.attachments || [];
-    currentHistoriaData.attachments.push({id:uid(), name:file.name, type:file.type, category, dataUrl:reader.result, size:file.size, uploadedAt:new Date().toISOString(), isLink:false});
+    currentHistoriaData.attachments.push({id:uid(), name:file.name, type:file.type,
+      category, dataUrl:reader.result, size:file.size,
+      citaId: (document.getElementById('hc_attachCita')||{}).value || '',
+      descripcion: ((document.getElementById('hc_attachNota')||{}).value || '').trim(),
+      uploadedAt:new Date().toISOString(), isLink:false});
     const ok = await setColl('historia_'+currentHistoryPatientId, currentHistoriaData);
     if(!ok) alert('El archivo no se pudo guardar (puede ser demasiado grande para el almacenamiento). Intenta con uno más pequeño o usa un enlace externo.');
     renderPanel();
@@ -21192,7 +23236,10 @@ async function addExternalLink(){
   const category = document.getElementById('hc_attachCategory').value;
   captureHistoriaFields();
   currentHistoriaData.attachments = currentHistoriaData.attachments || [];
-  currentHistoriaData.attachments.push({id:uid(), name, url, category, isLink:true, uploadedAt:new Date().toISOString()});
+  currentHistoriaData.attachments.push({id:uid(), name, url, category, isLink:true,
+      citaId: (document.getElementById('hc_attachCita')||{}).value || '',
+      descripcion: ((document.getElementById('hc_attachNota')||{}).value || '').trim(),
+      uploadedAt:new Date().toISOString()});
   await setColl('historia_'+currentHistoryPatientId, currentHistoriaData);
   renderPanel();
 }
@@ -21213,6 +23260,377 @@ function downloadAttachment(id){
   link.href = a.dataUrl; link.download = a.name;
   document.body.appendChild(link); link.click(); document.body.removeChild(link);
 }
+/* ===================== ESCALAS BREVES DE TAMIZAJE =====================
+
+   Las pruebas que ya tiene el centro —MCMI-IV, ICE BarOn, C.A.R.S.— son
+   largas: se le mandan al paciente por enlace y se corrigen después. Estas
+   son otra cosa. Son de siete o nueve preguntas, las marca la psicóloga
+   en la consulta mientras conversa, y dan un número que se puede comparar
+   con el de la sesión siguiente. Eso es lo que convierte "lo veo mejor"
+   en "bajó de 15 a 8".
+
+   Por qué estas dos y no otras: el GAD-7 y el PHQ-9 son **de uso libre**.
+   Sus autores lo dicen por escrito en el propio protocolo: «No se requiere
+   permiso para reproducir, traducir, presentar o distribuir». Nada que ver
+   con los paquetes de instrumentos pirateados que circulan, que además de
+   ilegales traen baremos de otro país y fallan sin avisar.
+
+   Y una cosa que no es comodidad sino seguridad: el ítem 9 del PHQ-9
+   pregunta por pensamientos de hacerse daño. Si sale positivo, el sistema
+   lo dice en rojo y no deja que pase como un número más. Una escala que
+   suma bien pero no avisa de eso está mal hecha.                       */
+
+const ESCALAS_BREVES = {
+  gad7: {
+    siglas: 'GAD-7',
+    nombre: 'Escala de Ansiedad Generalizada (GAD-7)',
+    mide: 'Ansiedad',
+    enunciado: 'Durante las <b>últimas dos semanas</b>, ¿con qué frecuencia '
+             + 'le han molestado los siguientes problemas?',
+    opciones: [
+      ['Ningún día', 0], ['Varios días', 1],
+      ['Más de la mitad de los días', 2], ['Casi todos los días', 3],
+    ],
+    items: [
+      'Se ha sentido nervioso(a), ansioso(a) o con los nervios de punta',
+      'No ha sido capaz de parar o controlar su preocupación',
+      'Se ha preocupado demasiado por motivos diferentes',
+      'Ha tenido dificultad para relajarse',
+      'Se ha sentido tan inquieto(a) que no ha podido quedarse quieto(a)',
+      'Se ha molestado o irritado fácilmente',
+      'Ha tenido miedo de que algo terrible fuera a pasar',
+    ],
+    // Los cortes de Spitzer, Kroenke, Williams y Löwe (2006).
+    niveles: [[0,4,'Ansiedad mínima'], [5,9,'Ansiedad leve'],
+              [10,14,'Ansiedad moderada'], [15,21,'Ansiedad grave']],
+    corte: 10,
+    fuente: 'Spitzer, Kroenke, Williams y Löwe (2006). Corte ≥ 10. '
+          + 'Elaborado con una subvención educativa de Pfizer Inc. '
+          + 'No se requiere permiso para reproducir, traducir ni distribuir.',
+  },
+
+  phq9: {
+    siglas: 'PHQ-9',
+    nombre: 'Cuestionario de Salud del Paciente (PHQ-9)',
+    mide: 'Síntomas depresivos',
+    enunciado: 'Durante las <b>últimas dos semanas</b>, ¿con qué frecuencia '
+             + 'le han molestado los siguientes problemas?',
+    opciones: [
+      ['Ningún día', 0], ['Varios días', 1],
+      ['Más de la mitad de los días', 2], ['Casi todos los días', 3],
+    ],
+    items: [
+      'Poco interés o placer en hacer las cosas',
+      'Se ha sentido decaído(a), deprimido(a) o sin esperanzas',
+      'Dificultad para dormir o para permanecer dormido(a), o ha dormido demasiado',
+      'Se ha sentido cansado(a) o con poca energía',
+      'Poco apetito o ha comido en exceso',
+      'Se ha sentido mal con usted mismo(a), o que es un fracaso, o que ha '
+        + 'quedado mal con usted o con su familia',
+      'Dificultad para concentrarse en cosas como leer o ver televisión',
+      'Se ha movido o hablado tan lento que otras personas lo han notado; o al '
+        + 'revés, ha estado tan inquieto(a) que se ha movido mucho más de lo normal',
+      'Pensamientos de que estaría mejor muerto(a) o de lastimarse de alguna manera',
+    ],
+    niveles: [[0,4,'Mínima'], [5,9,'Depresión leve'], [10,14,'Depresión moderada'],
+              [15,19,'Depresión moderadamente grave'], [20,27,'Depresión grave']],
+    corte: 10,
+    // El ítem 9 no es un ítem más: cualquier respuesta distinta de "ningún
+    // día" obliga a evaluar riesgo en esa misma sesión.
+    itemDeRiesgo: 9,
+    // La pregunta de cierre no suma puntaje: mide cuánto le estorba en la vida.
+    funcional: {
+      texto: '¿Qué tanta dificultad le han dado estos problemas para hacer su '
+           + 'trabajo, encargarse de las tareas de la casa o llevarse bien con '
+           + 'otras personas?',
+      opciones: ['No ha sido difícil', 'Un poco difícil', 'Muy difícil',
+                 'Extremadamente difícil'],
+    },
+    fuente: 'Spitzer, Kroenke y Williams (1999). Corte ≥ 10. '
+          + 'Elaborado con una subvención educativa de Pfizer Inc. '
+          + 'No se requiere permiso para reproducir, traducir ni distribuir.',
+  },
+};
+
+/* El puntaje y su lectura. Devuelve también si el ítem de riesgo salió
+   positivo, que es lo único de acá que no puede quedarse en un número. */
+function corregirEscala(clave, respuestas){
+  const e = ESCALAS_BREVES[clave];
+  if(!e) return null;
+  const r = respuestas || {};
+  let total = 0, contestados = 0;
+  e.items.forEach((_, i) => {
+    const v = r['i' + (i + 1)];
+    if(v === undefined || v === null || v === '') return;
+    total += Number(v) || 0;
+    contestados++;
+  });
+  const completa = contestados === e.items.length;
+  const nivel = (e.niveles.find(([a, b]) => total >= a && total <= b) || [,, ''])[2];
+  const maximo = e.items.length * 3;
+  const riesgo = e.itemDeRiesgo
+    ? Number(r['i' + e.itemDeRiesgo] || 0) > 0 : false;
+  return {
+    escala: e, total, maximo, nivel, completa, contestados,
+    faltan: e.items.length - contestados,
+    positivo: completa && total >= e.corte,
+    riesgo,
+    riesgoTexto: riesgo
+      ? (e.opciones.find(o => o[1] === Number(r['i' + e.itemDeRiesgo]))||[''])[0]
+      : '',
+    funcional: r.funcional || '',
+  };
+}
+
+/* Una línea para guardar en la historia y para leer de un vistazo. */
+function resumenDeEscala(c){
+  if(!c) return '';
+  return `${c.escala.siglas}: ${c.total} / ${c.maximo} — ${c.nivel}`
+       + (c.riesgo ? ' · RIESGO: ítem de autolesión positivo' : '');
+}
+
+/* ---- La pantalla donde se marca ---------------------------------- */
+let escalaActual = null;       // {clave, patientId, respuestas}
+
+function abrirEscala(patientId, clave){
+  const p = DB.patients.find(x => x.id === patientId);
+  const e = ESCALAS_BREVES[clave];
+  if(!p || !e){ alert('No encontré esa escala.'); return; }
+  escalaActual = {clave, patientId, respuestas: {}};
+  pintarEscala();
+}
+
+function marcarEscala(id, valor){
+  if(!escalaActual) return;
+  escalaActual.respuestas[id] = valor;
+  pintarEscala();
+}
+
+function pintarEscala(){
+  if(!escalaActual) return;
+  const {clave, patientId, respuestas} = escalaActual;
+  const e = ESCALAS_BREVES[clave];
+  const p = DB.patients.find(x => x.id === patientId) || {};
+  const c = corregirEscala(clave, respuestas);
+
+  let m = document.getElementById('escalaModal');
+  if(!m){
+    m = document.createElement('div');
+    m.id = 'escalaModal';
+    m.className = 'modalOverlay open';
+    document.body.appendChild(m);
+  }
+
+  const fila = (texto, i) => {
+    const n = i + 1;
+    const esRiesgo = e.itemDeRiesgo === n;
+    return `<div style="padding:9px 0;border-bottom:1px solid var(--line)${
+      esRiesgo ? ';background:#fff8f6;margin:0 -8px;padding-left:8px;padding-right:8px' : ''}">
+      <div style="font-size:14px;margin-bottom:6px">
+        <b>${n}.</b> ${esc(texto)}
+        ${esRiesgo ? '<span class="chip alert" style="margin-left:6px">Ítem de riesgo</span>' : ''}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        ${e.opciones.map(([et, v]) => {
+          const sel = Number(respuestas['i' + n]) === v && respuestas['i' + n] !== undefined;
+          return `<button type="button" class="btn small ${sel ? '' : 'secondary'}"
+            onclick="marcarEscala('i${n}', ${v})">${esc(et)} · ${v}</button>`;
+        }).join('')}
+      </div></div>`;
+  };
+
+  const aviso = c.riesgo
+    ? `<div class="card" style="border-left:4px solid var(--alert);background:#fff5f3;margin:12px 0">
+         <b style="color:var(--alert)">⚠ El ítem ${e.itemDeRiesgo} salió positivo
+         (${esc(c.riesgoTexto)}).</b>
+         <p class="hint" style="margin:4px 0 0">Pensamientos de hacerse daño.
+         Evalúa riesgo suicida en esta misma sesión y déjalo anotado en el
+         examen mental. No lo dejes para la próxima.</p>
+       </div>` : '';
+
+  m.innerHTML = `<div class="receiptCard" style="max-width:720px">
+    <div style="padding:22px 24px;max-height:84vh;overflow-y:auto">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+        <div>
+          <h2 style="margin:0">${esc(e.nombre)}</h2>
+          <p class="hint" style="margin:2px 0 0">${esc(p.name || '')} · ${esc(e.mide)}</p>
+        </div>
+        <button class="btn small secondary" onclick="cerrarEscala()">Cerrar</button>
+      </div>
+
+      <p class="hint" style="margin:12px 0 4px">${e.enunciado}</p>
+      ${e.items.map(fila).join('')}
+
+      ${e.funcional ? `<div style="padding:10px 0;border-bottom:1px solid var(--line)">
+        <div style="font-size:14px;margin-bottom:6px">${esc(e.funcional.texto)}</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          ${e.funcional.opciones.map(o => `<button type="button"
+            class="btn small ${respuestas.funcional === o ? '' : 'secondary'}"
+            onclick="marcarEscala('funcional', '${esc(o)}')">${esc(o)}</button>`).join('')}
+        </div>
+        <p class="hint" style="margin:5px 0 0">No suma puntaje: dice cuánto le estorba.</p>
+      </div>` : ''}
+
+      ${aviso}
+
+      <div class="card" style="margin-top:14px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap">
+          <span style="font-size:20px"><b>${c.total}</b>
+            <span class="hint">de ${c.maximo}</span></span>
+          <span><b style="color:${c.positivo ? 'var(--alert)' : 'var(--ok)'}">${
+            c.completa ? esc(c.nivel) : `faltan ${c.faltan} de ${e.items.length}`}</b></span>
+        </div>
+        <div class="barwrap" style="margin-top:6px"><div class="bar ${
+          c.positivo ? 'alertbar' : ''}" style="width:${
+          Math.round(c.total * 100 / c.maximo)}%"></div></div>
+        ${c.completa ? `<p class="hint" style="margin:6px 0 0">${
+          c.positivo ? `Pasa el corte de ${e.corte}: conviene evaluarlo con más detalle.`
+                     : `Por debajo del corte de ${e.corte}.`}</p>` : ''}
+      </div>
+
+      <p class="hint" style="margin:10px 0 0;font-size:11px">${esc(e.fuente)}</p>
+
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
+        <button class="btn" ${c.completa ? '' : 'disabled'}
+          onclick="guardarEscala()">Guardar en la historia clínica</button>
+        <button class="btn secondary" onclick="copiarEscala(this)">Copiar el resultado</button>
+        <button class="btn secondary" onclick="cerrarEscala()">Cancelar</button>
+      </div>
+      ${c.completa ? '' : `<p class="hint" style="margin:6px 0 0">Marca los
+        ${e.items.length} ítems para poder guardarla: un puntaje a medias no
+        se puede comparar con el de la próxima sesión.</p>`}
+    </div></div>`;
+}
+
+function cerrarEscala(){
+  const m = document.getElementById('escalaModal');
+  if(m) m.remove();
+  escalaActual = null;
+}
+
+function textoDeEscala(){
+  if(!escalaActual) return '';
+  const c = corregirEscala(escalaActual.clave, escalaActual.respuestas);
+  const p = DB.patients.find(x => x.id === escalaActual.patientId) || {};
+  let t = `${c.escala.nombre}\n${p.name || ''} · ${fmtFechaCorta(todayISO())}\n\n`;
+  c.escala.items.forEach((it, i) => {
+    const v = escalaActual.respuestas['i' + (i + 1)];
+    const et = (c.escala.opciones.find(o => o[1] === Number(v)) || ['—'])[0];
+    t += `${i + 1}. ${it}\n   ${et} (${v})\n`;
+  });
+  if(c.funcional) t += `\nDificultad para la vida diaria: ${c.funcional}\n`;
+  t += `\nPuntaje: ${c.total} de ${c.maximo} — ${c.nivel}\n`;
+  if(c.riesgo) t += `ATENCIÓN: ítem ${c.escala.itemDeRiesgo} positivo (${c.riesgoTexto}).\n`;
+  return t;
+}
+
+async function copiarEscala(btn){
+  await copyToClipboard(textoDeEscala(), btn);
+}
+
+/* Se guarda donde ya viven las pruebas del paciente: en su historia
+   clínica. Así la de hoy queda al lado de la de hace dos meses y se
+   pueden comparar sin buscar en ningún otro lado. */
+async function guardarEscala(){
+  if(!escalaActual) return;
+  const {clave, patientId, respuestas} = escalaActual;
+  const c = corregirEscala(clave, respuestas);
+  if(!c.completa){ alert('Marca todos los ítems antes de guardar.'); return; }
+
+  if(currentHistoryPatientId !== patientId || !currentHistoriaData){
+    alert('Abre la historia clínica del paciente para poder guardar la escala ahí.');
+    return;
+  }
+  // Primero se recoge lo que haya escrito en el formulario: si no, al
+  // guardar la escala se perdería lo tecleado y no guardado todavía.
+  if(typeof captureHistoriaFields === 'function') captureHistoriaFields();
+  const h = currentHistoriaData;
+  h.pruebas = h.pruebas || [];
+  h.pruebas.push({
+    id: uid(),
+    fecha: todayISO(),
+    nombre: c.escala.nombre,
+    resultado: resumenDeEscala(c)
+             + (c.funcional ? ` · Dificultad: ${c.funcional}` : ''),
+  });
+
+  // El riesgo no se queda guardado como un dato más: se marca en el
+  // examen mental, que es donde se mira antes de cerrar la sesión.
+  if(c.riesgo){
+    h.examenMental = h.examenMental || {};
+    if(!h.examenMental.riesgo || h.examenMental.riesgo === 'Sin riesgo evidente'){
+      h.examenMental.riesgo = 'Riesgo autolítico';
+    }
+    const nota = `PHQ-9 del ${fmtFechaCorta(todayISO())}: ítem `
+               + `${c.escala.itemDeRiesgo} positivo (${c.riesgoTexto}).`;
+    h.examenMental.riesgoNotas = h.examenMental.riesgoNotas
+      ? h.examenMental.riesgoNotas + ' · ' + nota : nota;
+  }
+
+  const ok = await setColl('historia_' + patientId, currentHistoriaData);
+  if(ok === false){ alert('No se pudo guardar. Revisa la conexión.'); return; }
+  showToast(c.riesgo
+    ? 'Escala guardada. Quedó marcado el riesgo en el examen mental.'
+    : 'Escala guardada en la historia clínica.');
+  cerrarEscala();
+  renderPanel();
+}
+
+/* Lo que se aplicó antes, para ver si el número se mueve. */
+function escalasAplicadas(patientId){
+  const h = historiaEnMemoria(patientId);
+  const todas = (h && h.pruebas) || [];
+  const siglas = Object.values(ESCALAS_BREVES).map(e => e.siglas);
+  return todas
+    .filter(x => siglas.some(s => String(x.resultado || '').startsWith(s + ':')))
+    .slice()
+    .sort((a, b) => String(a.fecha || '').localeCompare(String(b.fecha || '')));
+}
+
+/* El bloque que se dibuja dentro de la historia clínica. */
+function bloqueDeEscalas(patientId){
+  const previas = escalasAplicadas(patientId);
+  const porEscala = {};
+  previas.forEach(x => {
+    const s = String(x.resultado || '').split(':')[0];
+    (porEscala[s] = porEscala[s] || []).push(x);
+  });
+
+  const evolucion = Object.entries(porEscala).map(([s, lista]) => {
+    const puntos = lista.map(x => {
+      const m = /:\s*(\d+)\s*\//.exec(x.resultado || '');
+      return {fecha: x.fecha, n: m ? Number(m[1]) : null, texto: x.resultado};
+    }).filter(x => x.n !== null);
+    if(!puntos.length) return '';
+    const primero = puntos[0], ultimo = puntos[puntos.length - 1];
+    const cambio = puntos.length > 1 ? ultimo.n - primero.n : null;
+    return `<div style="margin:8px 0">
+      <b>${esc(s)}</b>
+      ${cambio !== null ? `<span class="chip ${cambio < 0 ? 'ok' : cambio > 0 ? 'alert' : 'neutral'}"
+        >${cambio < 0 ? '↓' : cambio > 0 ? '↑' : '='} ${Math.abs(cambio)} puntos</span>` : ''}
+      <div class="hint" style="margin-top:3px">${puntos.map(x =>
+        `${esc(fmtFechaCorta(x.fecha))}: <b>${x.n}</b>`).join(' → ')}</div>
+      ${puntos.some(x => /RIESGO/.test(x.texto))
+        ? `<div class="hint alert" style="margin-top:3px">Hubo al menos una
+           aplicación con el ítem de riesgo positivo.</div>` : ''}
+    </div>`;
+  }).join('');
+
+  return `<div class="card" style="margin-bottom:16px;border-left:4px solid var(--primary)">
+    <h3 style="margin-top:0">Escalas breves</h3>
+    <p class="hint" style="margin:0 0 10px">Se marcan acá mismo, en la consulta:
+      siete o nueve preguntas y el puntaje sale solo. Sirven para comparar
+      cómo venía el paciente con cómo está hoy.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      ${Object.entries(ESCALAS_BREVES).map(([k, e]) =>
+        `<button type="button" class="btn secondary"
+           onclick="abrirEscala('${patientId}','${k}')">
+           ${esc(e.siglas)} — ${esc(e.mide)}</button>`).join('')}
+    </div>
+    ${evolucion ? `<div style="margin-top:12px;border-top:1px solid var(--line);padding-top:8px">
+      <b style="font-size:13px">Cómo viene</b>${evolucion}</div>` : ''}
+  </div>`;
+}
+
 function viewHistoria(){
   const patient = DB.patients.find(p=>p.id===currentHistoryPatientId);
   if(!patient || !currentHistoriaData){
@@ -21248,7 +23666,10 @@ function viewHistoria(){
 
   const evolucionCards = (h.evolucion||[]).slice().sort((a,b)=>(b.fecha||'').localeCompare(a.fecha||'')).map(ev=>`
     <div class="card" style="margin-bottom:10px">
-      <div style="display:flex;justify-content:space-between;align-items:center"><b>${ev.fecha||''}</b><button class="btn small danger" onclick="removeEvolucion('${ev.id}')">Eliminar</button></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+        <b>${fmtFechaCorta(ev.fecha)} ${selloDeFirma(ev)}</b>
+        <span style="white-space:nowrap">${accionesDeEvolucion(ev)}</span>
+      </div>
       ${ev.subjetivo?`<p style="margin:6px 0"><b>S:</b> ${ev.subjetivo}</p>`:''}
       ${ev.objetivo?`<p style="margin:6px 0"><b>O:</b> ${ev.objetivo}</p>`:''}
       ${ev.analisis?`<p style="margin:6px 0"><b>A:</b> ${ev.analisis}</p>`:''}
@@ -21257,7 +23678,10 @@ function viewHistoria(){
   `).join('');
 
   const attachmentRows = (h.attachments||[]).map(a=>`<tr>
-    <td>${a.name}</td><td>${a.category||'Otro'}</td><td>${a.isLink? 'Enlace externo' : (a.size? (Math.round(a.size/1024))+' KB' : '—')}</td>
+    <td>${a.name}${a.descripcion? `<br><span class="hint">${esc(a.descripcion)}</span>`:''}</td>
+    <td>${a.category||'Otro'}</td>
+    <td>${deQueSesion(a)}</td>
+    <td>${a.isLink? 'Enlace externo' : (a.size? (Math.round(a.size/1024))+' KB' : '—')}</td>
     <td>
       ${a.isLink? `<a class="btn small secondary" href="${a.url}" target="_blank" rel="noopener">Abrir enlace</a>` : `<button class="btn small secondary" onclick="downloadAttachment('${a.id}')">Descargar</button>`}
       <button class="btn small danger" onclick="removeAttachment('${a.id}')">Eliminar</button>
@@ -21303,6 +23727,8 @@ function viewHistoria(){
     </div>
 
     ${bloqueDePaquetes(patient, true)}
+
+    ${bloqueDeEscalas(patient.id)}
 
     <h3 style="margin-top:20px">II. Motivo de consulta</h3>
     <div class="field"><textarea id="hc_motivoConsulta" rows="3" placeholder="Razón por la que acude, en sus propias palabras...">${h.motivoConsulta||''}</textarea></div>
@@ -21399,14 +23825,34 @@ function viewHistoria(){
     <div style="margin-top:12px">${evolucionCards || '<div class="empty">Sin notas de evolución registradas.</div>'}</div>
 
     <h3 style="margin-top:28px">X. Archivos adjuntos</h3>
-    <p class="hint">Informes psicológicos, resultados de pruebas escaneados, consentimientos informados, etc. Imágenes y PDF hasta ~4MB; para archivos más grandes, agrega un enlace externo (Google Drive, etc.)</p>
+    <p class="hint">Lo que el paciente produce en la sesión —un dibujo de la persona bajo la
+      lluvia, una tarea, un escrito—, los protocolos que se llenaron en papel y se
+      escanearon, los informes y los consentimientos firmados.
+      <b>Imagen, PDF, Word, Excel, audio o video hasta ${Math.round(TOPE_ANEXO/1048576)}MB.</b>
+      Más grande que eso, mejor por enlace: el navegador tiene que cargarlo entero en
+      memoria antes de mandarlo.</p>
     <div class="formgrid">
       <div class="field"><label>Categoría</label>
         <select id="hc_attachCategory">
-          <option>Informe psicológico</option><option>Resultado de prueba</option><option>Consentimiento informado</option><option>Otro</option>
+          <option>Produccion del paciente</option><option>Protocolo aplicado</option>
+          <option>Resultado de prueba</option><option>Informe psicológico</option>
+          <option>Documento firmado</option><option>Consentimiento informado</option>
+          <option>Documento de identidad</option><option>Otro</option>
         </select>
       </div>
-      <div class="field"><label>Subir archivo (imagen o PDF)</label><input type="file" id="hc_fileInput" accept="image/*,application/pdf" onchange="handleAttachmentUpload(event)"></div>
+      <div class="field"><label>¿De qué sesión salió?</label>
+        <select id="hc_attachCita">${opcionesDeSesion(patient)}</select>
+        <span class="hint">Un dibujo de la sesión del martes es de esa sesión, no del
+          paciente en general. Así aparece al abrirla.</span>
+      </div>
+      <div class="field"><label>Nota (opcional)</label>
+        <input id="hc_attachNota" placeholder="Ej: dibujo de la persona bajo la lluvia">
+      </div>
+      <div class="field"><label>Subir archivo</label>
+        <input type="file" id="hc_fileInput" accept="${FORMATOS_ANEXO}"
+          onchange="handleAttachmentUpload(event)">
+        <span class="hint">Foto del dibujo, protocolo escaneado, informe, audio de la sesión.</span>
+      </div>
     </div>
     <div class="formgrid">
       <div class="field"><label>O agregar enlace externo (nombre)</label><input id="hc_linkName" placeholder="Ej: Informe completo en Drive"></div>
@@ -21414,7 +23860,7 @@ function viewHistoria(){
     </div>
     <button class="btn secondary" onclick="addExternalLink()">+ Agregar enlace</button>
     <div class="tablewrap" style="margin-top:10px">
-      ${attachmentRows? `<table><tr><th>Archivo</th><th>Categoría</th><th>Tamaño</th><th></th></tr>${attachmentRows}</table>` : `<div class="empty">Sin archivos adjuntos.</div>`}
+      ${attachmentRows? `<table><tr><th>Archivo</th><th>Categoría</th><th>¿De qué sesión?</th><th>Tamaño</th><th></th></tr>${attachmentRows}</table>` : `<div class="empty">Sin archivos adjuntos.</div>`}
     </div>
 
     <h3 style="margin-top:28px">XI. Sesiones registradas</h3>
@@ -22310,7 +24756,7 @@ async function confirmWipe(){
 document.getElementById('todayLabel').textContent = new Date().toLocaleDateString('es-PE',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
 /* Se sube a mano en cada cambio del panel. Si arriba no dice esta versión,
    estás viendo una copia vieja: recarga con Ctrl+Shift+R. */
-const PANEL_VERSION = 'v2026-10-24a · la ficha de seguimiento, llena sola';
+const PANEL_VERSION = 'v2026-10-31c · cada uno lo suyo, y la agenda no se pisa';
 document.getElementById('versionLabel').textContent = PANEL_VERSION;
 document.getElementById('storageModeNote').innerHTML =
   STORAGE_MODE==='api'
@@ -22559,6 +25005,10 @@ async function logout(){
       return;
     }
     DB.authConfig = {enabled: !!sesion.loginRequerido, username:'', password:''};
+    // Quién entró y qué puede hacer. Venía desde siempre en la respuesta
+    // y se descartaba, así que el panel enseñaba las dieciocho pestañas
+    // a todo el mundo y los errores saltaban recién al guardar.
+    recordarUsuario(sesion.usuario);
     if(sesion.loginRequerido && !sesion.autenticado){
       document.getElementById('loginLogo').src = logoDeEstePanel();
       document.getElementById('loginTitle').textContent = nombreDeEstePanel();
